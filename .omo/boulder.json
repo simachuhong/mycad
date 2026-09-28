@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "active_work_id": "phase0-mvp",
+  "works": {
+    "phase0-mvp": {
+      "work_id": "phase0-mvp",
+      "active_plan": ".omo/plans/phase0-mvp.md",
+      "plan_name": "phase0-mvp",
+      "session_ids": ["codex:sisyphus-main"],
+      "status": "active",
+      "worktree_path": null
+    }
+  }
+}
