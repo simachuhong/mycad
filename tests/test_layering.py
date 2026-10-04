@@ -25,7 +25,20 @@ ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
     "mycad.app",
 )
 
+# Only the geom adapter package (any internal module split) may import CAD
+# backends in src/ — judged by package boundary, not per-module allow-list.
+ALLOWED_SRC_IMPORT_PREFIXES: tuple[str, ...] = ("src/mycad/geom/",)
+
 ALLOWED_IMPORT_FILES: frozenset[str] = frozenset()
+
+# In tests/: only tests/geom/ and the T8 STEP round-trip helper (the file
+# does not exist yet — the entry is the plan's exact whitelist wording).
+TESTS_ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = ("tests/geom/",)
+TESTS_ALLOWED_IMPORT_FILES: frozenset[str] = frozenset(
+    {
+        "tests/helpers/step_roundtrip.py",
+    }
+)
 
 
 def _imported_module_names(node: ast.Import | ast.ImportFrom) -> list[str]:
@@ -45,6 +58,8 @@ def _is_forbidden_in(file_path: Path, module_name: str) -> bool:
         return False
     if rel in ALLOWED_IMPORT_FILES:
         return False
+    if rel.startswith(ALLOWED_SRC_IMPORT_PREFIXES):
+        return False
     if module_name.startswith(ALLOWED_IMPORT_PREFIXES):
         return False
     return any(module_name == m or module_name.startswith(m + ".") for m in FORBIDDEN_MODULES)
@@ -62,6 +77,30 @@ def test_src_has_no_backend_imports() -> None:
                     if _is_forbidden_in(path, name):
                         offenders.append((path.relative_to(REPO).as_posix(), name))
     assert not offenders, f"forbidden backend imports in src/: {offenders}"
+
+
+def test_tests_import_backends_only_in_geom_scope() -> None:
+    """Inside tests/, build123d / OCP / numpy may only be imported by
+    ``tests/geom/`` and the T8 STEP round-trip helper
+    ``tests/helpers/step_roundtrip.py``."""
+
+    tests = REPO / "tests"
+    assert tests.exists(), "tests/ missing"
+    offenders: list[tuple[str, str]] = []
+    for path in sorted(tests.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        rel = path.relative_to(REPO).as_posix()
+        if rel.startswith(TESTS_ALLOWED_IMPORT_PREFIXES) or rel in TESTS_ALLOWED_IMPORT_FILES:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                for name in _imported_module_names(node):
+                    is_backend = any(
+                        name == m or name.startswith(m + ".") for m in FORBIDDEN_MODULES
+                    )
+                    if is_backend:
+                        offenders.append((rel, name))
+    assert not offenders, f"forbidden backend imports in tests/: {offenders}"
 
 
 def test_no_type_ignore_or_pyright_ignore_sites() -> None:
