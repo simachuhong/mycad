@@ -62,3 +62,7 @@ htmlcov/
 # .omo/cache/   (rebuild cache, e.g. type-server db)
 # Keep commit CLI
 .omo/cache/
+# Codex archaeology (sqlite + nested git island) - not project history
+.omo/review/
+# run-continuation scratch
+.omo/run-continuation/
