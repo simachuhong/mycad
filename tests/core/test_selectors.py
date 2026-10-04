@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 import sys
 
 import pytest
@@ -43,11 +44,24 @@ def test_face_selector_is_frozen() -> None:
 
 
 def test_selectors_dont_import_cad_backends() -> None:
-    """Importing selectors must not transitively load build123d/OCP/numpy."""
+    """Importing selectors must not transitively load build123d/OCP/numpy.
 
-    forbidden = {"build123d", "OCP", "numpy"}
-    loaded = forbidden & set(sys.modules)
-    assert not loaded, f"selectors leaked CAD/numpy modules: {loaded}; check imports"
+    The guard runs in a fresh subprocess: a live-process ``sys.modules``
+    check would be polluted by modules that other tests legitimately
+    import during collection.
+    """
+
+    code = (
+        "import sys; import mycad.core.selectors; "
+        'bad = {"build123d", "OCP", "numpy"} & set(sys.modules); '
+        "print(','.join(sorted(bad)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert not result.stdout.strip(), (
+        f"selectors leaked CAD/numpy modules: {result.stdout.strip()!r}; check imports"
+    )
 
 
 def test_edge_selector_allows_empty_parent_faces() -> None:
