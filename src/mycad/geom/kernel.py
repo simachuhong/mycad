@@ -24,6 +24,7 @@ from build123d import Edge, Face, Part
 from mycad.core.exceptions import GeomVersionError
 from mycad.core.geometry_types import MassProperties, Tessellation
 from mycad.core.selectors import EdgeSelector, FaceSelector
+from mycad.geom._b123_features import apply_feature
 from mycad.geom._b123_ops import apply_primitive
 from mycad.geom.query import build_mass_properties, build_tessellation
 from mycad.geom.selectors import ordered_face_candidates, resolve_edges, resolve_face
@@ -87,13 +88,19 @@ class BuildKernel:
         self._part = None
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
-        """Apply one feature command (``feature.box`` / ``feature.cylinder``).
+        """Apply one feature command to the in-memory part.
 
-        ``mode`` selects the boolean behaviour: ``new`` replaces the current
-        solid, ``add`` fuses into it, ``cut`` subtracts from it.
+        ``feature.box`` / ``feature.cylinder`` (T2) and the T5 feature
+        layer (extrude / revolve / hole / hole_pattern / fillet /
+        boolean_cut) share this entry point. ``mode`` selects the boolean
+        behaviour where applicable: ``new`` replaces the current solid,
+        ``add`` fuses into it, ``cut`` subtracts from it.
         """
 
-        self._part = apply_primitive(self._part, command_id, params)
+        if command_id in ("feature.box", "feature.cylinder"):
+            self._part = apply_primitive(self._part, command_id, params)
+        else:
+            self._part = apply_feature(self._part, command_id, params)
 
     def mass_properties(self) -> MassProperties:
         """Measure the current solid; empty geometry yields zeros, not errors."""

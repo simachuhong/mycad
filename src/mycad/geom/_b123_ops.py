@@ -32,7 +32,7 @@ from mycad.core.exceptions import GeometryBuildError, MycadError, ValidationErro
 _MODES = frozenset({"new", "add", "cut"})
 
 
-def _checked_mapping(value: object, command_id: str) -> Mapping[str, object]:
+def checked_mapping(value: object, command_id: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         msg = f"{command_id}: params must be a mapping, got {type(value).__name__}"
         raise ValidationError(message=msg, command_id=command_id)
@@ -63,7 +63,7 @@ class _CylinderParams:
 _PrimitiveParams = _BoxParams | _CylinderParams
 
 
-def _reject_unknown_keys(
+def reject_unknown_keys(
     params: Mapping[str, object], allowed: frozenset[str], command_id: str
 ) -> None:
     unknown = sorted(set(params) - allowed)
@@ -72,7 +72,7 @@ def _reject_unknown_keys(
         raise ValidationError(message=msg, command_id=command_id)
 
 
-def _parse_positive(params: Mapping[str, object], key: str, command_id: str) -> float:
+def parse_positive(params: Mapping[str, object], key: str, command_id: str) -> float:
     if key not in params:
         msg = f"{command_id}: missing required parameter {key!r}"
         raise ValidationError(message=msg, command_id=command_id)
@@ -86,7 +86,7 @@ def _parse_positive(params: Mapping[str, object], key: str, command_id: str) -> 
     return float(value)
 
 
-def _parse_center(params: Mapping[str, object], command_id: str) -> tuple[float, float, float]:
+def parse_center(params: Mapping[str, object], command_id: str) -> tuple[float, float, float]:
     if "center" not in params:
         return (0.0, 0.0, 0.0)
     value = params["center"]
@@ -109,7 +109,7 @@ def _parse_center(params: Mapping[str, object], command_id: str) -> tuple[float,
     return (coords[0], coords[1], coords[2])
 
 
-def _parse_mode(params: Mapping[str, object], command_id: str) -> str:
+def parse_mode(params: Mapping[str, object], command_id: str) -> str:
     value = params.get("mode", "new")
     if not isinstance(value, str) or value not in _MODES:
         msg = f"{command_id}: parameter 'mode' must be one of {sorted(_MODES)}, got {value!r}"
@@ -118,23 +118,23 @@ def _parse_mode(params: Mapping[str, object], command_id: str) -> str:
 
 
 def _parse_box(command_id: str, params: Mapping[str, object]) -> _PrimitiveParams:
-    _reject_unknown_keys(params, _BOX_KEYS, command_id)
+    reject_unknown_keys(params, _BOX_KEYS, command_id)
     return _BoxParams(
-        size_x=_parse_positive(params, "size_x", command_id),
-        size_y=_parse_positive(params, "size_y", command_id),
-        size_z=_parse_positive(params, "size_z", command_id),
-        center=_parse_center(params, command_id),
-        mode=_parse_mode(params, command_id),
+        size_x=parse_positive(params, "size_x", command_id),
+        size_y=parse_positive(params, "size_y", command_id),
+        size_z=parse_positive(params, "size_z", command_id),
+        center=parse_center(params, command_id),
+        mode=parse_mode(params, command_id),
     )
 
 
 def _parse_cylinder(command_id: str, params: Mapping[str, object]) -> _PrimitiveParams:
-    _reject_unknown_keys(params, _CYLINDER_KEYS, command_id)
+    reject_unknown_keys(params, _CYLINDER_KEYS, command_id)
     return _CylinderParams(
-        radius=_parse_positive(params, "radius", command_id),
-        height=_parse_positive(params, "height", command_id),
-        center=_parse_center(params, command_id),
-        mode=_parse_mode(params, command_id),
+        radius=parse_positive(params, "radius", command_id),
+        height=parse_positive(params, "height", command_id),
+        center=parse_center(params, command_id),
+        mode=parse_mode(params, command_id),
     )
 
 
@@ -145,7 +145,7 @@ def _placed_primitive(spec: _PrimitiveParams) -> Part:
     return location * Cylinder(radius=spec.radius, height=spec.height)
 
 
-def _normalize_result(result: Part | Compound | Wire) -> Part | None:
+def normalize_result(result: Part | Compound | Wire) -> Part | None:
     solids = result.solids()
     if not solids:
         return None
@@ -163,7 +163,7 @@ def apply_primitive(
     defined state, not an error).
     """
 
-    checked = _checked_mapping(params, command_id)
+    checked = checked_mapping(params, command_id)
     if command_id == "feature.box":
         spec = _parse_box(command_id, checked)
     elif command_id == "feature.cylinder":
@@ -188,4 +188,4 @@ def apply_primitive(
     except Exception as exc:
         msg = f"{command_id}: build123d failed to apply the primitive: {exc}"
         raise GeometryBuildError(message=msg, command_id=command_id) from exc
-    return _normalize_result(result)
+    return normalize_result(result)
