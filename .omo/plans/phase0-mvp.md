@@ -302,7 +302,7 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
   - failure：对同一几何连续两次 hole 定位谓词相同但面已变化的场景，断言得到显式 TopologyReferenceError/GeometryBuildError 而非静默选错面；fillet(radius=999) 必须 GeometryBuildError；两失败用例输出附证据。
   Commit: Y | `feat(geom): parametric profiles, extrude/revolve, predicate-located holes, polar pattern, fillet`
 
-- [ ] 6. T6 core：Document/CommandBus/重放 undo/批事务/信号/JSON 存档 v1/Plan 状态机
+- [x] 6. T6 core：Document/CommandBus/重放 undo/批事务/信号/JSON 存档 v1/Plan 状态机
   What to do / Must NOT do:
   - `src/mycad/core/kernel_protocol.py`：`@runtime_checkable Kernel(Protocol)`——`reset()`、`apply(command_id: str, params: Mapping[str, object]) -> None`；**core 依赖倒置：只持有 Protocol，不 import geom**（接线在顶层 composition，T7/T10）。
   - **`src/mycad/core/handlers.py`（命令处理器契约，#7 缺失符号补齐；分派机制写死，禁止执行者另立）**：`@runtime_checkable CommandHandler(Protocol)`：`command_id: str`（**实例属性，非类属性**）+ `handle(params: Mapping[str, object], ctx: HandlerContext) -> object | None`；`HandlerContext` 为 frozen dataclass，**恰好两字段 `kernel: Kernel`（只读引用）与 `command_id: str`（当前正在执行的命令 id，由 Bus 逐调用注入）**；**返回值约定：建模处理器返回 `None`（经 kernel.apply 产生副作用），非几何命令（如插件 demo.ping）可返回任意可 JSON 序列化值**。
