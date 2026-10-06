@@ -26,6 +26,7 @@ from mycad.core.geometry_types import MassProperties, Tessellation
 from mycad.core.selectors import EdgeSelector, FaceSelector
 from mycad.geom._b123_features import apply_feature
 from mycad.geom._b123_ops import apply_primitive
+from mycad.geom.io import write_step, write_stl
 from mycad.geom.query import build_mass_properties, build_tessellation
 from mycad.geom.selectors import ordered_face_candidates, resolve_edges, resolve_face
 
@@ -118,14 +119,14 @@ class BuildKernel:
         return build_tessellation(self._part, linear_tolerance_mm, angular_tolerance_deg)
 
     def export_step(self, path: str | Path) -> None:
-        """Placeholder — STEP export is wired by T8."""
+        """Write the current model as a STEP file (wired by T8 via geom.io)."""
 
-        raise NotImplementedError
+        write_step(self._part, Path(path))
 
     def export_stl(self, path: str | Path) -> None:
-        """Placeholder — STL export is wired by T8."""
+        """Write the current model as an STL mesh (wired by T8 via geom.io)."""
 
-        raise NotImplementedError
+        write_stl(self._part, Path(path))
 
     def face_candidates(
         self,

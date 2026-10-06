@@ -14,7 +14,11 @@ from typing import cast
 
 import pytest
 
-from mycad.core.exceptions import GeometryBuildError, ValidationError
+from mycad.core.exceptions import (
+    EmptyGeometryError,
+    GeometryBuildError,
+    ValidationError,
+)
 from mycad.geom.kernel import BuildKernel
 
 VOLUME_TOLERANCE_MM3 = 1e-6
@@ -274,9 +278,9 @@ def test_apply_rejects_non_mapping_params() -> None:
         kernel.apply("feature.box", bad_params)
 
 
-def test_export_step_and_stl_are_placeholders() -> None:
+def test_export_step_and_stl_reject_empty_model() -> None:
     kernel = BuildKernel()
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(EmptyGeometryError):
         kernel.export_step("out.step")
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(EmptyGeometryError):
         kernel.export_stl("out.stl")
