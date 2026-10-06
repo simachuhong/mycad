@@ -81,7 +81,19 @@ class EmptyGeometryError(MycadError):
 
 @dataclass
 class ArchiveVersionError(MycadError):
-    """Project archive (.mycad) version is not supported."""
+    """Project archive (.mycad) version is not supported.
+
+    ``found`` / ``supported`` follow the #round9-NB-E fill rules: on a
+    format mismatch ``found`` is the archive's actual format string (the
+    ``"missing"`` placeholder when the key is absent or not a string) and
+    ``supported`` is ``"mycad.document"``; on a version mismatch ``found``
+    is the archive's version rendered as a string (e.g. ``"99"``) and
+    ``supported`` is ``1``. The two scenarios are asserted with their own
+    field pairs and must never be mixed.
+    """
+
+    found: str = ""
+    supported: str | int = ""
 
 
 @dataclass
@@ -106,12 +118,20 @@ class InvalidHistoryError(MycadError):
 
 @dataclass
 class BatchRollbackError(MycadError):
-    """A batch failed and rollback itself failed; partial state remains."""
+    """A batch failed and was rolled back to its pre-batch state."""
+
+    failed_ordinal: int = -1
+    failed_command_id: str = ""
+    reason: str = ""
+    executed_ids: tuple[str, ...] = ()
 
 
 @dataclass
 class ReplayDuringRollbackError(MycadError):
     """Replay was attempted while a rollback is in flight."""
+
+    original: BaseException | None = None
+    replay_reason: str = ""
 
 
 @dataclass
