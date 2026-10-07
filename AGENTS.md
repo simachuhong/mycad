@@ -6,6 +6,35 @@
 
 ---
 
+## PONYTAIL OVERRIDE (项目级护栏)
+
+`ponytail` skill（DietrichGebert/ponytail v4.13.0，MIT）已装在
+`~/.config/opencode/skills/ponytail/SKILL.md`。**仅在显式触发时启用**，不要因为
+上下文里偶尔出现 "yagni / 简化 / 一行能搞定吗" 就自动接管。
+
+**触发方式**（任一）：
+- 命令前缀：`/ponytail lite | full | ultra`（lite=推荐；full=默认激进；ultra=极端删除）
+- 自然语言：`ponytail` / `be lazy` / `lazy mode` / `simplest solution` /
+  `minimal solution` / `yagni` / `do less` / `shortest path`
+- 退出：`stop ponytail` / `normal mode`
+
+**硬保护 5 条路径**（ponytail 不可对这些路径提议简化；如提议必须拒绝并引用本节）：
+
+| 路径 | 保护原因 |
+|---|---|
+| `src/mycad/core/` | T1 分层不变量：`tests/test_layering.py` 禁 `import build123d/OCP/numpy`；ponytail rung-3 「用 stdlib」看似无害但会破坏 core 与 geom 的职责边界 |
+| `src/mycad/geom/` | src 中唯一允许引 CAD 后端的适配层；rung-4 「用原生平台」会诱惑把 OCCT 调用搬到 core，触发 layering test FAIL |
+| `src/mycad/core/schema_v1.py` | `.mc.json` v1 审计六字段（id/version/params/ordinal/timestamp_utc/confirmed_by）由 ADR-002 锁定；rung-6 「能一行吗」会推 drop 字段，破坏持久化兼容 |
+| `src/mycad/core/bus.py` | 唯一写入路径由 ADR-001 锁定；rung-1 「需要存在吗」会推直接改 Document，破坏 undo = 全量重放不变量 |
+| `tests/test_layering.py` | 分层不变量本身的强制器；rung-7 「最小可工作代码」不得简化此测试，否则分层规则无人守护 |
+
+**当 ponytail 提议触碰以上路径时的标准回应**：
+> "blocked by MyCAD AGENTS.md PONYTAIL OVERRIDE; reason: <cite 表格一行>"
+
+若用户**明确**要求对受保护路径做 ponytail 化（例如 "ponytail 一下 core/bus.py"），先**暂停**并向用户复述保护原因 + 询问是否真的要做；用户二次确认后再解除护栏。
+
+---
+
 ## OVERVIEW
 
 Ubuntu 22.04+ 桌面端开源 CAD（Apache-2.0）。阶段 0 = headless 可编程内核 MVP，以法兰件（φ80×8 / 4×φ6 PCD50）为验收牵引；UI（PySide6 壳）与 3D 预览后置到阶段 1。
