@@ -399,7 +399,7 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
   - failure：导出 `.x_t`/`.dwg` 必须 UnknownFormatError 且错误消息不承诺支持；对空文档导出必须 EmptyGeometryError 且无文件产生；注册两个 priority 相同的 .step provider 必须 ProviderConflictError 且异常含扩展名与两 provider 的 name/vendor；附证据。
   Commit: Y | `feat(formats): prioritized provider registry with STEP and STL writers; test-only STEP readback`
 
-- [ ] 9. T9 插件扩展缝：entry-points 发现 + manifest/api_version 门控 + 信号钩 + 最小自测插件
+- [x] 9. T9 插件扩展缝：entry-points 发现 + manifest/api_version 门控 + 信号钩 + 最小自测插件
   What to do / Must NOT do:
   - `src/mycad/plugins/manifest.py`（**仅加载实现**：PluginManifest dataclass 与 CURRENT_API_VERSION/CURRENT_API_MAJOR 的唯一定义在 T7 的 `plugins/types.py`，本 todo 不得在此重复定义/重复赋值——从 types import 消费）：**manifest 定位算法以 T7 types.py 段为唯一权威（#round7-4：importlib 导入每个贡献 entry 的 `EntryPoint.module`、查模块属性 `manifest`、按 module memoize、callable/dict/dataclass 三形态、缺失/损坏/api 不兼容三类 reason）**，本模块只实现该算法；api_version 语义=主版本 ==1 才加载（1.x 兼容，2.x 跳过）。
   - `src/mycad/plugins/types.py`（插件作者的唯一公开导入点；**T7 已创建并唯一定义全部公开名（含 CommandContribution/PluginDiscoverer/DiscoveredPlugin/PluginManifest/CURRENT_API_VERSION/CURRENT_API_MAJOR/WARNING_REASON/WARNING_REASONS），本 todo 对该文件零修改、只 import（#round9-4/#round9-5）**）；`CommandContribution(spec: CommandSpec, handler_factory: Callable[[], CommandHandler] | None)` 从 `mycad.plugins.types` import（禁止在 discovery.py/loader.py/manifest.py 重复定义）；`mycad.plugins.__init__` 再导出由 T7 落地，本 todo 仅在需要时补 EntryPointDiscoverer 导出。
