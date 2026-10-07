@@ -130,3 +130,38 @@ def test_no_type_ignore_or_pyright_ignore_sites() -> None:
     assert not offenders, "suppression comments detected outside tests/typing/: " + "\n".join(
         offenders
     )
+
+
+#: T7c composition-root exception: the single src file outside the adapter
+#: package that is allowed to import BOTH the geom adapter package and the
+#: core domain package. The backend-import ban above applies to it unchanged.
+COMPOSITION_ROOT = "src/mycad/app.py"
+
+
+def test_composition_root_is_the_geom_core_bridge() -> None:
+    """The composition root is the only src-level bridge across the two sides.
+
+    When the composition-root file exists it must import both packages; no
+    other src file outside the adapter package may do the same. The file is
+    the pinned whitelist exception and nothing else ever joins it.
+    """
+    src = REPO / "src" / "mycad"
+    assert src.exists(), "src/mycad missing"
+    bridging: set[str] = set()
+    for path in sorted(src.rglob("*.py")):
+        rel = path.relative_to(REPO).as_posix()
+        if rel.startswith(ALLOWED_SRC_IMPORT_PREFIXES) or rel.endswith("__init__.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        second_segments: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                for name in _imported_module_names(node):
+                    parts = name.split(".")
+                    if parts[0] == "mycad" and len(parts) >= 2:
+                        second_segments.add(parts[1])
+        if {"geom", "core"} <= second_segments:
+            bridging.add(rel)
+    assert bridging <= {COMPOSITION_ROOT}, f"unexpected src-level bridges: {sorted(bridging)}"
+    if (REPO / COMPOSITION_ROOT).exists():
+        assert COMPOSITION_ROOT in bridging, "composition root must bridge both sides"

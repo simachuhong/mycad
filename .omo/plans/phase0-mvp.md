@@ -347,7 +347,7 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
   - failure：批中第 2 条给非法半径（validate 失败）与第 3 条几何失败（kernel 抛错）两场景，均要求整体回滚、plan.status=failed、抛 BatchRollbackError 且含 failed_ordinal/failed_command_id/executed_ids；**open 失败矩阵四例**：手改 version=99→ArchiveVersionError（assert found="99", supported=1）、手改 format 字符串→ArchiveVersionError（assert found=实际串, supported="mycad.document"，#round9-NB-E 两场景字段分别断言）、损坏 JSON 与未知 metadata 键→ValidationError、缺 handler id→UnknownCommandError 含 ordinal、kernel 重放第 2 条失败→GeometryBuildError 含 ordinal；输出附证据。
   Commit: Y | `feat(core): document, command bus with replay undo and batch rollback, signals, json archive v1, plan state machine`
 
-- [ ] 7. T7 八条内置命令接线（id 逐字对齐 UI 初稿 §5.3）+ 组合根
+- [x] 7. T7 八条内置命令接线（id 逐字对齐 UI 初稿 §5.3）+ 组合根
   What to do / Must NOT do:
   - 新建固定包路径 **`src/mycad/builtin_commands/`**（不得使用 commands/builtin/ 等别名路径；与注册表框架分包，防止插件机制与内置耦合）：为 8 条命令各定义 CommandSpec(version=1, undo_compensation="history_replay")，字段严格按 T3 签名——`summary_en`（英文，CLI help 实际消费）与 `label_zh`（中文标签数据，阶段 0 无消费者但必须填全）；8 条命令的 params_schema **逐字采用文末附录 A**，且 schema 中所有共享对象一律以 `"$ref": "#/$defs/<Name>"` 引用本包内**单一常量表文件 `src/mycad/builtin_commands/defs.py` 的符号 `COMMAND_SCHEMA_DEFS`（#round9-7：路径与符号名写死，AST 断言全 src 无第二处 `COMMAND_SCHEMA_DEFS =` 赋值，T3 校验器经 defs 参数解析、本 todo 调用 validate_params 时注入此表；禁止在各命令 schema 内复制粘贴子结构）**：
     1. `feature.box`（size_x/size_y/size_z >0，center 三元组 default 0，mode new/add/cut）
