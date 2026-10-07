@@ -1,0 +1,10 @@
+# Documentation-only metadata for this in-process fixture tree (never
+# installed; #round10-NB3 loads it purely via sys.path injection).
+[project]
+name = "mycad-plugin-formats"
+version = "0.1.0"
+
+[project.entry-points."mycad.formats"]
+empty-factory = "mycad_plugin_formats.empty_factory:formats"
+raise-factory = "mycad_plugin_formats.raise_factory:formats"
+single = "mycad_plugin_formats.single:formats"

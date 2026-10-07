@@ -23,6 +23,11 @@ dev = [
     "basedpyright==1.40.1",
     "pytest>=8",
     "pytest-cov>=5",
+    # T9: the demo-plugin editable-install test builds the plugin with the
+    # same backend as the main package; keep hatchling importable in the
+    # dev venv so `pip install -e --no-build-isolation` works offline.
+    "hatchling>=1.26",
+    "editables>=0.6",
 ]
 
 [build-system]

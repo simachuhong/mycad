@@ -1,0 +1,8 @@
+# Documentation-only metadata for this in-process fixture tree (never
+# installed; #round10-NB3 loads it purely via sys.path injection).
+[project]
+name = "mycad-plugin-future"
+version = "0.1.0"
+
+[project.entry-points."mycad.commands"]
+commands = "mycad_plugin_future:commands"

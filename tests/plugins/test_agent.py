@@ -19,18 +19,21 @@ REPO = Path(__file__).resolve().parents[2]
 AGENT_PUBLIC_NAMES: set[str] = {"Plan", "PlannedCommand", "InvalidPlanTransition"}
 AGENT_SUBMODULE_ARTIFACTS: set[str] = {"plan_types"}
 
-#: The six contract names re-exported by ``mycad.plugins`` (plan T7),
-#: plus the ``types`` / ``manager`` submodule attributes the import
-#: system attaches to the package.
+#: The seven contract names re-exported by ``mycad.plugins`` (plan T7 +
+#: T9a's discoverer), plus the ``types`` / ``manager`` / ``discovery`` /
+#: ``manifest`` / ``loader`` submodule attributes the import system
+#: attaches to the package (``loader`` is pre-listed for T9b, which
+#: makes the assertion immune to import-order nondeterminism).
 PLUGINS_PUBLIC_NAMES: set[str] = {
     "CURRENT_API_VERSION",
     "CommandContribution",
     "DiscoveredPlugin",
+    "EntryPointDiscoverer",
     "PluginDiscoverer",
-    "PluginManifest",
     "PluginManager",
+    "PluginManifest",
 }
-PLUGINS_SUBMODULE_ARTIFACTS: set[str] = {"types", "manager"}
+PLUGINS_SUBMODULE_ARTIFACTS: set[str] = {"types", "manager", "discovery", "manifest", "loader"}
 
 FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
     "import socket",
@@ -56,6 +59,6 @@ def test_agent_package_has_no_network_or_llm_code() -> None:
             assert needle not in text, f"{path.relative_to(REPO)}: {needle!r} found"
 
 
-def test_plugins_public_surface_is_exactly_six_names() -> None:
+def test_plugins_public_surface_is_exactly_seven_names() -> None:
     names = {name for name in dir(plugins) if not name.startswith("_")}
     assert names - PLUGINS_SUBMODULE_ARTIFACTS == PLUGINS_PUBLIC_NAMES

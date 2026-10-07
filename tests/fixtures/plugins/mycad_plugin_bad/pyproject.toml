@@ -1,0 +1,12 @@
+# Documentation-only metadata for this in-process fixture tree (never
+# installed; #round10-NB3 loads it purely via sys.path injection).
+[project]
+name = "mycad-plugin-bad"
+version = "0.1.0"
+
+[project.entry-points."mycad.commands"]
+missing-attr = "mycad_plugin_bad.missing_attr:commands"
+bad-missing = "mycad_plugin_bad.bad_missing:commands"
+bad-extra = "mycad_plugin_bad.bad_extra:commands"
+bad-types = "mycad_plugin_bad.bad_types:commands"
+bad-id = "mycad_plugin_bad.bad_id:commands"

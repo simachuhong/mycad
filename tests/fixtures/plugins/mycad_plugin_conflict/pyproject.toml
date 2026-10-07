@@ -1,0 +1,11 @@
+# Documentation-only metadata for this in-process fixture tree (never
+# installed; #round10-NB3 loads it purely via sys.path injection).
+[project]
+name = "mycad-plugin-conflict"
+version = "0.1.0"
+
+[project.entry-points."mycad.commands"]
+commands = "mycad_plugin_conflict:commands"
+
+[project.entry-points."mycad.formats"]
+formats = "mycad_plugin_conflict:formats"

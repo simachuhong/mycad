@@ -25,8 +25,10 @@ from mycad.core.persistence import LoadedDocument
 from mycad.formats.providers import STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
 from mycad.geom.kernel import BuildKernel
+from mycad.plugins.discovery import EntryPointDiscoverer
+from mycad.plugins.loader import register_plugins
 from mycad.plugins.manager import PluginManager
-from mycad.plugins.types import PluginDiscoverer
+from mycad.plugins.types import DiscoveredPlugin, PluginDiscoverer
 
 __all__ = ["AppServices", "build_app", "new_document"]
 
@@ -52,18 +54,51 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
 
     The eight built-in commands are registered by explicit Python calls —
     never via entry_points (that group is reserved for third-party
-    plugins). ``discoverers`` is part of the frozen signature but the real
-    wiring lands in T9: this slice always builds the manager over an empty
-    discovery result (None and [] mean the same thing here).
+    plugins). ``discoverers`` selects the discovery source: ``None``
+    builds the default entry-point discoverer (real third-party
+    discovery), an explicit empty sequence disables discovery entirely,
+    and any given discoverers are chained in order; the chained results
+    go through the loader (per-entry conflict isolation) before the
+    plugin manager is built.
     """
-    del discoverers  # T9 wires real discoverers; phase 0 discovers nothing.
+    if discoverers is None:
+        discoverers = (EntryPointDiscoverer(),)
+    else:
+        discoverers = tuple(discoverers)
     registry = CommandRegistry(schema_defs=COMMAND_SCHEMA_DEFS)
     for spec in BUILTIN_COMMAND_SPECS:
         registry.register(spec)
     kernel = BuildKernel()
     formats = FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER])
-    plugins = PluginManager(())
+    discovered: tuple[DiscoveredPlugin, ...] = ()
+    for discoverer in discoverers:
+        discovered += tuple(discoverer.discover())
+    loaded = register_plugins(registry, formats, discovered)
+    plugins = PluginManager(loaded)
     return AppServices(registry=registry, kernel=kernel, formats=formats, plugins=plugins)
+
+
+def _handler_map(registry: CommandRegistry, plugins: PluginManager) -> dict[str, CommandHandler]:
+    """Assemble the per-document handler map from the registry and plugins.
+
+    Every registered builtin gets one ``BuiltinModelingHandler`` per
+    command id (the T6 dispatch rule). Plugin contributions then
+    overlay: a non-None ``handler_factory`` supplies the plugin's own
+    handler, while a None factory falls back to a
+    ``BuiltinModelingHandler`` — third-party-declared ordinary modeling
+    commands execute through the builtin path.
+    """
+    handlers: dict[str, CommandHandler] = {
+        spec.id: BuiltinModelingHandler(spec.id)
+        for group in registry.list_by_category().values()
+        for spec in group
+    }
+    for contribution in plugins.command_contributions():
+        if contribution.handler_factory is not None:
+            handlers[contribution.spec.id] = contribution.handler_factory()
+        else:
+            handlers[contribution.spec.id] = BuiltinModelingHandler(contribution.spec.id)
+    return handlers
 
 
 def new_document(services: AppServices, *, confirmed_by: str | None = None) -> LoadedDocument:
@@ -78,14 +113,7 @@ def new_document(services: AppServices, *, confirmed_by: str | None = None) -> L
     argument (it rides on individual executed commands instead), so it is
     accepted and unused until a later phase wires it.
     """
-    handlers: dict[str, CommandHandler] = {
-        spec.id: BuiltinModelingHandler(spec.id)
-        for group in services.registry.list_by_category().values()
-        for spec in group
-    }
-    for contribution in services.plugins.command_contributions():
-        if contribution.handler_factory is not None:
-            handlers[contribution.spec.id] = contribution.handler_factory()
+    handlers = _handler_map(services.registry, services.plugins)
     document = Document(services.registry)
     bus = CommandBus(document, services.registry, services.kernel, handlers)
     services.kernel.reset()

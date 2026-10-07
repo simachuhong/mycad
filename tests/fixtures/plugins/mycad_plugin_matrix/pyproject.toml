@@ -1,0 +1,12 @@
+# Documentation-only metadata for this in-process fixture tree (never
+# installed; #round10-NB3 loads it purely via sys.path injection).
+[project]
+name = "mycad-plugin-matrix"
+version = "0.1.0"
+
+[project.entry-points."mycad.commands"]
+api-1-0 = "mycad_plugin_matrix.api_1_0:commands"
+api-1-5 = "mycad_plugin_matrix.api_1_5:commands"
+api-2-0 = "mycad_plugin_matrix.api_2_0:commands"
+api-v1 = "mycad_plugin_matrix.api_v1:commands"
+api-abc = "mycad_plugin_matrix.api_abc:commands"

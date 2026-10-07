@@ -1,0 +1,23 @@
+# Minimal MyCAD demo plugin (T9c): an example of the two entry-point
+# groups a plugin can contribute to. Independent distribution — never
+# part of the main `mycad` package, its dependencies or its wheel.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mycad-plugin-demo"
+version = "0.1.0"
+description = "Minimal MyCAD demo plugin"
+requires-python = ">=3.12"
+# Zero dependencies on purpose: the plugin assumes a host environment
+# that already provides `mycad` (ADR-003); it never pins the host.
+
+[project.entry-points."mycad.commands"]
+demo = "mycad_plugin_demo:commands"
+
+[project.entry-points."mycad.formats"]
+demo = "mycad_plugin_demo:formats"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mycad_plugin_demo"]

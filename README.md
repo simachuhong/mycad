@@ -76,3 +76,11 @@ uv sync
 与本仓库锁定的 0.11.1 不兼容；wheelhouse 离线方案需要先用联网环境
 `uv pip download` 把依赖下载到内网仓库。`pyproject.toml` 中锁定版本不可降级，
 因此离线方案仅作为应急，不能替代正常的 `uv sync`。
+
+## 插件与安全
+
+- 插件经 Python entry-points 在**同一进程**内加载，等同完全信任其作者：
+  没有沙箱、签名校验或权限强制（ADR-003）。
+- manifest 的 `permissions` 字段在阶段 0 仅作声明展示，不做任何强制。
+- 安装任何第三方插件前，请先审阅其源码。
+- 最小示例插件见 [`plugins_examples/mycad_plugin_demo/`](plugins_examples/mycad_plugin_demo/)。
