@@ -30,6 +30,9 @@ dev = [
     "editables>=0.6",
 ]
 
+[project.scripts]
+mycad = "mycad.cli.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
