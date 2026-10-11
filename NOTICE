@@ -59,6 +59,12 @@ Runtime dependency closure (46 distributions)
   cadquery-ocp-proxy             Apache-2.0
   certifi                        MPL-2.0
   charset-normalizer             MIT
+  colorama                       BSD-3-Clause
+      Evidence: colorama-*.dist-info/licenses/LICENSE.txt, the standard
+      3-clause BSD text of Jonathan Hartley (metadata carries only the
+      generic `License :: OSI Approved :: BSD License` classifier).
+      Windows-only: pulled in by ipython's `sys_platform == 'win32'`
+      marker; absent from the closure on Linux/macOS.
   cloudpickle                    BSD-3-Clause
   executing                      MIT
   ezdxf                          MIT
@@ -113,3 +119,8 @@ The HTTP stack (requests, urllib3, certifi, idna, charset-normalizer) and the
 interactive shell (ipython and its dependencies) enter the closure as
 transitive dependencies of build123d. No MyCAD module imports them; the
 `tests/test_scope_audit.py` import audit enforces that.
+
+Platform variation: `pexpect` is installed only on non-Windows systems,
+while `colorama` appears on Windows instead (`sys_platform == 'win32'`
+markers in the lockfile). Both are attributed above; the per-platform
+closure count stays 46 either way.
