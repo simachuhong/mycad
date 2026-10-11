@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """CI workflow structural test.
 
-The workflow file is currently READY but NOT EXECUTED (no remote is
-configured for the repo). This test pins the workflow shape so a future
-edit that silently drops a quality gate or a matrix entry is caught by
+The workflow runs on GitHub Actions (3-OS matrix, both push and PR). This
+test pins the workflow shape so a future edit that silently drops a quality
+gate, a matrix entry, or the failure-reporting step is caught by
 ``pytest -q`` before it ever reaches CI.
 """
 
@@ -22,6 +22,9 @@ REQUIRED_TOKENS: tuple[str, ...] = (
     "ruff format --check",
     "basedpyright",
     "pytest -q",
+    "--junitxml",
+    "report_junit_failures",
+    "if: always()",
 )
 
 

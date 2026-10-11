@@ -29,4 +29,7 @@ jobs:
       - name: basedpyright
         run: uv run basedpyright
       - name: pytest
-        run: uv run pytest -q
+        run: uv run pytest -q --junitxml=test-results.xml
+      - name: Report failing tests as annotations
+        if: always()
+        run: uv run python scripts/report_junit_failures.py test-results.xml
