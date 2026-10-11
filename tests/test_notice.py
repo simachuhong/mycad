@@ -59,7 +59,16 @@ def test_no_placeholder_wording() -> None:
 
 
 def test_every_runtime_distribution_is_listed() -> None:
-    result = subprocess.run(UV_TREE_COMMAND, cwd=REPO, capture_output=True, text=True, check=False)
+    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
+    # cp1252 and mojibakes the tree glyphs into the parsed closure.
+    result = subprocess.run(
+        UV_TREE_COMMAND,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
     if result.returncode != 0:
         pytest.skip(f"uv unavailable: {result.stderr.strip()[:120]}")
     closure = parse_closure(result.stdout) - {"mycad"}
@@ -70,7 +79,16 @@ def test_every_runtime_distribution_is_listed() -> None:
 
 def test_dev_tools_are_not_in_the_runtime_closure() -> None:
     """The dev dependency group must stay out of the attribution scope."""
-    result = subprocess.run(UV_TREE_COMMAND, cwd=REPO, capture_output=True, text=True, check=False)
+    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
+    # cp1252 and mojibakes the tree glyphs into the parsed closure.
+    result = subprocess.run(
+        UV_TREE_COMMAND,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
     if result.returncode != 0:
         pytest.skip("uv unavailable")
     closure = parse_closure(result.stdout)

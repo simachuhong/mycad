@@ -452,5 +452,7 @@ def test_normalize_params_call_sites_are_limited() -> None:
     for path in (root / "src").rglob("*.py"):
         text = path.read_text(encoding="utf-8")
         if "import normalize_params" in text or "normalize_params(" in text:
-            callers.add(str(path.relative_to(root)))
+            # as_posix(): the closed set below is written with "/" — str()
+            # would yield "\" separators on Windows.
+            callers.add(path.relative_to(root).as_posix())
     assert callers <= {"src/mycad/commands/validation.py", "src/mycad/core/bus.py"}

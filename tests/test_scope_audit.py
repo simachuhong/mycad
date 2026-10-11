@@ -420,7 +420,16 @@ def parse_closure(text: str) -> set[str]:
 
 
 def test_runtime_closure_clean() -> None:
-    result = subprocess.run(UV_TREE_COMMAND, cwd=REPO, capture_output=True, text=True, check=False)
+    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
+    # cp1252 and mojibakes the tree glyphs into the parsed closure.
+    result = subprocess.run(
+        UV_TREE_COMMAND,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
     # Not a skip: a skip here would retire the whole closure assertion the
     # moment uv went missing from a runner, and nothing would say so.
     assert result.returncode == 0, f"uv tree failed: {result.stderr.strip()[:200]}"
@@ -450,8 +459,15 @@ def hash_tracked_docs(repo: Path) -> dict[str, str]:
     """sha256 of every git-tracked file under ``docs/``."""
     # -z keeps non-ASCII names literal; the default output octal-escapes
     # and quotes them, which would not resolve as a path.
+    # git emits raw UTF-8 path bytes; the Windows cp1252 default decode dies
+    # inside the reader thread on non-ASCII names, leaving stdout None.
     listing = subprocess.run(
-        ("git", "ls-files", "-z", "docs/"), cwd=repo, capture_output=True, text=True, check=True
+        ("git", "ls-files", "-z", "docs/"),
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     )
     digests: dict[str, str] = {}
     for rel in listing.stdout.split("\0"):
