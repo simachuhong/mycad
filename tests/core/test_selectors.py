@@ -39,8 +39,11 @@ def test_edge_selector_has_no_rank() -> None:
 
 def test_face_selector_is_frozen() -> None:
     fs = FaceSelector(surface="plane")
+    # setattr via a variable name: a direct assignment is a static error on a
+    # frozen dataclass, and the repo allows no suppression comments here.
+    field = "surface"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        fs.surface = "cylinder"  # type: ignore[misc]
+        setattr(fs, field, "cylinder")
 
 
 def test_selectors_dont_import_cad_backends() -> None:

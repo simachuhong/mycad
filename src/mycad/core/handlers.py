@@ -58,6 +58,7 @@ class BuiltinModelingHandler:
         self.command_id = command_id
 
     def handle(self, params: Mapping[str, object], ctx: HandlerContext) -> None:
+        """Apply the bound command to the kernel after checking the wiring."""
         if ctx.command_id != self.command_id:
             msg = (
                 f"ctx.command_id {ctx.command_id!r} does not match "

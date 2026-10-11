@@ -41,7 +41,20 @@ if TYPE_CHECKING:
     from mycad.core.handlers import CommandHandler
     from mycad.plugins.manager import PluginManager
 
-__all__ = ["CliSession"]
+__all__ = ["HELP_TEXT", "CliSession"]
+
+HELP_TEXT = """\
+Usage: mycad <subcommand> [args]
+
+Subcommands:
+  repl                    Start the interactive REPL (default with no arguments)
+  run <file.txt>          Execute an ASCII command script line by line
+  run --json <file.json>  Execute a JSON plan on a fresh document and export
+  validate <file>         Validate a plan (.json) or script (.txt) without executing
+  commands [--json]       List registered commands
+  plugins                 List loaded plugins and skipped ones
+  help                    Show this help text
+"""
 
 #: The app-layer handler-map assembler (``mycad.app._handler_map``), reached
 #: dynamically: it is module-private by design and the CLI must not re-derive
@@ -511,8 +524,6 @@ class CliSession:
         if rest:
             self._emit_error("help takes no arguments")
             return 2
-        from mycad.cli.__main__ import HELP_TEXT
-
         sys.stdout.write(HELP_TEXT)
         return 0
 

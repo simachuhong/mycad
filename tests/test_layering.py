@@ -5,10 +5,8 @@ build123d / OCP / numpy.
 
 Phase 0 keeps the core domain neutral. Only modules under
 ``mycad.geom`` (introduced in a later wave) and ``mycad.app`` are allowed
-to pull CAD backends. The test below also enforces that all
-``# type: ignore`` and ``# pyright: ignore`` comments in the repo live
-under ``tests/typing/`` — a directory that does not yet exist, so the
-current expectation is zero such sites.
+to pull CAD backends. The test below also enforces that every type
+suppression comment in the repo lives under ``tests/typing/``.
 """
 
 from __future__ import annotations
@@ -104,23 +102,22 @@ def test_tests_import_backends_only_in_geom_scope() -> None:
 
 
 def test_no_type_ignore_or_pyright_ignore_sites() -> None:
-    """T1 invariant: zero suppression comments. ``tests/typing/`` whitelist
-    is created in T6; until then any ``# type: ignore`` or
-    ``# pyright: ignore`` site must be removed."""
+    """T1 invariant: zero suppression comments outside ``tests/typing/``.
 
-    suffixes = ("py",)
-    needles = ("# type: ignore", "# pyright: ignore", "# pyright:")
+    The needles are assembled from fragments so this file does not match
+    itself — same convention as ``tests/formats/test_guards.py``.
+    """
+
+    needles = ("# type" + ": ignore", "# pyright" + ": ignore", "# pyright" + ":")
     offenders: list[str] = []
-    for path in REPO.rglob("*"):
+    for path in REPO.rglob("*.py"):
         if not path.is_file():
             continue
-        if path.suffix not in suffixes:
-            continue
-        if "__pycache__" in path.parts:
+        if "__pycache__" in path.parts or ".venv" in path.parts:
             continue
         rel = path.relative_to(REPO).as_posix()
         if rel.startswith("tests/typing/"):
-            # Whitelist — created in T6.
+            # The expect-error corpus is the one legal home for suppressions.
             continue
         text = path.read_text(encoding="utf-8")
         for line_no, line in enumerate(text.splitlines(), start=1):

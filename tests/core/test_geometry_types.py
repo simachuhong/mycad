@@ -24,8 +24,11 @@ def test_bbox_size_and_center() -> None:
 
 def test_bbox_is_frozen() -> None:
     box = BoundingBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    # setattr via a variable name: a direct assignment is a static error on a
+    # frozen dataclass, and the repo allows no suppression comments here.
+    field = "xmin"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        box.xmin = 99.0  # type: ignore[misc]
+        setattr(box, field, 99.0)
 
 
 def test_mass_properties_field_lock() -> None:

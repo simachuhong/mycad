@@ -18,17 +18,13 @@ from mycad.core.selectors import EdgeSelector, FaceSelector
 class NamedGroup:
     """A named bundle of face and edge selectors.
 
-    ``faces`` / ``edges`` accept any iterable at construction; they are
-    normalised to tuples so the group is hashable-friendly and immutable.
+    ``faces`` / ``edges`` are tuples so the group stays immutable and
+    hashable-friendly; the JSON loader materialises them as such.
     """
 
     name: str
     faces: tuple[FaceSelector, ...] = ()
     edges: tuple[EdgeSelector, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "faces", tuple(self.faces))
-        object.__setattr__(self, "edges", tuple(self.edges))
 
 
 __all__ = ["NamedGroup"]

@@ -43,6 +43,8 @@ class Outputs:
 
 @dataclass(frozen=True)
 class ValidatedPlan:
+    """An Appendix B.1 plan file that passed every structural check."""
+
     plan_id: str
     plan_metadata: dict[str, str]
     steps: tuple[PlannedCommand, ...]

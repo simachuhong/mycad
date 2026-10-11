@@ -18,22 +18,9 @@ from pathlib import Path
 from typing import TextIO, cast
 
 from mycad.app import build_app
-from mycad.cli.session import CliSession
+from mycad.cli.session import HELP_TEXT, CliSession
 
 __all__ = ["HELP_TEXT", "main"]
-
-HELP_TEXT = """\
-Usage: mycad <subcommand> [args]
-
-Subcommands:
-  repl                    Start the interactive REPL (default with no arguments)
-  run <file.txt>          Execute an ASCII command script line by line
-  run --json <file.json>  Execute a JSON plan on a fresh document and export
-  validate <file>         Validate a plan (.json) or script (.txt) without executing
-  commands [--json]       List registered commands
-  plugins                 List loaded plugins and skipped ones
-  help                    Show this help text
-"""
 
 
 def _force_utf8(stream: TextIO) -> None:
