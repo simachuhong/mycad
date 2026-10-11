@@ -14,8 +14,8 @@ Ubuntu 桌面端开源 CAD 建模软件，并内置智能体助手：以可编�
 
 ## 技术栈摘要
 
-- **几何内核**：OpenCascade（OCCT），经 build123d / CadQuery 暴露
-- **桌面 UI**：PySide6（Qt6）
+- **几何内核**：OpenCascade（OCCT），经 build123d 暴露
+- **桌面 UI**：PySide6（Qt6）——阶段 1，阶段 0 不含
 - **智能体**：计划生成 → 用户确认 → 经统一 Command Bus 执行
 - **目标平台**：Ubuntu 22.04+
 
@@ -32,9 +32,53 @@ Apache-2.0 相对 MIT 增加了明确的专利授权与 NOTICE 保留义务，�
 
 目前处于文档与规格阶段。提交代码或文档补丁前，请先阅读 `docs/` 下三份基线文档，并确保改动与其中约定一致。贡献默认按 Apache-2.0 授权（见 License 第 5 节）。
 
-## 状态
+## 状态：阶段 0（headless 可编程内核）
 
-仓库正处于基线文档落地阶段，应用程序代码尚未脚手架。
+阶段 0 交付一个**无 UI** 的可编程建模内核，以法兰件为验收牵引。已具备：
+
+- **八条内置建模命令**：`box` / `cylinder` / `extrude` / `revolve` / `hole` /
+  `hole-pattern` / `fillet` / `cut`（`mycad commands` 可列出）。
+- **唯一写入路径**：所有模型修改经 Command Bus；undo 等于删除命令后全量重放
+  （[ADR-001](docs/adr/ADR-001-command-bus-and-history-replay.md)）。
+- **批事务**：`begin-batch` / `end-batch` 包裹的命令整体成功或整体回滚。
+- **参数化重放**：改写历史命令的参数后重建几何，谓词选择器在新尺寸下仍解析到
+  同一语义面组。
+- **存档**：`.mc.json` v1 是纯 JSON 命令历史加审计六字段
+  （[ADR-002](docs/adr/ADR-002-document-archive-format-v1.md)）。
+- **导出**：STEP 与 STL（按扩展名解析 FormatProvider，
+  [ADR-005](docs/adr/ADR-005-format-provider-tiers.md)）。
+- **CLI**：REPL、ASCII 脚本、JSON 计划三种驱动方式，文本与 JSON 双向等价。
+- **插件缝**：entry-points 发现 + manifest 主版本门控
+  （[ADR-003](docs/adr/ADR-003-extension-points-and-plugin-api-versioning.md)）。
+
+尚未开始：PySide6 外壳与 3D 预览（阶段 1）、智能体对话闭环（阶段 2）。
+
+## 快速开始：三条命令跑通法兰
+
+```bash
+uv sync
+uv run mycad run examples/flange_script.txt
+uv run mycad run --json examples/flange_plan.json
+```
+
+两条路径描述同一个零件（OD80 × 8、中心孔 φ20、4 × φ6 均布于 PCD50），
+产出 `flange.step` / `flange.stl` / `flange.mc.json`（计划路径的产物位于
+`examples/` 下，以计划文件名为基名）。体积真值为
+`math.pi*8*(40**2-10**2-4*3**2)` ≈ 36794.333 mm³，由
+`tests/test_acceptance_flange.py` 断言。
+
+交互式使用直接运行 `uv run mycad`，输入 `help` 查看内建命令。
+
+## 平台支持矩阵
+
+| 层级 | 平台 | 阶段 0 状态 |
+|------|------|------------|
+| T1 | Ubuntu 22.04 / 24.04 x86-64、Windows | 支持；CI 三个 job 覆盖 |
+| T2 | 信创 aarch64 | 预期可用（要求 glibc ≥ 2.31）；阶段 0 不进 CI |
+| T3 | 龙芯 LoongArch | 评估中；go/no-go 定于阶段 1 末 |
+
+分层依据与依赖策略见
+[ADR-006](docs/adr/ADR-006-platform-tiering.md)。
 
 ## 开发环境
 
@@ -84,3 +128,14 @@ uv sync
 - manifest 的 `permissions` 字段在阶段 0 仅作声明展示，不做任何强制。
 - 安装任何第三方插件前，请先审阅其源码。
 - 最小示例插件见 [`plugins_examples/mycad_plugin_demo/`](plugins_examples/mycad_plugin_demo/)。
+- 已加载与被跳过的插件可用 `uv run mycad plugins` 查看。
+
+## 路标
+
+| 方向 | 阶段 | 决策记录 |
+|------|------|---------|
+| 插件 API 版本化与扩展点 | 阶段 0 已埋缝 | [ADR-003](docs/adr/ADR-003-extension-points-and-plugin-api-versioning.md) |
+| MCP 边界与确认红线 | 阶段 2 落地，阶段 0 零依赖 | [ADR-004](docs/adr/ADR-004-mcp-boundary.md) |
+| 格式提供方分层（商业格式墙） | 阶段 0 定界 | [ADR-005](docs/adr/ADR-005-format-provider-tiers.md) |
+
+阶段 0 **不含**任何 MCP SDK、LLM 调用或网络代码。

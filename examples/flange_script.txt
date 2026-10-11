@@ -1,0 +1,23 @@
+# MyCAD phase-0 acceptance flange: OD80 x 8, bore 20, 4 x d6 on a 50 PCD.
+# Run with: uv run mycad run examples/flange_script.txt
+# Artifacts land in the current working directory (git-ignored).
+
+new
+
+# Archive metadata (CLI builtin: not a modeling command, never replayed).
+meta part_no=FLANGE-DEMO-001
+meta revision=A
+meta material=Q235
+meta source=example
+
+# One transaction: all three features commit together or roll back together.
+begin-batch
+cylinder radius=40 height=8 center=[0,0,0] mode=new
+hole target_face.surface=plane target_face.axis=+Z target_face.rank=0 position.kind=center diameter=20 depth.kind=through_all
+hole-pattern base_hole.target_face.surface=plane base_hole.target_face.axis=+Z base_hole.target_face.rank=0 base_hole.position.kind=center base_hole.diameter=6 base_hole.depth.kind=through_all pattern.kind=polar pattern.radius=25 pattern.count=4 pattern.start_angle_deg=0
+end-batch
+
+export flange.step
+export flange.stl
+save flange.mc.json
+history --json

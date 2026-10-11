@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "part_no": "FLANGE-DEMO-001",
+    "revision": "A",
+    "material": "Q235",
+    "source": "example"
+  },
+  "steps": [
+    {
+      "id": "feature.cylinder",
+      "version": 1,
+      "params": { "radius": 40, "height": 8, "center": [0, 0, 0], "mode": "new" },
+      "affected_object": "cylinder_body"
+    },
+    {
+      "id": "feature.hole",
+      "version": 1,
+      "params": {
+        "target_face": { "surface": "plane", "axis": "+Z", "rank": 0 },
+        "position": { "kind": "center" },
+        "diameter": 20,
+        "depth": { "kind": "through_all" }
+      },
+      "affected_object": "hole"
+    },
+    {
+      "id": "feature.hole_pattern",
+      "version": 1,
+      "params": {
+        "base_hole": {
+          "target_face": { "surface": "plane", "axis": "+Z", "rank": 0 },
+          "position": { "kind": "center" },
+          "diameter": 6,
+          "depth": { "kind": "through_all" }
+        },
+        "pattern": { "kind": "polar", "radius": 25, "count": 4, "start_angle_deg": 0 }
+      },
+      "affected_object": "hole_pattern"
+    }
+  ]
+}

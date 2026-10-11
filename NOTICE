@@ -4,7 +4,112 @@ Copyright 2026 MyCAD Contributors
 This product is licensed under the Apache License, Version 2.0.
 See the LICENSE file in the project root for the full license text.
 
-This product may bundle or depend on third-party components that retain
-their own copyright notices and license terms. Those notices, when
-applicable, will be listed in this file or in accompanying attribution
-files as the project grows.
+================================================================================
+THIRD-PARTY ATTRIBUTIONS
+================================================================================
+
+The list below covers the complete runtime dependency closure of the `mycad`
+distribution, as enumerated by:
+
+    uv tree --package mycad --no-dev
+
+Development-only tooling (ruff, basedpyright, pytest, pytest-cov, hatchling,
+editables) is declared in a PEP 735 dependency group, is not part of the
+runtime closure, and is therefore not listed here.
+
+Each license identifier below was taken from the installed distribution's
+own metadata (the `License` / `License-Expression` field, or the
+`License :: ...` trove classifier). Where metadata was absent or
+non-specific, the identifier was read from the distribution's bundled
+license file; those cases are marked with the evidence path.
+
+--------------------------------------------------------------------------------
+OpenCascade Technology (OCCT) — dual attribution
+--------------------------------------------------------------------------------
+
+The `cadquery-ocp-novtk` wheel contains two separately licensed bodies of work
+and is therefore attributed on two lines:
+
+  cadquery-ocp-novtk (OCP binding code)   Apache-2.0
+      Source: distribution METADATA `License: Apache-2.0`.
+
+  Open CASCADE Technology 7.9.3 (bundled)  LGPL-2.1 with the Open CASCADE
+                                           exception
+      The wheel ships 46 prebuilt OCCT shared libraries under
+      `cadquery_ocp_novtk.libs/` (libTKernel, libTKFillet, libTKBRep, ...).
+      These are separate native libraries loaded dynamically at runtime; they
+      are NOT a derivative work of MyCAD source. Upstream OCCT is distributed
+      under LGPL-2.1 together with the Open CASCADE exception.
+      Evidence boundary: the wheel does not ship an OCCT license text, and its
+      `dist-info/sboms/auditwheel.cdx.json` enumerates only the system
+      libraries absorbed by auditwheel (libfreeimage, libtiff, libopenexr and
+      similar), not OCCT itself. The identifier above therefore reflects the
+      upstream OCCT project terms rather than a statement found inside the
+      wheel. Anyone redistributing MyCAD together with this wheel should
+      satisfy the LGPL obligations for those native libraries.
+
+--------------------------------------------------------------------------------
+Runtime dependency closure (46 distributions)
+--------------------------------------------------------------------------------
+
+  anytree                        Apache-2.0
+  asttokens                      Apache-2.0
+  build123d                      Apache-2.0
+  cadquery-ocp-novtk             Apache-2.0 (plus bundled OCCT, see above)
+  cadquery-ocp-proxy             Apache-2.0
+  certifi                        MPL-2.0
+  charset-normalizer             MIT
+  cloudpickle                    BSD-3-Clause
+  executing                      MIT
+  ezdxf                          MIT
+  fonttools                      MIT
+  idna                           BSD-3-Clause
+  ipython                        BSD-3-Clause
+  ipython-pygments-lexers        BSD-3-Clause
+  jedi                           MIT
+  joblib                         BSD-3-Clause
+  lib3mf                         BSD-3-Clause
+      Evidence: lib3mf-*.dist-info/licenses/LICENSE, headed "BSD 3-Clause
+      License" (metadata declares only the generic "BSD" classifier).
+  matplotlib-inline              BSD-3-Clause
+  mpmath                         BSD-3-Clause
+  narwhals                       MIT
+  numpy                          BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+  ocp-gordon                     Apache-2.0
+  ocpsvg                         Apache-2.0
+      Evidence: ocpsvg-*.dist-info/licenses/LICENSE (Apache License 2.0 full
+      text); the distribution METADATA carries no License field.
+  parso                          MIT
+  pexpect                        ISC
+  prompt-toolkit                 BSD-3-Clause
+  psutil                         BSD-3-Clause
+  ptyprocess                     ISC
+      Evidence: ptyprocess-*.dist-info/LICENSE, "Ptyprocess is under the ISC
+      license"; the METADATA License field literally reads "UNKNOWN".
+  pure-eval                      MIT
+  pygments                       BSD-2-Clause
+  pyparsing                      MIT
+  requests                       Apache-2.0
+  scikit-learn                   BSD-3-Clause
+  scipy                          BSD-3-Clause
+  stack-data                     MIT
+  svgelements                    MIT
+  svgpathtools                   MIT
+  svgwrite                       MIT
+  sympy                          BSD-3-Clause
+  threadpoolctl                  BSD-3-Clause
+  traitlets                      BSD-3-Clause
+  trianglesolver                 MIT
+  typing-extensions              PSF-2.0
+  urllib3                        MIT
+  wcwidth                        MIT
+  webcolors                      BSD-3-Clause
+
+--------------------------------------------------------------------------------
+Notes
+--------------------------------------------------------------------------------
+
+The HTTP stack (requests, urllib3, certifi, idna, charset-normalizer) and the
+interactive shell (ipython and its dependencies) enter the closure as
+transitive dependencies of build123d. No MyCAD module imports them; the
+`tests/test_scope_audit.py` import audit enforces that.

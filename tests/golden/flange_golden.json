@@ -1,0 +1,31 @@
+{
+  "_note": "Hand-written truth table. JSON has no comments, so each group's closed-form volume is recorded under _formula; the loader asserts the key exists but never feeds it to the geometry comparison. Values are derived from the formula, never reverse-recorded from implementation output.",
+  "groups": {
+    "A": {
+      "od_mm": 80,
+      "bore_mm": 20,
+      "thk_mm": 8,
+      "hole_d_mm": 6,
+      "hole_count": 4,
+      "hole_pcd_radius_mm": 25,
+      "expected_volume_mm3": 36794.3331588437,
+      "_formula": "math.pi*8*(40**2-10**2-4*3**2)",
+      "bbox_size": [80, 80, 8],
+      "solid_count": 1,
+      "cylindrical_faces": 6
+    },
+    "B": {
+      "od_mm": 100,
+      "bore_mm": 30,
+      "thk_mm": 10,
+      "hole_d_mm": 8,
+      "hole_count": 6,
+      "hole_pcd_radius_mm": 35,
+      "expected_volume_mm3": 68455.3039217216,
+      "_formula": "math.pi*10*(50**2-15**2-6*4**2)",
+      "bbox_size": [100, 100, 10],
+      "solid_count": 1,
+      "cylindrical_faces": 8
+    }
+  }
+}
