@@ -30,8 +30,8 @@ Subcommands:
   run <file.txt>          Execute an ASCII command script line by line
   run --json <file.json>  Execute a JSON plan on a fresh document and export
   validate <file>         Validate a plan (.json) or script (.txt) without executing
-  commands [--json]       List registered commands (T10c)
-  plugins                 List loaded plugins and skipped warnings (T10c)
+  commands [--json]       List registered commands
+  plugins                 List loaded plugins and skipped ones
   help                    Show this help text
 """
 
@@ -73,10 +73,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("usage: mycad validate <file.json|file.txt>", file=sys.stderr)
             return 2
         return CliSession(build_app()).validate_file(Path(rest[0]))
-    if sub in ("commands", "plugins"):
-        # T10c placeholders: dispatch slots exist, behavior lands there.
-        print(f"{sub}: not implemented yet", file=sys.stderr)
-        return 2
+    if sub == "commands":
+        as_json = rest == ["--json"]
+        if rest and not as_json:
+            print("usage: mycad commands [--json]", file=sys.stderr)
+            return 2
+        # No-discovery app: the builtin listing stays exactly 8 even when a
+        # demo plugin is installed editable in the environment.
+        return CliSession(build_app(discoverers=[])).list_commands(as_json)
+    if sub == "plugins":
+        if rest:
+            print("plugins takes no arguments", file=sys.stderr)
+            return 2
+        return CliSession(build_app()).list_plugins()
     print(f"unknown subcommand: {sub}", file=sys.stderr)
     return 2
 

@@ -475,6 +475,38 @@ class CliSession:
             print(f"{command.ordinal}: {command.id} {line}{actor}")
         return 0
 
+    def list_commands(self, as_json: bool) -> int:
+        """List every registered command; exit 0 always (skips are not errors)."""
+        specs = [s for group in self._services.registry.list_by_category().values() for s in group]
+        rows = sorted(
+            (spec.cli.verb_aliases[0], spec.id, spec.summary_en, spec.label_zh) for spec in specs
+        )
+        if as_json:
+            payload = {
+                "commands": [
+                    dict(zip(("verb", "id", "summary_en", "label_zh"), row, strict=True))
+                    for row in rows
+                ]
+            }
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            for verb, command_id, summary, _zh in rows:
+                print(f"{verb}\t{command_id}\t{summary}")
+        return 0
+
+    def list_plugins(self) -> int:
+        """Report loaded plugins and skipped ones (reason codes, exit 0 always)."""
+        for plugin in self._services.plugins.loaded():
+            manifest = plugin.manifest
+            assert manifest is not None  # loaded() guarantees a parsed manifest
+            print(
+                f"loaded: {manifest.id} v{manifest.version} api={manifest.api_version} "
+                f"commands={len(plugin.commands)} formats={len(plugin.formats)}"
+            )
+        for name, reason in self._services.plugins.skipped():
+            print(f"skipped: {name} reason={reason}")
+        return 0
+
     def _cmd_help(self, rest: str) -> int:
         if rest:
             self._emit_error("help takes no arguments")

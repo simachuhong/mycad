@@ -81,3 +81,25 @@
 - D6: validate .txt 的内建行语法错误按 run 时的用法错误归类退 2（任务书草稿写 1，与
   "退出码归类与 run 相同"的计划原文冲突，以计划为准）；undo/redo 的 n 不做静态检查。
 - D7: `history` 非法参数文案由 `history takes no arguments` 改为 `usage: history [--json]`。
+
+## §T10c commands/plugins + QA 矩阵（主会话直接实现，2026-10-11）
+
+### 交付物
+- `session.py`：`list_commands(as_json)`（verb 字典序；文本=制表符三列；--json 恰四键
+  `ensure_ascii=False`）、`list_plugins()`（`loaded: <id> v<ver> api=<api> commands=<n> formats=<n>`
+  + `skipped: <dist> reason=<六码>`，退出码恒 0）。
+- `__main__.py`：`commands` 用 `build_app(discoverers=[])`（CI 装 demo 时仍恰 8）、
+  `plugins` 用 `build_app()`（真发现）；HELP_TEXT 去掉 T10c 占位标注。占位分发全部清零。
+- 测试：`tests/cli/{test_commands_plugins,test_qa}.py`，新增 15 例（命令列表 4+插件 6+QA 5）。
+
+### 门禁
+- 全量：pytest 767 passed / ruff / format 160 / basedpyright 0-0-0。
+- 真实 CLI 冒烟：`mycad commands` 8 行三列（box 首行）；`commands --json` 中文 label 原样；
+  `plugins` 空环境零行 rc=0；`run --json /nonexistent.json` rc=2。
+- 篡改探针：去掉 list_commands 的 sorted → 2 failed（verb 序）→ 还原 → 全绿。
+
+### T10 终验小结（T10a+b+c 合并口径）
+- CLI 全部子命令落地：repl/run/run --json/validate/commands/plugins/help；退出码 0/1/2 契约
+  全部有测试锚定；文本⇄JSON 双向等价（to_cli→parse_line round-trip）闭环。
+- QA happy：REPL 全序列（new→批 3 命令→export step/stl→save→history --json→undo 3→save）
+  体积 36794.3331588437（abs 1e-6）、solid_count 1；undo 后存档 commands 空、volume 0.0。
