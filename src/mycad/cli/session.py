@@ -12,8 +12,10 @@ is exactly one line (first line of ``str(e)``); no tracebacks leak.
 
 from __future__ import annotations
 
+import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -26,7 +28,9 @@ except ImportError:
 
 import mycad.app
 from mycad.app import AppServices, new_document
+from mycad.cli.plans import Outputs, load_plan_file
 from mycad.commands.grammar import parse_line, to_cli
+from mycad.commands.validation import validate_params
 from mycad.core.document import AFFECTED_OBJECTS, AffectedObject, PlannedCommand
 from mycad.core.exceptions import BatchRollbackError, MycadError
 from mycad.core.persistence import LoadedDocument, open_document, save_document
@@ -51,6 +55,60 @@ _assemble_handlers = cast(
 #: Sentinel return code for ``quit``/``exit`` — an internal stop signal handed
 #: to the loop drivers, never a process exit code (contract codes are 0/1/2).
 _QUIT_REQUESTED = -1
+
+
+def _print_rollback(exc: BaseException, base: int) -> None:
+    """stdout ``rolled back: <ordinals>`` for the steps a failed batch undid."""
+    if isinstance(exc, BatchRollbackError) and exc.executed_ids:
+        ordinals = ", ".join(str(base + i) for i in range(len(exc.executed_ids)))
+        print(f"rolled back: {ordinals}")
+
+
+def _batch_structure_error(head: str, rest: str, batch: Sequence[object] | None) -> str | None:
+    """The one batch-structure rule set, shared by execution and ``validate``."""
+    if rest:
+        return f"{head} takes no arguments"
+    if head == "begin-batch":
+        return "nested begin-batch" if batch is not None else None
+    if batch is None:
+        return "end-batch without begin-batch"
+    if not batch:
+        # A zero-step plan violates the archive schema's minItems 1.
+        return "empty batch: end-batch requires at least one command"
+    return None
+
+
+#: ``validate`` syntax rules for builtin lines (head -> argument requirement):
+#: ``none`` takes no argument, ``required`` needs one, ``optional`` either.
+_BUILTIN_ARITY: dict[str, str] = {
+    "new": "none",
+    "open": "required",
+    "save": "optional",
+    "export": "required",
+    "meta": "required",
+    "undo": "optional",
+    "redo": "optional",
+    "history": "optional",
+    "help": "none",
+    "quit": "none",
+    "exit": "none",
+}
+
+
+def _builtin_syntax_error(head: str, rest: str) -> str | None:
+    """Static (non-executing) usage check of one builtin line for ``validate``."""
+    arity = _BUILTIN_ARITY[head]
+    if arity == "none" and rest:
+        return f"{head} takes no arguments"
+    if arity == "required" and not rest:
+        return f"{head} requires an argument"
+    if head == "meta" and "=" not in rest:
+        return "usage: meta <key>=<value>"
+    if head in ("open", "save") and rest and not rest.endswith(".mc.json"):
+        return f"{head} only supports .mc.json archives"
+    if head == "history" and rest not in ("", "--json"):
+        return "usage: history [--json]"
+    return None
 
 
 class CliSession:
@@ -102,6 +160,105 @@ class CliSession:
                 if result != 0:
                     return result
         return self._finish(0)
+
+    def run_json(self, path: Path) -> int:
+        """Execute a plan file per Appendix B.3 on its own fresh document.
+
+        The session's current document is untouched. Outputs print one path
+        per line in step/stl/archive order; with no ``outputs`` key all three
+        land beside the plan file under its stem.
+        """
+        if not path.is_file():
+            self._emit_error(f"file not found: {path}")
+            return 2
+        services = self._services
+        try:
+            validated = load_plan_file(path, services.registry)
+            loaded = new_document(services)
+            plan = Plan(list(validated.steps), plan_id=validated.plan_id)
+            plan.confirm(actor="cli-local")
+            loaded.bus.execute_batch(plan)
+            for key, value in validated.plan_metadata.items():
+                loaded.document.set_metadata(key, value)
+            outputs = validated.outputs
+            if outputs.step is None and outputs.stl is None and outputs.archive is None:
+                outputs = Outputs(
+                    step=path.with_name(f"{path.stem}.step"),
+                    stl=path.with_name(f"{path.stem}.stl"),
+                    archive=path.with_name(f"{path.stem}.mc.json"),
+                )
+            for target in (outputs.step, outputs.stl):
+                if target is not None:
+                    services.formats.resolve(target).write(services.kernel, target)
+                    print(target)
+            if outputs.archive is not None:
+                save_document(loaded.document, outputs.archive)
+                print(outputs.archive)
+        except (MycadError, OSError) as exc:
+            _print_rollback(exc, 0)
+            self._emit_error(exc)
+            return 1
+        return 0
+
+    def validate_file(self, path: Path) -> int:
+        """Check a ``.json`` plan or ``.txt`` script without executing anything."""
+        if not path.is_file():
+            self._emit_error(f"file not found: {path}")
+            return 2
+        if path.suffix == ".json":
+            try:
+                count = len(load_plan_file(path, self._services.registry).steps)
+            except MycadError as exc:
+                self._emit_error(exc)
+                return 1
+            print(f"valid: plan {count} step(s)")
+            return 0
+        if path.suffix == ".txt":
+            return self._validate_script(path)
+        self._emit_error(f"validate supports .json plans and .txt scripts, got {path.name}")
+        return 2
+
+    def _validate_script(self, path: Path) -> int:
+        """Static script check: N counts valid modeling lines (batch lines too)."""
+        registry = self._services.registry
+        batch: list[str] | None = None
+        count = 0
+        with path.open(encoding="utf-8") as handle:
+            for raw_line in handle:
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                head, _, rest = stripped.partition(" ")
+                rest = rest.strip()
+                if head in ("begin-batch", "end-batch"):
+                    error = _batch_structure_error(head, rest, batch)
+                    if error is not None:
+                        self._emit_error(error)
+                        return 2
+                    batch = [] if head == "begin-batch" else None
+                    continue
+                if head in _BUILTIN_ARITY:
+                    error = _builtin_syntax_error(head, rest)
+                    if error is not None:
+                        self._emit_error(error)
+                        return 2
+                    if head in ("quit", "exit"):
+                        break
+                    continue
+                try:
+                    command_id, params = parse_line(stripped, registry)
+                    validate_params(registry.get(command_id), params, defs=registry.schema_defs)
+                except MycadError as exc:
+                    self._emit_error(exc)
+                    return 1
+                count += 1
+                if batch is not None:
+                    batch.append(command_id)
+        if batch is not None:
+            self._emit_error("unterminated batch")
+            return 2
+        print(f"valid: script {count} step(s)")
+        return 0
 
     def execute_line(self, line: str) -> int:
         """Execute one text line; never raises.
@@ -293,8 +450,18 @@ class CliSession:
         return count
 
     def _cmd_history(self, rest: str) -> int:
+        if rest == "--json":
+            commands = self._doc.document.commands if self._doc is not None else ()
+            entries: list[dict[str, object]] = []
+            for command in commands:
+                entry = asdict(command)
+                if not command.amendments:
+                    del entry["amendments"]
+                entries.append(entry)
+            print(json.dumps({"commands": entries}, ensure_ascii=False))
+            return 0
         if rest:
-            self._emit_error("history takes no arguments")
+            self._emit_error("usage: history [--json]")
             return 2
         if self._doc is None:
             return 0
@@ -328,27 +495,19 @@ class CliSession:
     # ------------------------------------------------------------------
 
     def _cmd_begin_batch(self, rest: str) -> int:
-        if rest:
-            self._emit_error("begin-batch takes no arguments")
-            return 2
-        if self._batch is not None:
-            self._emit_error("nested begin-batch")
+        error = _batch_structure_error("begin-batch", rest, self._batch)
+        if error is not None:
+            self._emit_error(error)
             return 2
         self._batch = []
         return 0
 
     def _cmd_end_batch(self, rest: str) -> int:
-        if rest:
-            self._emit_error("end-batch takes no arguments")
-            return 2
-        if self._batch is None:
-            self._emit_error("end-batch without begin-batch")
-            return 2
-        if not self._batch:
-            # A zero-step plan violates the archive schema's minItems 1.
-            self._emit_error("empty batch: end-batch requires at least one command")
-            return 2
         collected = self._batch
+        error = _batch_structure_error("end-batch", rest, collected)
+        if error is not None or collected is None:
+            self._emit_error(error)
+            return 2
         steps: list[PlannedCommand] = []
         for command_id, params in collected:
             spec = self._services.registry.get(command_id)
@@ -367,9 +526,7 @@ class CliSession:
         try:
             self._require_doc().bus.execute_batch(plan)
         except MycadError as exc:
-            if isinstance(exc, BatchRollbackError) and exc.executed_ids:
-                ordinals = ", ".join(str(base + i) for i in range(len(exc.executed_ids)))
-                print(f"rolled back: {ordinals}")
+            _print_rollback(exc, base)
             self._emit_error(exc)
             self._batch = None
             return 1

@@ -53,3 +53,31 @@
   分发 slots 落位但报 `<sub>: not implemented yet` 退 2（"占位分发到位即可，不响应"
   的确定行为；T10b/c 替换分支体）。
 - D4: pyproject 插入点后界为 [build-system]（仓库无 [dependency-groups] 表）。
+
+## §T10b run --json + validate + history --json（主会话直接实现，2026-10-11）
+
+### 交付物
+- 新建 `src/mycad/cli/plans.py`：附录 B.1 唯一校验器 `validate_plan_dict` / `load_plan_file`
+  （`run --json` 与 `validate .json` 共用；错误带 `steps[i].params` / `steps[i].affected_object`
+  等定位前缀；plan_id 缺省 `uuid4().hex`，显式值须 `^[0-9a-f]{32}$`）。
+- `session.py`：`run_json`（B.3 六步：独立新文档 → Plan.confirm("cli-local") → 一次
+  execute_batch → metadata 存在即写入 → outputs 导出，三键全缺省时按计划 stem 产三件）、
+  `validate_file`（.json/.txt，其他扩展名 2）、`history --json`（`asdict` 生成，字段与存档命令
+  条目一致，amendments 仅非空时出现）。
+- `__main__.py`：`run --json <file>`、`validate <file>` 分发；commands/plugins 仍为 T10c 占位。
+- 测试：`tests/cli/{_flange,test_run_json,test_validate,test_history}.py`，新增 38 例。
+
+### 门禁
+- 全量：pytest 752 passed（沙箱外；沙箱内 test_demo_installed 因 .venv 只读报错，属环境）/
+  ruff check 全过 / 158 files formatted / basedpyright 0-0-0。
+- 真实 CLI 冒烟：`mycad validate` → `valid: plan 3 step(s)` rc=0；`mycad run --json` → rc=0，
+  产出 step 24507B / stl 152084B / mc.json 1665B；坏 JSON → 单行 `invalid JSON: ...` rc=1。
+- 篡改探针：plans.py 的 affected_object 检查改为 `if False:` → 1 failed（红）→ 还原 → 全绿。
+
+### 设计决策 / 偏差
+- D5: 批结构判定抽为 `_batch_structure_error`，begin/end-batch 执行路径与 validate 共用
+  （T10a 文案不变，既有测试全绿）；回滚行打印抽为 `_print_rollback`，run_json 失败时同样
+  输出 `rolled back: <ordinals>`。
+- D6: validate .txt 的内建行语法错误按 run 时的用法错误归类退 2（任务书草稿写 1，与
+  "退出码归类与 run 相同"的计划原文冲突，以计划为准）；undo/redo 的 n 不做静态检查。
+- D7: `history` 非法参数文案由 `history takes no arguments` 改为 `usage: history [--json]`。

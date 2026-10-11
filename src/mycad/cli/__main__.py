@@ -28,7 +28,8 @@ Usage: mycad <subcommand> [args]
 Subcommands:
   repl                    Start the interactive REPL (default with no arguments)
   run <file.txt>          Execute an ASCII command script line by line
-  validate <file>         Validate a plan or script without executing (T10b)
+  run --json <file.json>  Execute a JSON plan on a fresh document and export
+  validate <file>         Validate a plan (.json) or script (.txt) without executing
   commands [--json]       List registered commands (T10c)
   plugins                 List loaded plugins and skipped warnings (T10c)
   help                    Show this help text
@@ -57,15 +58,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(HELP_TEXT)
         return 0
     if sub == "run":
-        if not rest:
+        as_json = rest[:1] == ["--json"]
+        paths = rest[1:] if as_json else rest
+        if not paths:
             print("run requires a script path", file=sys.stderr)
             return 2
-        if len(rest) > 1:
-            print(f"run: unexpected argument: {rest[1]}", file=sys.stderr)
+        if len(paths) > 1:
+            print(f"run: unexpected argument: {paths[1]}", file=sys.stderr)
             return 2
-        return CliSession(build_app()).run_script(Path(rest[0]))
-    if sub in ("validate", "commands", "plugins"):
-        # T10b/c placeholders: dispatch slots exist, behavior lands there.
+        session = CliSession(build_app())
+        return session.run_json(Path(paths[0])) if as_json else session.run_script(Path(paths[0]))
+    if sub == "validate":
+        if len(rest) != 1:
+            print("usage: mycad validate <file.json|file.txt>", file=sys.stderr)
+            return 2
+        return CliSession(build_app()).validate_file(Path(rest[0]))
+    if sub in ("commands", "plugins"):
+        # T10c placeholders: dispatch slots exist, behavior lands there.
         print(f"{sub}: not implemented yet", file=sys.stderr)
         return 2
     print(f"unknown subcommand: {sub}", file=sys.stderr)
