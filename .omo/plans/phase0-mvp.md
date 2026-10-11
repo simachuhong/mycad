@@ -426,7 +426,7 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
   - failure：安装 future+坏插件夹具 → 断言核心命令仍全部可用、warnings 计数=2、id 正确；卸载插件后发现列表恢复为空；附证据。
   Commit: Y | `feat(plugins): entry-point discovery with manifest/api gating, isolated failures, demo plugin`
 
-- [ ] 10. T10 CLI：REPL + 脚本执行 + 文本/JSON 等价 + 退出码
+- [x] 10. T10 CLI：REPL + 脚本执行 + 文本/JSON 等价 + 退出码
   What to do / Must NOT do:
   - console script `mycad = mycad.cli.__main__:main`（pyproject [project.scripts]）；子命令：
     - 无参数/`mycad repl`：交互式 REPL（stdin tty 提示符 `mycad> `；非 tty 时从 stdin 读行，等价脚本模式）；
