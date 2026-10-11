@@ -185,9 +185,11 @@ def scan_forbidden_imports(root: Path, repo: Path) -> list[str]:
         rel = path.relative_to(repo).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for lineno, module in _import_roots(tree):
-            if module.lower() in lowered:
-                violations.append(f"{rel}:{lineno}:{module}")
-            elif module in BACKEND_ROOTS and not rel.startswith(BACKEND_ALLOWED_PREFIX):
+            if (
+                module.lower() in lowered
+                or module in BACKEND_ROOTS
+                and not rel.startswith(BACKEND_ALLOWED_PREFIX)
+            ):
                 violations.append(f"{rel}:{lineno}:{module}")
     return violations
 
@@ -391,7 +393,7 @@ def test_runtime_closure_clean() -> None:
     assert result.returncode == 0, f"uv tree failed: {result.stderr.strip()[:200]}"
     closure = parse_closure(result.stdout)
     assert FORBIDDEN_DISTRIBUTIONS & closure == set()
-    assert REQUIRED_DISTRIBUTIONS <= closure
+    assert closure >= REQUIRED_DISTRIBUTIONS
 
 
 def test_runtime_closure_reverse_self_proof() -> None:

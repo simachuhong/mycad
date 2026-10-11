@@ -143,7 +143,10 @@ uv run pytest tests/<path> -q       # scoped 测试
 # CLI 入口
 uv run mycad                        # 默认 REPL
 uv run mycad run script.txt         # 执行 ASCII 命令脚本
-# 注：mycad validate/commands/plugins 阶段 0 尚未实现（cli/__main__.py 触发 not-implemented 退出码 2）
+uv run mycad run --json plan.json   # 执行 JSON 计划并按计划文件名导出
+uv run mycad validate <file>        # 只校验 .json 计划或 .txt 脚本，不执行
+uv run mycad commands [--json]      # 列注册表（含插件贡献）
+uv run mycad plugins                # 列已加载与被跳过的插件
 
 # 离线/企业网备选（清华/阿里源，仅完全无外网时使用）
 export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -156,7 +159,8 @@ uv sync
 - **依赖硬 pin 理由**：`cadquery-ocp-novtk<7.9.4` 因 OCP 7.9.4 丢了 build123d 0.11.1 依赖的 TopoDS_Wire 修复
 - **存档 v1 = 纯 JSON 命令历史**，不带 BREP 快照；快照缓存列为 v2 演进口（ADR-002 R17）
 - **Plugin 命令贡献契约**（`mycad.commands` entry）：callable 返回 `list[CommandContribution(spec, handler_factory)]`；handler_factory=None 时由 `BuiltinModelingHandler` 兜底（适用声明式建模命令）；`demo.ping` 型非几何命令必须自带 handler
-- **暂未实现的 CLI 子命令**：`validate` / `commands` / `plugins`（T10b/c 占位）—— 派发逻辑存在但 body 报 `not implemented yet`，退出码 2
+- **CLI 子命令已全部落地**（T10b/c）：`validate` / `commands` / `plugins` 与 `run --json` 均可用；
+ `commands` 走真实 entry-point 发现，装了插件就会多出其贡献的命令
 - **基于类型化的严格级别**：`pyrightconfig.json` `typeCheckingMode=strict`；basedpyright==1.40.1 锁定
 
 ---

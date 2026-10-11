@@ -10,6 +10,7 @@ annotation, so there is zero runtime import of ``mycad.commands``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -127,10 +128,9 @@ def save_document(document: Document, path: Path) -> None:
         os.replace(tmp_path, path)
     except BaseException:
         if tmp_path is not None and tmp_path.exists():
-            try:
+            # A failed cleanup must not mask the error being re-raised.
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
         raise
     document.events.emit("document_saved", {"path": str(path)})
 

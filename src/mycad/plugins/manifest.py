@@ -93,7 +93,7 @@ def _from_dict(data: dict[object, object]) -> tuple[PluginManifest | None, str |
     judged), then the remaining fields.
     """
     keys: set[object] = set(data.keys())
-    if not _REQUIRED_KEYS <= keys or keys - _KNOWN_KEYS:
+    if not keys >= _REQUIRED_KEYS or keys - _KNOWN_KEYS:
         return None, _DAMAGED_MANIFEST
     api_value: object = data["api_version"]
     if not isinstance(api_value, str) or not api_value:

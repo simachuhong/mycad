@@ -85,7 +85,7 @@ def test_warning_reason_vocabulary_locked() -> None:
     args = get_args(WARNING_REASON)
     assert len(args) == 6
     assert set(args) == EXPECTED_WARNING_REASONS
-    assert WARNING_REASONS == frozenset(args)
+    assert frozenset(args) == WARNING_REASONS
 
 
 def test_api_version_constants_locked() -> None:
@@ -173,7 +173,10 @@ def test_reason_literals_confined_to_types() -> None:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if node.value in EXPECTED_WARNING_REASONS:
-                    offenders.append(f"{rel}: {node.value}")
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in EXPECTED_WARNING_REASONS
+            ):
+                offenders.append(f"{rel}: {node.value}")
     assert offenders == []

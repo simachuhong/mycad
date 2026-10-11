@@ -61,10 +61,7 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
     go through the loader (per-entry conflict isolation) before the
     plugin manager is built.
     """
-    if discoverers is None:
-        discoverers = (EntryPointDiscoverer(),)
-    else:
-        discoverers = tuple(discoverers)
+    discoverers = (EntryPointDiscoverer(),) if discoverers is None else tuple(discoverers)
     registry = CommandRegistry(schema_defs=COMMAND_SCHEMA_DEFS)
     for spec in BUILTIN_COMMAND_SPECS:
         registry.register(spec)

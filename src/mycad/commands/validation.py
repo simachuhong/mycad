@@ -109,8 +109,7 @@ def _resolve_ref(
         raise ValidationError(f"circular $ref {ref!r}")
     if name not in defs:
         raise ValidationError(f"$ref {ref!r}: no definition {name!r} in the defs table")
-    target = _schema_object(defs[name], f"$ref {ref!r}")
-    return target
+    return _schema_object(defs[name], f"$ref {ref!r}")
 
 
 def _is_number(value: object) -> bool:
