@@ -101,32 +101,60 @@ def test_tests_import_backends_only_in_geom_scope() -> None:
     assert not offenders, f"forbidden backend imports in tests/: {offenders}"
 
 
-def test_no_type_ignore_or_pyright_ignore_sites() -> None:
-    """T1 invariant: zero suppression comments outside ``tests/typing/``.
+#: Assembled from fragments so this file does not match itself — same
+#: convention as ``tests/formats/test_guards.py``.
+SUPPRESSION_NEEDLES = ("# type" + ": ignore", "# pyright" + ": ignore", "# pyright" + ":")
 
-    The needles are assembled from fragments so this file does not match
-    itself — same convention as ``tests/formats/test_guards.py``.
-    """
+#: The expect-error corpus is the one legal home for suppressions.
+SUPPRESSION_WHITELIST = "tests/typing/"
 
-    needles = ("# type" + ": ignore", "# pyright" + ": ignore", "# pyright" + ":")
+
+def scan_suppressions(root: Path, repo: Path) -> tuple[list[str], int]:
+    """Suppression sites outside the whitelist, and how many files were read."""
     offenders: list[str] = []
-    for path in REPO.rglob("*.py"):
-        if not path.is_file():
+    scanned = 0
+    for path in root.rglob("*.py"):
+        if not path.is_file() or {"__pycache__", ".venv"} & set(path.parts):
             continue
-        if "__pycache__" in path.parts or ".venv" in path.parts:
+        rel = path.relative_to(repo).as_posix()
+        if rel.startswith(SUPPRESSION_WHITELIST):
             continue
-        rel = path.relative_to(REPO).as_posix()
-        if rel.startswith("tests/typing/"):
-            # The expect-error corpus is the one legal home for suppressions.
-            continue
-        text = path.read_text(encoding="utf-8")
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            for needle in needles:
+        scanned += 1
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for needle in SUPPRESSION_NEEDLES:
                 if needle in line:
                     offenders.append(f"{rel}:{line_no}: {line.strip()}")
+    return offenders, scanned
+
+
+def test_no_type_ignore_or_pyright_ignore_sites() -> None:
+    """T1 invariant: zero suppression comments outside ``tests/typing/``."""
+    offenders, scanned = scan_suppressions(REPO, REPO)
+    # This guard shipped in T1 comparing Path.suffix (".py") to "py", so it
+    # skipped every file and passed for eleven waves while the invariant was
+    # broken. An empty scan is now a failure, not a silent pass.
+    assert scanned > 0, "suppression scan read no files — the guard is vacuous"
     assert not offenders, "suppression comments detected outside tests/typing/: " + "\n".join(
         offenders
     )
+
+
+def test_no_type_ignore_sites_reverse_self_proof(tmp_path: Path) -> None:
+    """Plan: "在 src 放一条 ignore 必须变红" — the absent self-proof is why
+    the vacuous version of this guard survived every wave."""
+    # Pinned by the plan: widening this is the other way to fake a fix, and
+    # the tmp-tree assertions below cannot see it.
+    assert SUPPRESSION_WHITELIST == "tests/typing/"
+    src = tmp_path / "src" / "mycad"
+    src.mkdir(parents=True)
+    (src / "leak.py").write_text(f"x: int = 1  {SUPPRESSION_NEEDLES[0]}[assignment]\n", "utf-8")
+    whitelisted = tmp_path / SUPPRESSION_WHITELIST
+    whitelisted.mkdir(parents=True)
+    (whitelisted / "expect_errors.py").write_text(f"y = 1  {SUPPRESSION_NEEDLES[1]}[x]\n", "utf-8")
+
+    offenders, scanned = scan_suppressions(tmp_path, tmp_path)
+    assert scanned == 1, "the whitelisted file must be skipped, the src file read"
+    assert [o.split(":")[0] for o in offenders] == ["src/mycad/leak.py"]
 
 
 #: T7c composition-root exception: the single src file outside the adapter
