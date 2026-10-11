@@ -189,6 +189,30 @@ B009/F401，带说明注释）。
 
 ---
 
+## 追加：ruff 规则集偏差的正式记录（回应 F1 的 P2/P3）
+
+F1 审计指出 `pyproject.toml` 的 ruff 配置静默偏离计划第 131 行原文
+（`select = E,F,I,N,UP,B,SIM,RET,PT,PL`），且 11 份 task 证据中无任何记录。属实。
+本节补记，并说明已采取的动作。
+
+| 规则族 | 计划要求 | 当前 | 动作与理由 |
+|---|---|---|---|
+| `E` `F` `I` `UP` `B` | 启用 | 启用 | 一致 |
+| `W` `C4` | 计划未列 | 启用 | 计划外**增强**，保留 |
+| `N` | 启用 | **已启用** | 本轮补上。唯一冲突 `N818` 单独 ignore——它要求异常名带 `Error` 后缀，而计划第 135 行的 15 条异常分类表逐字写死 `InvalidPlanTransition`，`tests/test_exceptions.py` 又锁定了名字集合。改名即违反计划 |
+| `SIM` | 启用 | **已启用** | 本轮补上，8 处修复（含把 `persistence.py` 的 `except OSError: pass` 换成 `contextlib.suppress`） |
+| `RET` | 启用 | **已启用** | 本轮补上 |
+| `PT` | 启用 | **仍关闭** | 21 处。多为 `PT001`（fixture 括号风格，纯风格）与 `PT018`（复合断言拆分）。无正确性收益，留阶段 1 |
+| `PL` | 启用 | **仍关闭** | 138 处，其中 **103 处是 `PLR2004` magic-value-comparison**——命中的恰是 `assert len(rows) == 9`、`assert exit_code == 2` 这类「字面量就是断言本身」的测试代码。启用会逼出大量语义为零的常量提取 |
+| `E501` | line-length=100，计划未授权 ignore | **仍 ignore** | 全仓仅 4 处超长，全部是 docstring 与脚本夹具里**逐字引用的 CLI 命令行**。CLI 语法是一行一命令，折行会让示例变成错的 |
+
+偏差与理由现已同时写在 `pyproject.toml` 的配置注释里，不再只存在于证据文件。
+
+**P3（`addopts` 缺 `--ignore=tests/typing`）**：已修。计划称其为「双保险」，此前只剩
+「文件名不匹配 `test_*.py`」一重。现 `addopts = "-ra --ignore=tests/typing"`。
+
+---
+
 ## 遗留风险
 
 - **同类 bug 的面**：本次只在仓库里找到 1 处 `path.suffix` 与无点字面量比较
