@@ -56,7 +56,14 @@ def _skipped(name: str, warnings: tuple[str, ...] = ()) -> DiscoveredPlugin:
     return DiscoveredPlugin(distribution_name=name, entrypoint=(), manifest=None, warnings=warnings)
 
 
-def test_commands_lists_exactly_eight(capsys: pytest.CaptureFixture[str]) -> None:
+def _no_plugins(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
+    return ()
+
+
+def test_commands_lists_exactly_eight(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 8
@@ -69,7 +76,10 @@ def test_commands_lists_exactly_eight(capsys: pytest.CaptureFixture[str]) -> Non
     assert {row[1] for row in rows} == {spec.id for spec in BUILTIN_COMMAND_SPECS}
 
 
-def test_commands_json_shape(capsys: pytest.CaptureFixture[str]) -> None:
+def test_commands_json_shape(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands", "--json"]) == 0
     raw = capsys.readouterr().out
     payload = json.loads(raw)
@@ -82,6 +92,28 @@ def test_commands_json_shape(capsys: pytest.CaptureFixture[str]) -> None:
         assert set(entry) == JSON_KEYS
     assert "\\\\u" not in raw  # ensure_ascii=False: label_zh stays readable
     assert any(ord(ch) > 127 for ch in raw)
+
+
+def test_commands_lists_plugin_contributions(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A plugin-contributed command is visible to ``commands``, not just to the REPL.
+
+    Driven through ``main`` on purpose: the subcommand must build the app
+    with real discovery enabled, which a direct ``CliSession`` call cannot
+    prove.
+    """
+
+    def _one_plugin(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
+        return (_demo_plugin(),)
+
+    monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
+    assert main(["commands"]) == 0
+    rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+    assert len(rows) == 9
+    assert "demo.ping" in {row[1] for row in rows}
+    verbs = [row[0] for row in rows]
+    assert verbs == sorted(verbs)
 
 
 def test_commands_rejects_extra_arguments(capsys: pytest.CaptureFixture[str]) -> None:

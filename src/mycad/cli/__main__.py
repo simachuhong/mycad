@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         # No-discovery app: the builtin listing stays exactly 8 even when a
         # demo plugin is installed editable in the environment.
-        return CliSession(build_app(discoverers=[])).list_commands(as_json)
+        return CliSession(build_app()).list_commands(as_json)
     if sub == "plugins":
         if rest:
             print("plugins takes no arguments", file=sys.stderr)
