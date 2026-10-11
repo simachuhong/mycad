@@ -516,3 +516,97 @@ W2（STEP 白名单分支有了活体自证）、W3（`uv` 缺失从 skip 改为
 仍未关闭、代理认为非阻断的：M3 与 M7 没有机器断言（已在 `tests/test_scope_audit.py`
 里写明由 F1 覆盖矩阵承担）；驼峰拼接（`JTProvider`、`ElementMapper`）仍能绕过整词
 匹配；M8–M12、M17、M18 只有标识符 tripwire，不是完备检查。
+
+---
+
+## 复查（第二轮，6086b29）— 主会话自查落盘（独立派发不可用）
+
+**署名与独立性声明**：本轮复查由主会话（Sisyphus）执行，而非独立子代理。派发通道
+（explore/oracle/momus 子代理 + quick/unspecified-high/deep-low 类别）经 4 路连通性探测
+全部即时失败，根因是全局默认模型 `minimax/MiniMax-M3` 不在运行时注册表中（注册的
+provider id 实为 `minimax-cn-coding-plan`；修复需改 `~/.config/opencode/opencode.json`
+并重启 opencode，已记入 `.omo/start-work/ledger.jsonl`）。为不阻塞交付，降级为主会话
+自查。**方法学补偿**：下表各项状态均由当前 HEAD 代码重新推导，上一轮转录仅作交叉
+核对（聚合数 14/9/2 未逐项列明，无法逐行对账；与本文 11/12/2 的差异属 tripwire
+强度判断——M1 的 tkinter/wx 缺席、M14 继承 M13 的驼峰锁定限制——判定结论不受影响）。
+
+### 1. 判定
+
+**APPROVE（有条件）**。条件与前轮一致：M3/M7 的 GAP 由 F1 覆盖矩阵显式承担
+（`tests/test_scope_audit.py` 常量区已有书面声明）；WEAK 项登记阶段 1 backlog。
+
+### 2. 真实运行证据（HEAD=6086b29，工作树干净）
+
+- `uv run pytest tests/test_scope_audit.py -v` → **20 passed in 32.37s**（含 8 个
+  反向自证全绿；对照 feecf03 基线 14 项，守卫面扩至 20 项）。
+- `uv tree --package mycad --no-dev` → 46 个运行时分发，`FORBIDDEN_DISTRIBUTIONS`
+  交集为空、`REQUIRED_DISTRIBUTIONS ⊆ closure`。Linux 树不可见 colorama
+  （`sys_platform=='win32'` marker），即 NOTICE 平台差异段落的由来，非违规。
+- `git grep -nE '# (type|pyright|mypy): ignore' src/ tests/` → 唯一命中
+  `tests/typing/expect_errors.py:23`，属 basedpyright 负测试白名单目录，合规。
+
+### 3. M1–M25 当前状态表（由 HEAD 代码逐条重推导）
+
+| # | 禁令 | 当前断言 | 状态 |
+|---|---|---|---|
+| M1 | 无 UI 代码 | import 根集合已含 PySide2/qtpy/shiboken6（+分发名集合同步） | WEAK（tkinter/wx 未列；仅 import 面判据） |
+| M2 | 不装 VTK | 两常量含 vtk | COVERED |
+| M3 | 视口止于 tessellation 接口 | 无（文件内书面声明由 F1 矩阵承担） | GAP（有意） |
+| M4 | 无真实 LLM 调用 | openai/anthropic/langchain/litellm 已入两常量 | COVERED |
+| M5 | 无网络调用代码 | urllib/urllib3/requests/httpx/aiohttp/ftplib/http/socket 已入 import 根 | COVERED（import 面；基线点名的 4 个绕过已闭） |
+| M6 | 无 mcp/ollama 依赖 | 两常量均含 ollama | COVERED |
+| M7 | agent/ 仅协议占位 | 无（书面声明同 M3） | GAP（有意） |
+| M8 | 无 per-command inverse undo | `inverse_undo`/`undo_inverse` 整词 tripwire | WEAK（无下划线拼接如 `inverseundo` 可绕） |
+| M9 | 无 BREP 快照缓存 | `brep_snapshot`/`snapshot_cache` | WEAK（同上类限制） |
+| M10 | 无 ElementMap/拓扑命名 | `elementmap`/`element_map` | WEAK（同上） |
+| M11 | 无草图约束求解器 | `constraintsolver`/`constraint_solver`/`solve_constraints` | WEAK（同上） |
+| M12 | 无 IGES/glTF/3MF/DXF provider | 4 个 `*provider` 复合词 tripwire | WEAK（同上） |
+| M13 | 无商业格式适配器代码 | 词边界匹配 + 活体探针（`("jt",)`/parasolid/dwg 均命中） | WEAK（驼峰 `JTProvider` 可绕，且该限制被测试锁定为已知边界） |
+| M14 | 不碰 DWG/逆向库 | `dwg` 入 COMMERCIAL_FORMATS + 活体探针命中 | WEAK（与 M13 同机制同限制） |
+| M15 | STEP 读不产品化 | OUT_OF_SCOPE_IDENTIFIERS + 白名单活性测试（`test_step_read_whitelist_branch_is_live`） | COVERED |
+| M16 | 无工具 schema 生成代码 | 模块/目录名 glob 断言 | COVERED |
+| M17 | 无 PLM/BOM | `bill_of_materials`/`checkout_part` | WEAK |
+| M18 | 无 mesher/CAE/INP | `export_inp`/`cae_solver` | WEAK |
+| M19 | 无插件沙箱化 | restrictedpython 已入两常量 | WEAK（subprocess/seccomp 路线本质不可静态穷举） |
+| M20 | 无安装包 | 9 模式（含 msi/wxs/deb/rpm）+ `rglob` 递归 + 反向自证（嵌套 spec 被抓） | COVERED |
+| M21 | 不引 CadQuery/pythonocc | 精确分发名比对（D9 取舍） | COVERED |
+| M22 | 零类型抑制 | `scan_suppressions` rglob + `scanned > 0` 元断言 + tests/typing 白名单 + 反向自证 | COVERED（feecf03 的 VIOLATED 已闭） |
+| M23 | 无 aarch64/QEMU/龙芯 CI | `FORBIDDEN_CI_TOKENS` + `test_ci_has_no_out_of_tier_runners` | COVERED |
+| M24 | docs 三基线不改 | sha256 基线 + 反向自证（编辑必被察觉） | COVERED |
+| M25 | 无阶段 1–3 产品锚点 | 保留命名空间双引号修复（`'view.orbit'` 亦命中） | WEAK（ADR-003 §9 保留 id：chamfer/shell/union/intersect/pattern_linear/mirror/draft/sweep 仍未机器化） |
+
+**汇总：COVERED 11 / WEAK 12 / GAP 2（M3、M7，均为书面声明的有意豁免）/ VIOLATED 0。**
+（feecf03 基线：COVERED 6 / WEAK 6 / GAP 11 / VIOLATED 1——三项阻断 B1/B2/B3 的修复
+全部落地且经本轮复跑确认。）
+
+### 4. 上轮关闭项复核（逐项）
+
+- **B1**：`scan_suppressions` 用 `REPO.rglob("*.py")`（f2 修复），测试断言
+  `scanned > 0` 防空转；全库唯一抑制点在 `tests/typing/` 白名单。✓
+- **B3**：词边界匹配；`test_commercial_format_detector_catches_adapter_shaped_code`
+  实测 `("jt",)`/`parasolid`/`dwg` 均命中、驼峰锁定；`test_surface_normal_components_are_not_the_nx_format`
+  实测 `nx, ny, nz` 不误报、`'NX'` 命中。✓
+- **W1**：`test_backend_imports_are_confined_to_geom` 过滤共享检测器
+  `scan_forbidden_imports` 的输出，未内联重推导。✓
+- **W2**：`test_step_read_whitelist_branch_is_live` 在 tmp 树造白名单路径 + 越界文件，
+  断言只有白名单豁免。✓
+- **W3**：`test_runtime_closure_clean` 断言 `returncode == 0`，uv 缺失为显式失败非 skip。✓
+- **test_ci_workflow 假自证**：`test_reverse_self_test_for_ci` 用真实 ci.yml 文本喂
+  同一 `missing_tokens`（Windows → ubuntu / basedpyright → echo 两个变异）。✓
+
+### 5. dc2cdac 之后 6 提交核查（54ac0af / 5cb53da / 5563e38 / 3374d3a / 3c923b4 / 6086b29）
+
+逐一 `git show` + 违禁模式扫描（forbidden imports / 商业格式 / 网络 / 类型抑制 /
+保留命名空间）：**零新增违规**。54ac0af 的 grep 命中全部位于 evidence 文档引文内
+（`.md` 不在 `.py` 扫描域）。`scripts/report_junit_failures.py`（3c923b4）为纯 stdlib
+CI 辅助脚本，不触 `scan_out_of_scope` 任何红线；顶层 `scripts/` 目录不在
+planning-scratch 禁止清单（仅 review/island 目录与 `*-ledger.md` 文件）。
+
+### 6. 仍存的非阻断项（→ 阶段 1 backlog）
+
+M1 补 tkinter/wx；M13/M14 驼峰拼接（`JTProvider`/`DwgProvider`/`ElementMapper` 类）——
+可考虑 token 级大小写折叠 + 后缀剥离；M19 subprocess/seccomp 沙箱路线静态不可穷举
+（可加运行时行为测试兜底）；M25 ADR-003 §9 全部保留 id 机器化；M3/M7 维持 F1 矩阵
+人工承担（或引入结构性断言：`src/mycad/agent/` 只许 dataclass/typing 构造）。
+
+DONE: F4-recheck verdict=APPROVE(有条件), 20/20 scope-audit 全绿 + M1-M25 重推导 0 VIOLATED + 6 新提交零违规; 由主会话自查落盘(派发通道全灭已记 ledger), 方法学=全部结论由 HEAD 代码现推。

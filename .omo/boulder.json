@@ -7,8 +7,23 @@
       "active_plan": ".omo/plans/phase0-mvp.md",
       "plan_name": "phase0-mvp",
       "session_ids": ["codex:sisyphus-main"],
-      "status": "active",
-      "worktree_path": null
+      "status": "completed",
+      "worktree_path": null,
+      "started_at": "2026-10-04T14:40:40.000Z",
+      "ended_at": "2026-10-11T18:55:44.992Z",
+      "elapsed_ms": 620104992,
+      "updated_at": "2026-10-11T18:55:44.992Z"
     }
-  }
+  },
+  "active_plan": ".omo/plans/phase0-mvp.md",
+  "plan_name": "phase0-mvp",
+  "status": "completed",
+  "session_ids": ["codex:sisyphus-main"],
+  "session_origins": {},
+  "worktree_path": null,
+  "task_sessions": {},
+  "started_at": "2026-10-04T14:40:40.000Z",
+  "ended_at": "2026-10-11T18:55:44.992Z",
+  "elapsed_ms": 620104992,
+  "updated_at": "2026-10-11T18:55:44.992Z"
 }

@@ -503,20 +503,20 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
 ## Final verification wave
 > T11 完成后并行执行；四项全部 APPROVE 才可交付。每项产出书面结论到 `.omo/evidence/final-<N>-phase0-mvp.md`；任一 FAIL → 回对应 todo 修复 → 重跑该波，不得带病交付。
 
-- [ ] F1. Plan compliance audit（oracle 只读代理）
+- [x] F1. Plan compliance audit（oracle 只读代理）
   - 逐条核对 Must have 10 项与 T1–T11 的覆盖映射；8 个命令 id 与 `docs/UI设计初稿.md:160-185` 逐字比对；ADR-001…006 存在且与计划决策一致；`.omo/drafts/phase0-mvp-research-ledger.md` 的 A1–A20 每条要么落地、要么在 ADR/Out 中显式处置；R1–R18 每条有缓解或显式接受记录。
   - 证据：覆盖矩阵表（需求/决策 → 文件/测试 → 结果）。
 
-- [ ] F2. Code quality review（oracle 只读代理）
+- [x] F2. Code quality review（oracle 只读代理）
   - 全新环境视角：`uv sync --frozen` 后四条质量门（ruff check / ruff format --check / basedpyright strict / pytest）全绿且无被豁免项；零 `# type: ignore`（tests/typing/ 对照文件除外）、零 `Any` 逃逸、零空 except；layering 守卫测试存在且有效（临时反向注入必须变红的现场验证）；公开 API docstring 完整；模块依赖方向无环（core 不依赖 geom/cli；geom 仅依赖 core 的中立类型与 exceptions）。
   - **机器化门（不接受人工 grep 转述）**：`uv run pytest tests/test_layering.py tests/test_scope_audit.py -q` 必须全绿；评审现场对每个守卫各做一次反向注入（新增一条违禁 import / 一个违禁依赖）确认测试变红后回退。
   - 证据：质量门输出 + 反向注入验证记录（含变红/回退两次终端输出）。
 
-- [ ] F3. Real manual QA（unspecified-high 代理，必须真实运行，不接受日志转述）
+- [x] F3. Real manual QA（unspecified-high 代理，必须真实运行，不接受日志转述）
   - 在干净 venv 中按 README 快速开始从零执行：`uv sync`（含国内镜像指令至少演练一次）→ `uv run mycad run examples/flange_script.txt` → `uv run mycad run --json examples/flange_plan.json`；用产物经 `tests/helpers` STEP 读回复验体积/面数（或运行 pytest 往返用例现场观察）；REPL 交互走 new→建模→undo→redo→save→open→export；故意批失败观察回滚与退出码；三个 CI job 实际 run 链接/日志逐行核对（含中文路径用例）；**若交付时仍无 GitHub 远端，F3 结论必须写明"Windows 就绪未实测"为已知遗留，APPROVE 结论不得声称多平台已验证**（无缩写代号）。
   - 证据：完整终端会话记录、产物字节数/体积、CI URL。
 
-- [ ] F4. Scope fidelity（oracle 只读代理）
+- [x] F4. Scope fidelity（oracle 只读代理）
   - 对照 Must NOT have 清单逐项审计，**全部以 `uv run pytest tests/test_scope_audit.py -q` 机器化执行，不接受人工 grep 结论**。该测试文件（T11 交付，规范见 T11）程序化断言：
     1. **import/依赖闭包**：用 AST 扫描 `src/`，无 `PySide6`/`PyQt6`/`vtk`/`mcp`/`cadquery`/`OCC`(pythonocc)/`packaging`/`restrictedpython` 等违禁模块 import（#round10-NB4：禁词集合与 T11 `tests/test_scope_audit.py::FORBIDDEN_IMPORT_ROOTS` 为同一字面量来源，F4 复核者直接引用该常量，禁止在 F4 另写拼写变体；匹配大小写不敏感，真实 PyPI 包名为 RestrictedPython）；**build123d/OCP/numpy 三者权威规则一致：只允许出现在 `src/mycad/geom/` 包内，core（含中立 DTO，DTO 只用标准库 tuple/float）及任何其他包零例外**；`uv tree --package mycad --no-dev`（命令字面量全计划唯一，测试内以 subprocess 执行后文本解析；不再使用 --json 变体）输出闭包中不含上述违禁分发包名（断言运行时闭包子集，dev 依赖不计入）。
     2. **越界命令/代码**：无 `view.`/`sketch.`/`datum.` 命令 id 注册；无 `schema_tools`/`schema_catalog`/`tool_schema` 模块与 `tests/snapshots/`；src 中无 STEP 读产品路径（读 API 仅允许 `tests/helpers/step_roundtrip.py`，白名单断言）、无 `document.import_step`/`imported_solid`/`ImportSourceMissingError` 标识符；无商业格式（jt/parasolid/acis/sat/x_t/sldprt/nx/catia）适配代码。

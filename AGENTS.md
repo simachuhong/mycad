@@ -44,7 +44,7 @@ Ubuntu 22.04+ 桌面端开源 CAD（Apache-2.0）。阶段 0 = headless 可编�
 - **持久化**：`.mc.json` v1 = 纯 JSON 命令历史 + 审计六字段（ADR-002）
 - **智能体**：阶段 0 = Plan 数据结构 + 六态机 + 确认红线（无 UI/Chat/MCP）；MCP 边界见 ADR-004
 - **平台分层**：T1（ubuntu 22.04/24.04 x64 + windows）/ T2（信创 aarch64）/ T3（龙芯 go/no-go 阶段 1 末）
-- **README 已过时**：README 写"应用程序代码未脚手架"，但 src/mycad/ 实质代码已就位（T7c 阶段）
+- **README 已同步**：快速开始三命令（含国内镜像路径）经 F3 干净克隆实测可用；随 docs 改动同步维护
 
 ## STRUCTURE
 
@@ -67,7 +67,7 @@ MyCAD/
 ├── plugins_examples/mycad_plugin_demo/   # 最小插件示例
 ├── scripts/gen_baseline_hashes.py
 ├── pyproject.toml            # ruff + basedpyright + pytest + hatchling 配置
-└── .omo/                     # 入仓：plan/evidence/boulder/ledger.jsonl
+└── .omo/                     # 入仓：plans/ evidence/ boulder.json start-work/ledger.jsonl
 ```
 
 ## WHERE TO LOOK
@@ -105,7 +105,7 @@ MyCAD/
   - `src/mycad/app.py` 是**唯一**同时引 `mycad.core.*` 与 `mycad.geom.*` 的文件
   - 测试中只有 `tests/geom/` + `tests/helpers/step_roundtrip.py` 可引后端
 - **零类型抑制**：项目内 `# type: ignore` / `# pyright: ignore` 必须为 0（白名单 `tests/typing/` 不存在时违规则必现）
-- **一规则一套**：ruff `E/F/W/I/B/UP/C4` 全树统一，不允许 per-file 忽略
+- **一规则一套**：ruff `E/F/W/I/B/UP/C4/N/SIM/RET` 全树统一，不允许 per-file 忽略；唯一记录在案的 carve-out：`E501`（恰 4 处逐字 CLI 命令行）与 `N818`（`InvalidPlanTransition` 之名由计划与 tests/test_exceptions.py 锁定），理由在 pyproject.toml 配置注释
 - **改模型只能经 Bus**：任何修改 `Document` 的代码只能走 `CommandBus.submit()`，直改模型视为架构违规
 - **每条命令必须可重放**：undo = 历史重放，命令必须为「参数 → 几何」纯函数；携带不可重放副作用即破不变量
 - **存档 `.mc.json` schema**：UTF-8 JSON；顶层 `format/version/metadata/commands/named_groups`；命令审计六字段 `id/version/params/ordinal/timestamp_utc/confirmed_by`；修订留痕在 `amendments[]` 追加，**不覆盖原 timestamp**
@@ -155,7 +155,7 @@ uv sync
 
 ## NOTES
 
-- **CI 三 job**（`.github/workflows/ci.yml`）：`ubuntu-22.04` / `ubuntu-24.04` / `windows-latest`；阶段 0 不含 aarch64 / 龙芯（ADR-006）
+- **CI 三 job**（`.github/workflows/ci.yml`）：`ubuntu-22.04` / `ubuntu-24.04` / `windows-latest`；阶段 0 不含 aarch64 / 龙芯（ADR-006）；2026-10-12 起三平台全绿实证（run 38162917017）；pytest 产出 junitxml，失败经 `scripts/report_junit_failures.py` 报为 Actions 注解
 - **依赖硬 pin 理由**：`cadquery-ocp-novtk<7.9.4` 因 OCP 7.9.4 丢了 build123d 0.11.1 依赖的 TopoDS_Wire 修复
 - **存档 v1 = 纯 JSON 命令历史**，不带 BREP 快照；快照缓存列为 v2 演进口（ADR-002 R17）
 - **Plugin 命令贡献契约**（`mycad.commands` entry）：callable 返回 `list[CommandContribution(spec, handler_factory)]`；handler_factory=None 时由 `BuiltinModelingHandler` 兜底（适用声明式建模命令）；`demo.ping` 型非几何命令必须自带 handler
@@ -202,6 +202,13 @@ uv sync
 - **篡改探针**是对抗验证的有效手段：删除/改写交付物中的关键内容 → 测试必须 FAIL →
   还原 → 测试必须 PASS（红→绿闭环才作数）。
 - 等待期间用长阻塞（单 bash = sleep ~590 + 最小化探测输出）覆盖时间，减少回合数。
+
+### Windows / CI 跨平台实测坑（2026-10-12 三平台全绿后沉淀）
+
+- **subprocess 解码**：Windows 上 `subprocess.run(text=True)` 按 locale（cp1252）解码子进程输出，非 ASCII 字节（uv tree 树形符号、中文文件名）乱码或抛异常 → 跨平台 subprocess 调用显式 `encoding="utf-8"`；路径比较用 `Path.as_posix()` 而非 `str(relative_to())`（Windows 产反斜杠）（3374d3a）。
+- **uv.lock 平台条件依赖**：`sys_platform=="win32"` marker 会拉 Windows 独有分发（ipython→colorama；pexpect 在 win32 被排除）——「grep 无命中」≠无平台条件；Linux 侧闭包断言出缺签名时先怀疑平台差异（6086b29）。
+- **CI 失败详情**：日志 API 需 admin 权限；免认证可读通道是 check-runs 注解；现由 pytest junitxml 经 `scripts/report_junit_failures.py` 自报告 `::error::`（3c923b4）。
+- **CRLF**：Windows runner `core.autocrlf=true` 致 ruff format 必红 → `.gitattributes`（`* text=auto eol=lf`）根治（5563e38）。
 
 ### 事件记录
 

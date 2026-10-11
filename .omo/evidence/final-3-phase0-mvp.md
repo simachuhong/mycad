@@ -253,3 +253,33 @@ $ git diff --stat uv.lock
   `pypi.org` 以外的 registry。
 - `uv run mycad plugins` 在无插件时静默输出空字符串。契约上 exit 0 正确，但对用户而言
   与命令失败难以区分；非缺陷，记为阶段 1 的可用性改进点。
+
+---
+
+## 8. 补遗（2026-10-12）：Windows CI 实测全绿——解除 §7「就绪未实测」遗留
+
+本证据出具时（feecf03 基线）尚无 git 远端，§7 只能以三个静态证据支持「就绪」。
+交付后第一件事（§7 所述「关闭缺口的唯一途径」）已完成：远端建立并真实运行 CI，
+Windows 从红到绿，修复全部合入。
+
+- **远端**：`origin` = github.com/simachuhong/mycad（主，Actions 三平台矩阵）；
+  `gitee` = gitee.com/mark-sima/my-cad（镜像，已同步至同一提交）。
+- **三处 Windows 真实缺陷与修复**（Linux 上均不可复现，只能靠真实 CI 暴露）：
+  1. `5563e38` CRLF：Windows runner `core.autocrlf=true` 使 checkout 全 CRLF，
+     `ruff format --check` 必红 → 新增 `.gitattributes`（`* text=auto eol=lf`）根治。
+  2. `3374d3a` cp1252：测试内 `subprocess.run(text=True)` 在 Windows 按 locale 编码
+     解码子进程 UTF-8 输出（uv tree 树形符号、git ls-files 中文文件名解码损坏）→
+     四处显式 `encoding="utf-8"`；另 `str(Path.relative_to())` 在 Windows 产反斜杠 →
+     `as_posix()`。
+  3. `6086b29` colorama：ipython 在 `sys_platform=='win32'` 条件下拉 colorama
+     （Linux 运行时闭包无此包），NOTICE 漏署名 → 补 BSD-3-Clause 条目 + 平台差异
+     说明段。
+     期间 `3c923b4` 上线诊断基建：pytest 产出 junitxml，失败经
+     `scripts/report_junit_failures.py` 报为 Actions 注解（免认证可读），本轮定位
+     即依赖该链路。
+- **结论**：run 38162917017（commit 6086b29）三平台全绿——ubuntu-22.04 ✓
+  ubuntu-24.04 ✓ **windows-latest ✓**（Windows job 114539412131；绿跑注解仅
+  Node 20 弃用 / cache 恢复等通用警告，失败报告器零输出、零假阳性）。
+- §7 的「就绪未实测」遗留**解除**：现在可主张多平台（ubuntu 22.04/24.04 +
+  Windows Server）已验证；「遗留风险」首条关闭。镜像 `uv.lock` 守卫与
+  `plugins` 空输出两项仍留阶段 1（已登记 `.omo/plans/phase1-backlog.md`）。
