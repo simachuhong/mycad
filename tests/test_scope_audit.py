@@ -93,12 +93,13 @@ FORBIDDEN_DISTRIBUTIONS: frozenset[str] = frozenset(
 REQUIRED_DISTRIBUTIONS: frozenset[str] = frozenset({"build123d", "cadquery-ocp-novtk"})
 
 #: Commercial formats walled off by ADR-005, plus DWG. Matched as whole
-#: words (case-insensitively) rather than as bare substrings: "sat" and
-#: "nx" occur inside ordinary English words, but \b stops them matching
-#: "saturate" or "linux" while still catching a standalone token.
-#: ``prt`` and ``asm`` are deliberately left out — as whole words they
-#: still collide with ordinary identifiers, and the vendors they stand
-#: for (NX, CATIA) are already listed by name.
+#: words (case-insensitively) rather than as bare substrings: "sat"
+#: occurs inside ordinary English words, but \b stops it matching
+#: "saturate" while still catching a standalone token.
+#: ``prt`` and ``asm`` are left out — as whole words they collide with
+#: ordinary identifiers. ``nx`` is the one exception to case-folding:
+#: lowercase ``nx``/``ny``/``nz`` are surface-normal components, so only
+#: the uppercase vendor token ``NX`` counts (see ``_format_mentioned``).
 COMMERCIAL_FORMATS: frozenset[str] = frozenset(
     {
         "jt",
@@ -144,6 +145,13 @@ OUT_OF_SCOPE_CONCEPTS: tuple[tuple[str, str], ...] = (
 
 #: Build-host identifiers that must not appear in CI: phase 0 is T1 only.
 FORBIDDEN_CI_TOKENS: tuple[str, ...] = ("aarch64", "arm64", "qemu", "loong")
+
+#: Two Must-NOT items have no machine check, and that is deliberate rather
+#: than a silent hole. The F1 coverage matrix owns them:
+#:   M3 — the viewport stops at the tessellation data interface. That is a
+#:        design boundary, not a token any grep can see.
+#:   M7 — ``agent/`` stays protocol types plus Plan. "No product code yet"
+#:        has no distinctive identifier to forbid.
 
 #: Identifiers of the stage-1 STEP import feature, absent from phase 0.
 #: Concatenated for the same reason as ``STEP_READ_APIS`` below.
@@ -243,7 +251,7 @@ def scan_out_of_scope(root: Path, repo: Path) -> list[str]:
                 if api in text:
                     violations.append(f"{rel}: STEP read API {api}")
         for fmt in COMMERCIAL_FORMATS:
-            if re.search(rf"\b{re.escape(fmt)}\b", lowered) or path.stem.lower() == fmt:
+            if _format_mentioned(fmt, text, lowered, path.stem.lower()):
                 violations.append(f"{rel}: commercial format {fmt}")
         for concept, label in OUT_OF_SCOPE_CONCEPTS:
             if re.search(rf"\b{re.escape(concept)}\b", lowered):
@@ -266,20 +274,45 @@ def test_no_out_of_scope_code_reverse_self_proof(tmp_path: Path) -> None:
     assert any("stage-1 identifier" in v for v in found)
 
 
-def test_commercial_format_detector_catches_adapter_shaped_code(tmp_path: Path) -> None:
-    """A provider class and a vendor import carry no dotted extension.
+def _format_mentioned(fmt: str, text: str, lowered: str, stem: str) -> bool:
+    """Whether ``fmt`` shows up as its own token, or the file is named for it.
 
-    The earlier ``.{fmt}``-or-stem rule missed both shapes, so the wall
-    only stopped code that happened to spell out a file suffix.
+    ``nx`` is case-sensitive on purpose: ``nx, ny, nz = normal`` is
+    geometry, not a Siemens NX adapter. CamelCase still hides a token —
+    ``JTProvider`` has no word boundary — and that limit is asserted below.
+    """
+    if stem == fmt:
+        return True
+    if fmt == "nx":
+        return re.search(r"\bNX\b", text) is not None
+    return re.search(rf"\b{re.escape(fmt)}\b", lowered) is not None
+
+
+def test_commercial_format_detector_catches_adapter_shaped_code(tmp_path: Path) -> None:
+    """A quoted format token and a vendor name carry no dotted extension.
+
+    ``class JTProvider`` alone is not caught: the token is glued to a
+    suffix, so there is no word boundary. The ``("jt",)`` line is what
+    this asserts, and the CamelCase file locks that limit in.
     """
     (tmp_path / "jt_adapter.py").write_text(
         'class JTProvider:\n    suffixes = ("jt",)\n', encoding="utf-8"
     )
+    (tmp_path / "camel.py").write_text("class JTProvider:\n    pass\n", encoding="utf-8")
     (tmp_path / "xt_io.py").write_text("PK_BODY = 'parasolid handle'\n", encoding="utf-8")
     (tmp_path / "dwg_io.py").write_text('SUFFIX = "dwg"\n', encoding="utf-8")
     found = scan_out_of_scope(tmp_path, tmp_path)
     for needle in ("commercial format jt", "commercial format parasolid", "commercial format dwg"):
         assert any(needle in v for v in found), f"{needle} escaped the detector"
+    assert not any(v.startswith("camel.py") for v in found)
+
+
+def test_surface_normal_components_are_not_the_nx_format(tmp_path: Path) -> None:
+    (tmp_path / "normals.py").write_text("nx, ny, nz = 0.0, 0.0, 1.0\n", encoding="utf-8")
+    (tmp_path / "vendor.py").write_text("backend = 'NX'\n", encoding="utf-8")
+    found = scan_out_of_scope(tmp_path, tmp_path)
+    assert not any(v.startswith("normals.py") for v in found)
+    assert any(v.startswith("vendor.py") and "commercial format nx" in v for v in found)
 
 
 def test_out_of_scope_concept_detector_reverse_self_proof(tmp_path: Path) -> None:

@@ -479,3 +479,40 @@ uv tree 实测同时存在 `cadquery-ocp-novtk v7.9.3.1.1` 与 `cadquery-ocp-pro
 `rg`、以及一次在 `/tmp` 临时目录内造文件的探针脚本。仓库工作树与 git 历史**未被本审查修改**；
 唯一写入是本结论文件 `.omo/evidence/final-4-phase0-mvp.md`。
 §1.3 记录的工作树变更来自并发的第三方代理，非本审查所为。
+
+---
+
+## 复查未落盘（审查代理在写出本节前中断）
+
+复查代理（同一只读审查员，针对 `dc2cdac`）**完成了逐条重评，但在把本节写入本文件之前
+因账号账单错误中断**。下面是主会话根据其已完成的推理转录的，**不是代理自己落盘的原文**，
+因此不能当作独立书面结论。转录时点：2026-10-11。
+
+代理的判定倾向是 **APPROVE（有条件）**。它自己的重评统计：
+
+| | 上轮（feecf03） | 复查（dc2cdac，未落盘） |
+|---|---|---|
+| COVERED | 6 | 14 |
+| WEAK | 6 | 9 |
+| GAP | 11 | 2（M3 视口边界、M7 `agent/` 内容边界） |
+| VIOLATED | 1（M22） | 0 |
+
+它确认的关闭项：B1（零抑制，且 `scanned > 0` 堵住了空转）、B3（整词匹配挡住了
+`import parasolid`、`("jt",)`、`dwg`）、W1（后端导入改为调用同一检测函数）、
+W2（STEP 白名单分支有了活体自证）、W3（`uv` 缺失从 skip 改为失败）、
+`test_ci_workflow.py` 的假自证改为真调 `missing_tokens`。四个新反向自证它逐个
+判为真测试，没有假测试。全量套件它复跑为 800 passed / 1 skipped。
+
+它点名、且主会话已核实并修掉的两处：
+
+1. **文案夸大。** `test_commercial_format_detector_catches_adapter_shaped_code` 的
+   docstring 暗示 `class JTProvider` 本身会被抓住。实测单独的 `class JTProvider`
+   不命中（驼峰里没有词边界），命中的是同一夹具里的 `("jt",)`。docstring 已改成
+   如实描述，并加了一条锁定该极限的断言。
+2. **`nx` 误报。** 大小写不敏感的 `\bnx\b` 会把 `nx, ny, nz = normal` 判成商业格式。
+   这在几何代码里几乎必然发生，而且是「失败即红」的误报，会在阶段 1 的法线代码上
+   炸。`nx` 改为只认大写厂商记号 `NX`（文件名 stem 仍大小写不敏感），并有正反两条断言。
+
+仍未关闭、代理认为非阻断的：M3 与 M7 没有机器断言（已在 `tests/test_scope_audit.py`
+里写明由 F1 覆盖矩阵承担）；驼峰拼接（`JTProvider`、`ElementMapper`）仍能绕过整词
+匹配；M8–M12、M17、M18 只有标识符 tripwire，不是完备检查。

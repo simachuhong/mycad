@@ -356,3 +356,359 @@ files actually scanned by HEAD guard: 0
 
 回修完成后建议重跑 F1 的第 1 项（C1 行）与本节 P1–P3，其余四项（命令 id、ADR、A、R）
 已 CONFIRMED，无需重跑。
+
+---
+
+# 复查（HEAD=dc2cdac）
+
+**更新后结论：APPROVE**
+
+复查基准：`dc2cdac`（较上轮审计基准 `feecf03` 多 5 个提交）。日期 2026-10-11。
+审计人仍为 F1 只读审查代理；本轮同样只写本文件，未修改仓库任何其他内容
+（复查全程 `git status --porcelain` 仅有 `M .omo/evidence/final-2-phase0-mvp.md`
+这一处来自并行 F2 会话的改动，与本审计无关）。
+
+范围严格限定为上轮遗留的三件事，**未重做**已 CONFIRMED 的四项（Must have 覆盖的
+C2–C10、8 条命令 id 逐字比对、ADR-001..006 一致性、A1–A20 / R1–R18 处置）。
+
+本轮复查的 5 个提交：
+
+| commit | 主题 |
+|---|---|
+| `721cef2` | 修复空转的类型抑制守卫 + 打断 cli import 环 |
+| `688d001` | `mycad commands` 改为真实插件发现 |
+| `382955d` | README 镜像改写 `uv.lock` 的警示 |
+| `3cd6b51` | `test_scope_audit` 加固（F4 发现的 Must-NOT 覆盖洞） |
+| `dc2cdac` | 启用 N/SIM/RET + 记录仍关闭的两族 + 补 addopts + 清理 AGENTS.md |
+
+---
+
+## R1. P1 是否关闭 —— **已关闭**
+
+### (a) 守卫是否真的在扫文件了
+
+`721cef2` 把 `tests/test_layering.py:106-132` 的遍历改为：
+
+```
+-    suffixes = ("py",)
+-    for path in REPO.rglob("*"):
+-        if path.suffix not in suffixes:
+-            continue
+-        if "__pycache__" in path.parts:
++    for path in REPO.rglob("*.py"):
++        if "__pycache__" in path.parts or ".venv" in path.parts:
+             continue
+```
+
+恒真的 `continue` 分支（`".py" not in ("py",)`）已整体删除。本审计用只读脚本复算当前
+守卫的筛选逻辑：
+
+```
+files scanned by current guard: 164 | whitelisted: 1
+```
+
+上轮同样的复算结果是 `0`。守卫由**扫 0 个文件**变为**扫 164 个文件**（`tests/typing/`
+下 1 个文件走白名单）。✅ 关闭。
+
+另：上轮 P1 指出「计划 `:174` 要求的反向自证缺失」。本次未新增提交式反向自证用例，
+但 F2 以计划 F2 条目要求的**活体反向注入**交付了等价证明——
+`.omo/evidence/final-2-phase0-mvp.md:100-125` 记录 6 条注入探针，其中
+`type-suppression`（向 `src/mycad/core/groups.py` 注入抑制注释）判红后还原判绿，并
+明确写出「这一条在修复**之前**会是 FAIL（注入后守卫仍绿）」。该交付形式符合计划
+F2「评审现场对每个守卫各做一次反向注入」的原文，反向自证要求视为已满足。✅
+
+### (b) `tests/typing/` 以外的抑制注释是否归零
+
+本审计独立扫描（不依赖被审测试）：
+
+```
+$ rg --glob '!.venv' --glob '!.omo' --glob '*.py' \
+     -e '# type: ignore' -e '# pyright: ignore' -e '# pyright:' . | grep -v '^./tests/typing/'
+（无输出）
+```
+
+✅ 归零。白名单内仅 `tests/typing/expect_errors.py:23` 一处，属 expect-error 语料，合规。
+
+### (c) 修复方式是否诚实 —— **是，四处均无假修复**
+
+**先排除两类典型假修复：**
+
+- **没有扩白名单**：白名单分支仍逐字是 `rel.startswith("tests/typing/")`，
+  未新增任何路径；实测走白名单的文件恰好 1 个。
+- **没有弱化 needle**：needles 由
+  `("# type: ignore", "# pyright: ignore", "# pyright:")` 改写为
+  `("# type" + ": ignore", "# pyright" + ": ignore", "# pyright" + ":")`。
+  三个表达式求值后与原字符串**逐字符完全相同**，改写的唯一目的是让守卫文件自身不再
+  命中（与 `tests/formats/test_guards.py` 同约定）。检测能力零变化。
+
+**四处违规点的处理，逐处判定：**
+
+| # | 位置 | 处理方式 | 原测试语义是否保留 | 判定 |
+|---|---|---|---|---|
+| 1 | `tests/core/test_geometry_types.py:27` | `box.xmin = 99.0  # type: ignore[misc]` → `field = "xmin"` + `setattr(box, field, 99.0)` | 保留。断言体仍是 `pytest.raises(dataclasses.FrozenInstanceError)`；frozen dataclass 的 `__setattr__` 对 `setattr` 与直接赋值走同一路径，运行时行为完全一致 | ✅ 诚实 |
+| 2 | `tests/core/test_groups.py:29` | 同上（`group.name`） | 同上 | ✅ 诚实 |
+| 3 | `tests/core/test_selectors.py:41` | 同上（`fs.surface`） | 同上 | ✅ 诚实 |
+| 4 | `tests/core/test_groups.py` 的 `test_named_group_list_inputs_become_tuples` | 连同 `src/mycad/core/groups.py` 的 `NamedGroup.__post_init__` 一并删除 | 见下方专项分析 | ✅ 诚实（附观察 N1） |
+
+**关于 1–3 的「静态覆盖是否被偷偷降低」**：经变量名 `setattr` 后，basedpyright 不再对
+该行做属性可写性检查。但这不构成覆盖下降——**原写法同样没有静态覆盖**：pyright/
+basedpyright 对 `# type: ignore` 的处理是抑制该行**全部**诊断（不解析方括号内的错误码），
+所以旧代码里的 `# type: ignore[misc]` 本就把该行的静态检查整条关掉了。两种写法的静态
+覆盖同为零，而运行时断言（frozen → 抛 `FrozenInstanceError`）完整保留。三处均加了注释
+说明为何绕道，没有掩饰。
+
+**关于第 4 处（唯一需要专项判断的）**：被删的 `__post_init__` 做的是
+`object.__setattr__(self, "faces", tuple(self.faces))` 式的 list→tuple 防御性归一化。
+判定要点：
+
+1. **提交信息的事实主张经核验属实。** 声称「every call site already passes tuples」。
+   本审计独立枚举全部 `NamedGroup(` 构造点（`rg 'NamedGroup\(' src tests`）：src 侧
+   **唯一**构造点是 `src/mycad/core/persistence.py:204`，其 `faces`/`edges` 在
+   `:197-203` 由 `tuple(...)` 生成器表达式构造；tests 侧全部传元组字面量或默认值。
+   删除 `__post_init__` 不改变任何现存调用点的行为。
+2. **被删的测试只能靠违反类型契约才能触达。** 字段声明是
+   `faces: tuple[FaceSelector, ...]`，所以该测试当初必须写 `# type: ignore[arg-type]`
+   才能传 list。删掉一个「只有突破 basedpyright strict 才能进入的分支」的测试，不属于
+   为过守卫而削减有效覆盖。
+3. **文档同步诚实。** `groups.py` 的 docstring 由「accept any iterable at construction；
+   normalised to tuples」改为「are tuples so the group stays immutable；the JSON loader
+   materialises them as such」——如实描述了收紧后的契约，没有留下与代码不符的旧表述。
+
+因此第 4 处不是假修复。但它确实是**为通过测试卫生守卫而改动了产品代码**，残留一条
+行为差异，记为观察 N1（非阻断）。
+
+### (d) 全量测试现状
+
+```
+$ uv run pytest -q
+795 passed, 1 skipped, 5 errors in 117.62s
+```
+
+**5 个 error 全部是本审计沙箱的产物，不是仓库缺陷，更不是本轮回归。** 均来自
+`tests/plugins/test_demo_installed.py` 的 class 级 fixture，失败原因逐字为：
+
+```
+pip install -e failed (1): ERROR: Could not install packages due to an OSError:
+[Errno 30] 只读文件系统: '…/.venv/lib/python3.12/site-packages/_editable_impl_mycad_plugin_demo.pth'
+```
+
+F1 以只读审查员身份运行，`.venv/` 对本进程只读，该 fixture 需要 editable 安装 demo 插件
+故无法建立。**F1 不以此主张任何失败**；该用例的绿由 F2/F3 在可写环境中负责。
+收集总数 801（上轮 795），增量 +6 = 新增 1 条 `commands` 插件可见性测试、5 条
+`test_scope_audit` 新测试、1 条 `test_types` 新测试，减去被删的 1 条 NamedGroup 用例。
+
+---
+
+## R2. P2 / P3 是否关闭 —— **均已关闭**
+
+### P3（`addopts` 缺 `--ignore=tests/typing`）—— 已修
+
+`pyproject.toml:46-49` 现为：
+
+```toml
+# tests/typing/ holds deliberately-failing expect-error sources. The file
+# names already miss the test_*.py pattern; this is the second belt.
+addopts = "-ra --ignore=tests/typing"
+```
+
+与计划 `:131`/`:174` 的「双保险」表述一致。✅ 关闭。
+
+### P2（ruff 规则集静默偏离）—— 已关闭
+
+`pyproject.toml:69-105` 现状与计划 `:131` 原文的逐族对照：
+
+| 规则族 | 计划 `:131` | `dc2cdac` 后 | 本审计判定 |
+|---|---|---|---|
+| `E` `F` `I` `UP` `B` | 启用 | 启用 | 一致 |
+| `N` | 启用 | **已启用**（`N818` 单独 ignore） | 合规，理由成立（见下） |
+| `SIM` | 启用 | **已启用** | 补齐 |
+| `RET` | 启用 | **已启用** | 补齐 |
+| `PT` | 启用 | 仍关闭 | 仍偏离，但**已书面记录** |
+| `PL` | 启用 | 仍关闭 | 仍偏离，但**已书面记录** |
+| `W` `C4` | 计划未列 | 启用 | 计划外增强，无害 |
+| `E501` | 未授权 ignore | 仍 ignore | 合规，理由成立（见下） |
+
+**本审计对两条 carve-out 理由做了独立验证（不采信证据文件的转述）：**
+
+**① `N818` 的理由成立。** 用隔离配置实测全树：
+
+```
+$ uv run ruff check --isolated --select N818 --no-cache src tests scripts
+N818 Exception name `InvalidPlanTransition` should be named with an Error suffix
+   --> src/mycad/core/exceptions.py:110:7
+Found 1 error.
+```
+
+全仓**恰好 1 处**命中。该类名确实被计划钉死——计划 `:135` 的 15 条异常全集，第 10 条
+逐字为 `` `InvalidPlanTransition(from_status, requested)` ``（本审计直接读取该行核对）；
+且 `tests/test_exceptions.py:11-21` 的 `EXPECTED_NAMES` 列表含字符串
+`"InvalidPlanTransition"`，`:35` 断言子类恰好 15 个。**改名 = 同时违反计划 `:135` 与
+`test_exceptions.py` 的名字集合锁定。** 用一条全局 `N818` ignore 换取 `N` 族其余规则
+全部生效，是在计划约束下的唯一可行解，且避免了计划禁止的 per-file ignore。理由属实。
+
+**② `E501` 的理由成立。** 同样隔离实测：
+
+```
+$ uv run ruff check --isolated --select E501 --line-length 100 --no-cache src tests scripts plugins_examples
+src/mycad/commands/grammar.py:45:101: E501 Line too long (129 > 100)
+src/mycad/commands/grammar.py:47:101: E501 Line too long (275 > 100)
+tests/cli/test_qa.py:22:101:          E501 Line too long (125 > 100)
+tests/cli/test_qa.py:23:101:          E501 Line too long (271 > 100)
+Found 4 errors.
+```
+
+**恰好 4 处**，与声明一致。逐处核对上下文（本审计直接读源文件）：
+- `grammar.py:42-50` 是模块 docstring 的 `Examples (each has a parse -> to_cli -> parse
+  round-trip test)::` 代码块，45/47 两行分别是 `hole …` 与 `hole-pattern …` 的**规范
+  CLI 命令行**；
+- `test_qa.py:19-26` 是 `FLANGE_SEQUENCE` 三引号脚本夹具，22/23 两行是同样的两条命令。
+
+CLI 文法是**一行一命令**（计划 T3/T10 的 grammar 规则），折行会让这四行变成语法错误的
+示例/夹具。「全部是逐字引用的 CLI 命令行」的说法属实，不是为掩盖散落的长行而设的
+全局豁免。
+
+**③ `PT`/`PL` 仍关闭，但记录已到位，且数字经独立复核无误。**
+
+```
+$ uv run ruff check --isolated --select PL --no-cache --statistics src tests scripts
+103  PLR2004  magic-value-comparison
+ 20  PLC0415  import-outside-top-level
+  5  PLR0911 / 4 PLR0912 / 2 PLR0913 / 2 PLR0917 / 1 PLR1730 / 1 PLC0207
+Found 138 errors.
+
+$ uv run ruff check --isolated --select PT  --no-cache --statistics src tests scripts
+10 PT001 / 8 PT018 / 2 PT011 / 1 PT012      Found 21 errors.
+```
+
+`pyproject.toml:95-98` 的注释写「PL alone reports 138 findings, 103 of them PLR2004」，
+`.omo/evidence/final-2-phase0-mvp.md:205-206` 写「PT 21 处，多为 PT001 与 PT018」「PL
+138 处，其中 103 处是 PLR2004」——**与本审计实测逐数字吻合**，无夸大。PLR2004 命中的
+确实是 `assert len(rows) == 9` 这类「字面量本身就是断言内容」的测试代码，为其做常量提取
+无正确性收益。
+
+**P2 的实质是「偏离 + 零记录」。** 现在偏离同时写在 `pyproject.toml` 的配置注释（代码
+近处）与 `final-2` 的偏差表（证据链），符合计划的留痕纪律；且 5 族中已补回 3 族。
+**P2 关闭。** 残留事项记为观察 N2（`PT`/`PL` 仍与计划 `:131` 不符，属「已记录未消解」，
+建议由计划所有者正式接受或排入阶段 1）。
+
+### C1 判定更新
+
+上轮因 P2/P3 将 C1 判为 **PARTIAL**。现 `N`/`SIM`/`RET` 已补、`addopts` 已补、两条
+carve-out 理由经独立验证成立且已双处留痕——**C1 由 PARTIAL 上调为 COVERED（附已记录的
+次要偏差 N2）**。
+
+更新后的覆盖矩阵统计：**COVERED 10 / PARTIAL 0 / MISSING 0。**
+
+---
+
+## R3. 新增提交是否引入新的计划违规 —— **未引入**
+
+### `688d001`（`mycad commands` 改为真实插件发现）—— 符合计划 `commands` 条目
+
+计划 T10 的 `commands [--json]`（#NB4 输出契约）原文要求：
+
+> 无插件时恰好 8 行/8 元素（该计数与 id 集合作快照测试）。**计数测试的环境隔离写死**：
+> 在禁用 entry-point 发现的进程/monkeypatch 环境中运行（`build_app(discoverers=[])` 或
+> monkeypatch entry_points 返回空……）；**另设一例装了 demo 插件的环境断言为 9 行且多出
+> `demo.ping`**（两例显式区分"无插件环境/有插件环境"，禁止按当前环境隐式断言）。
+
+计划把 `discoverers=[]` 的隔离明确限定在**计数测试**里，而修改前
+`src/mycad/cli/__main__.py:70` 把它写进了**产品代码**，后果是插件贡献的命令在 REPL 里
+可执行、被 `mycad plugins` 计数，却永远不会出现在 `mycad commands` 里——这既与
+「列注册表」的子命令语义矛盾，也使计划要求的「9 行且多出 demo.ping」那一例在产品路径上
+不可能成立。
+
+`688d001` 的处理：产品侧改回 `build_app()`（真实发现），隔离下沉到两条计数测试
+（`monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)`），并新增
+`test_commands_lists_plugin_contributions` 断言 9 行且含 `demo.ping`、verb 仍字典序。
+该测试**经 `main()` 驱动而非直接构造 `CliSession`**，正好覆盖此前出错的接线层。
+
+✅ **与计划 `commands` 条目的明文要求一致**，且是对一处真实偏离的修正，不是新违规。
+（这也顺带消解了上轮 F1 记录的 P5：`dc2cdac` 同步删除了 AGENTS.md 中「validate/commands/
+plugins 尚未实现、退出码 2」的过时表述。）
+
+### `3cd6b51`（`test_scope_audit` 加固）—— 新增禁词**未超出**计划 Must NOT 范围
+
+逐组把新增禁词回溯到计划条款，无一例外：
+
+| 新增项 | 对应的计划条款 | 是否超范围 |
+|---|---|---|
+| `PySide2` `qtpy` `shiboken6` | Must NOT `:49`「无 PySide6/Qt/**任何 UI 代码**」 | 否（Qt 的其余入口） |
+| `ollama` | Must NOT `:50` **逐字点名** `无 mcp/ollama 依赖` | 否（计划明文） |
+| `openai` `anthropic` `langchain` `litellm` | Must NOT `:50`「**无真实 LLM 调用**」 | 否（该禁令的机械化，非新禁令） |
+| `urllib3` `httpx` `aiohttp` `ftplib` | Must NOT `:50`「无网络调用代码」+ F4 §3「src 中无网络 import（**白名单：无，即全部禁止**）」 | 否 |
+| 分发名 `restrictedpython` 等 | F4 §1 **逐字点名** `restrictedpython` | 否 |
+| 格式 `dwg` | Must NOT `:53`「**不碰 DWG**/逆向库」 | 否（计划明文） |
+| 格式 `sab` `x_b` `catpart` `catproduct` | Must NOT `:53` 的 `ACIS(sat)`/`Parasolid(x_t)`/`CATIA` 的其余扩展名拼写 | 否（同一厂商墙的别名） |
+| `FORBIDDEN_CI_TOKENS = aarch64/arm64/qemu/loong` | Must NOT `:56`「**不做 aarch64/QEMU/龙芯 CI 任务**」 | 否 |
+| `PACKAGING_PATTERNS` 增 `*.msi` `*.wxs` `*.deb` `*.rpm` | Must NOT `:55`「不做安装包（AppImage/Flatpak/**msi**）」 | 否（`wxs` 是产出 msi 的 WiX 源） |
+| `OUT_OF_SCOPE_CONCEPTS` 17 个标识符 | 每条在源码注释里自带出处：inverse undo / brep 快照 / ElementMap（`:51`）、草图约束求解器（`:52`）、IGES·glTF·DXF·3MF provider（`:53`）、PLM BOM·mesher/INP（`:55`） | 否 |
+
+**结论：零个禁词落在计划 Must NOT 之外。** 全部是对既有禁令的机械化落地——其中
+`ollama`、`restrictedpython`、`DWG`、`msi`、`aarch64/QEMU/龙芯` 五项本就是计划**逐字
+点名**却被原测试漏掉的，属补洞而非扩权。
+
+被**有意排除**的项同样有记录且判断合理：`COMMERCIAL_FORMATS` 注释写明
+「`prt` 与 `asm` 故意不列——作为整词仍与普通标识符冲突，且其厂商（NX、CATIA）已按名列出」；
+`FORBIDDEN_DISTRIBUTIONS` 注释把 `requests` 的豁免理由扩写到同样经 build123d 传递进来的
+`urllib3`，与上轮核验属实的 D8 口径保持一致（导入禁、闭包不禁）。
+
+同时核验该提交没有放松任何既有断言：`test_runtime_closure_clean` 把
+`pytest.skip("uv unavailable")` 改成 `assert result.returncode == 0`（**收紧**，消除了
+uv 缺失时整条闭包断言静默退休的路径）；`test_backend_imports_are_confined_to_geom`
+改为复用有反向自证覆盖的 `scan_forbidden_imports` 检测器（消除两份规则漂移）；
+并新增 4 条反向自证/活性测试。方向全部是加强。
+
+### `382955d`（README 镜像警示）—— 无违规
+
+仅在 README 国内镜像段后追加 3 行警示：切索引后 `uv sync` 会改写 `uv.lock` 全部包的
+`source` 与下载 URL（hash 不变），不要提交，CI 以 `--frozen` 安装会把三个 runner 钉死到
+该镜像，同步后 `git checkout uv.lock` 还原。属计划 C1「安装文档含国内镜像配置（R18）」的
+正确性补强；未触碰 T1 Must NOT 的「不改 README 现有许可段落」。✅
+
+### `dc2cdac`（除 ruff 外的部分）—— 无违规
+
+`AGENTS.md` 的过时 CLI 描述被更正（见上）；`src/` 侧的 6 处改动（`app.py`、
+`validation.py`、`persistence.py`、`manifest.py`）均为启用 `SIM`/`RET` 后的机械修复
+（如 `except OSError: pass` → `contextlib.suppress(OSError)`），不改变任何对外契约。✅
+
+---
+
+## R4. 复查遗留观察（均不阻断 APPROVE）
+
+- **N1 — `NamedGroup` 失去 list→tuple 运行时归一化。** `721cef2` 删除
+  `src/mycad/core/groups.py` 的 `__post_init__`。现存调用点全部传元组（已逐点核验），
+  basedpyright strict 也会在所有带类型的调用点强制 `tuple[...]`，故当前无实际风险。
+  但这是**为满足测试卫生守卫而改动产品代码**，留下一条行为差异：今后若有调用点绕过
+  类型检查传入 list，`faces` 将是可变对象，`NamedGroup` 的不可变承诺在运行时不再自持。
+  docstring 已如实改写，不构成隐瞒。建议阶段 1 评估是否以 `Sequence` 入参 + 显式
+  `tuple()` 转换恢复防御，或保持现状并在 ADR-002 注明契约由静态检查承担。
+- **N2 — `PT`/`PL` 仍与计划 `:131` 不符，属「已记录未消解」。** 理由（PLR2004 占 103/138、
+  PT 多为纯风格）经独立复核成立，但偏离本身未消失。建议由计划所有者在计划中正式接受
+  （补进一条偏差登记），避免下一轮审计重新把它当成新发现。
+- **N3 — `3cd6b51` 提交信息有一处轻微夸大。** 信息称新的 `\b` 整词规则能挡住
+  「`class JTProvider`」这种形状；实际 `\bjt\b` 不会匹配 `JTProvider`（全为词字符，
+  中间无词边界）。其配套测试之所以通过，是因为夹具文件里同时含 `suffixes = ("jt",)`
+  这一行。规则本身是有效收紧（确实挡住了 `import parasolid`、`SUFFIX = "dwg"` 等旧规则
+  漏掉的形状），仅措辞需校正，不影响判定。
+- **N4 — 本轮 F1 的 5 个 pytest error 是审计沙箱产物，不得计入仓库状态。** 详见 R1(d)。
+- **N5 — 承接 F2 自列的遗留风险。** `final-2` 指出「守卫写了却一直空转」这一失败模式
+  目前无人看守，建议给每个遍历型守卫加 `assert scanned > 0` 元断言。本审计认同：这正是
+  P1 能潜伏 11 个 todo 的结构性原因，应排入阶段 1。
+
+---
+
+## R5. 复查结论
+
+| 项 | 上轮（feecf03） | 本轮（dc2cdac） |
+|---|---|---|
+| P1 零抑制守卫空转 + 4 处违规 | **开启（阻断）** | **关闭**：守卫实扫 164 文件、违规归零、四处修复均诚实、F2 活体反向注入判红 |
+| P2 ruff 规则集静默偏离 | 开启 | **关闭**：N/SIM/RET 补齐，E501/N818 两条 carve-out 理由经独立实测成立，PT/PL 偏离已双处留痕 |
+| P3 `addopts` 缺 `--ignore=tests/typing` | 开启 | **关闭** |
+| P5 AGENTS.md CLI 描述过时 | 信息项 | 已修正 |
+| 新增 5 个提交是否引入新违规 | — | **未引入**；`688d001` 符合计划 `commands` 明文要求，`3cd6b51` 新增禁词零个超出 Must NOT 范围 |
+| Must have 覆盖矩阵 | COVERED 9 / PARTIAL 1 / MISSING 0 | **COVERED 10 / PARTIAL 0 / MISSING 0** |
+| 命令 id / ADR / A1–A20 / R1–R18 | 全部通过 | 未重做（已 CONFIRMED） |
+
+**F1 最终结论：APPROVE。** 无 MISSING 项、无静默缺失、无新增计划违规。遗留 N1–N5 均为
+非阻断观察，建议并入阶段 1 或由计划所有者正式接受。
