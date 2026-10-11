@@ -460,7 +460,7 @@ Your next move: 审阅本计划；认可后显式发出开始指令（start）�
   - failure：未知子命令→2；`open` 不存在路径→2；脚本中第 2 条建模参数非法→批回滚退出 1；未知建模 id 行→1；损坏 JSON 计划→1（不是 traceback，是单行错误消息）；各类 stderr 文案与退出码附证据。
   Commit: Y | `feat(cli): repl and script runner with batch transactions, json equivalence, exit-code contract`
 
-- [ ] 11. T11 法兰验收资产 + examples + NOTICE/README 收尾 + Windows/编码用例
+- [x] 11. T11 法兰验收资产 + examples + NOTICE/README 收尾 + Windows/编码用例
   What to do / Must NOT do:
   - `tests/golden/flange_golden.json`（固定路径，无 assets 备选；**JSON 不支持注释**：公式以 `"_formula"` 键逐组记录，加载器断言其存在但不参与几何比较，未知键忽略纪律在测试注释中写明）：**两组 golden 参数表**，每组字段 od_mm/bore_mm/thk_mm/hole_d_mm/hole_count/hole_pcd_radius_mm/expected_volume_mm3/bbox_size/cylindrical_faces：
     - Group A：OD80、bore20、thk8、4×d6@R25；**expected_volume_mm3 = 36794.3331588437**（真值 36794.333158843656…），`_formula = "math.pi*8*(40**2-10**2-4*3**2)"`；bbox size=[80,80,8] 居中；solid_count=1；cylindrical_faces=6；
