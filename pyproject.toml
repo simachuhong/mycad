@@ -17,7 +17,10 @@ dependencies = [
     "cadquery-ocp-novtk>=7.9.3.1.1,<7.9.4",
 ]
 
-[project.optional-dependencies]
+# PEP 735 group, not an extra: `uv tree --no-dev` only filters dependency
+# groups, so the runtime-closure audit (NOTICE attribution, forbidden
+# distributions) would otherwise see ruff/pytest/packaging as runtime deps.
+[dependency-groups]
 dev = [
     "ruff>=0.6,<1.0",
     "basedpyright==1.40.1",

@@ -56,6 +56,15 @@ htmlcov/
 # Evidence / build artifacts (T1 only); do NOT commit these
 .mycad-dist/
 
+# Flange acceptance artifacts: the end-to-end runs write these into the work
+# tree; they are reproducible outputs, never project history.
+/flange.step
+/flange.stl
+/flange.mc.json
+/examples/flange_plan.step
+/examples/flange_plan.stl
+/examples/flange_plan.mc.json
+
 # IMPORTANT: .omo/ MUST remain tracked — Boulder / plan / evidence / reviews
 # live there and are part of the project. Only the run-scoped notes that
 # aren't durable project history are excluded:
