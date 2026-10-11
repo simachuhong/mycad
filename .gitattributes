@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 MyCAD contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Normalize every text file to LF in the repository and in the working tree
+# on all platforms. The windows-latest CI runner checks out with
+# core.autocrlf=true, which rewrites text files to CRLF and makes
+# `ruff format --check` ([tool.ruff.format] line-ending = "lf") fail on
+# files that are format-clean on Linux. Git's auto-detection leaves
+# binaries (e.g. .omo/evidence/spike/flange.stl) untouched.
+* text=auto eol=lf
