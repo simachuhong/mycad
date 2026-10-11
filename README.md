@@ -114,6 +114,10 @@ uv sync
 
 也可以在 `~/.config/uv/uv.toml` 中固化该配置，避免每次临时设置。
 
+> **注意**：切换索引后 `uv sync` 会把 `uv.lock` 中全部包的 `source` 与下载 URL 改写
+> 为该镜像（hash 不变，完整性不受影响）。**不要提交这份改写**——CI 以 `--frozen` 安装，
+> 一旦合入会把三个 runner 全部钉到该镜像。同步完成后执行 `git checkout uv.lock` 还原。
+
 ### 离线 / 无外网应急（conda / wheelhouse）
 
 仅在完全无外网的环境下使用。conda-forge 上的 `build123d` 滞后于上游 0.9.1，
