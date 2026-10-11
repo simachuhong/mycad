@@ -13,10 +13,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
-
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
@@ -26,16 +25,33 @@ SRC = REPO / "src"
 #: case-insensitive — the real PyPI name is RestrictedPython.
 FORBIDDEN_IMPORT_ROOTS: frozenset[str] = frozenset(
     {
+        # UI toolkits — phase 1 (PySide2/qtpy/shiboken6 are the back doors)
         "PySide6",
+        "PySide2",
         "PyQt6",
         "PyQt5",
+        "qtpy",
+        "shiboken6",
         "vtk",
+        # agent stack — phase 2; mcp and ollama are named by the plan
         "mcp",
+        "ollama",
+        "openai",
+        "anthropic",
+        "langchain",
+        "litellm",
+        # rival CAD bindings
         "cadquery",
         "OCC",
         "packaging",
+        # network — the stdlib roots plus the third-party clients that reach
+        # the closure through build123d's own dependencies
         "urllib",
+        "urllib3",
         "requests",
+        "httpx",
+        "aiohttp",
+        "ftplib",
         "http",
         "socket",
         "restrictedpython",
@@ -49,21 +65,85 @@ BACKEND_ALLOWED_PREFIX = "src/mycad/geom/"
 #: Distribution names banned from the runtime closure. Compared by EXACT
 #: name: ``cadquery-ocp-novtk`` is required to be present, so a substring
 #: test against "cadquery" would contradict the positive assertion below.
-#: ``requests`` is deliberately absent from this set — it is a direct
-#: dependency of the pinned build123d backend, so banning it would mean
-#: dropping the backend. The enforceable rule is that no MyCAD module
-#: imports it, which ``FORBIDDEN_IMPORT_ROOTS`` already covers.
+#: ``requests`` and ``urllib3`` are deliberately absent from this set —
+#: both are transitive dependencies of the pinned build123d backend, so
+#: banning them would mean dropping the backend. The enforceable rule is
+#: that no MyCAD module imports them, which ``FORBIDDEN_IMPORT_ROOTS``
+#: covers.
 FORBIDDEN_DISTRIBUTIONS: frozenset[str] = frozenset(
-    {"pyside6", "pyqt6", "pyqt5", "vtk", "mcp", "cadquery", "pythonocc-core", "packaging"}
+    {
+        "pyside6",
+        "pyside2",
+        "pyqt6",
+        "pyqt5",
+        "shiboken6",
+        "vtk",
+        "mcp",
+        "ollama",
+        "openai",
+        "anthropic",
+        "langchain",
+        "litellm",
+        "cadquery",
+        "pythonocc-core",
+        "packaging",
+        "restrictedpython",
+    }
 )
 REQUIRED_DISTRIBUTIONS: frozenset[str] = frozenset({"build123d", "cadquery-ocp-novtk"})
 
-#: Commercial formats walled off by ADR-005. Matched as dotted file
-#: suffixes and whole file-name stems, never as bare substrings — "sat"
-#: and "nx" occur inside ordinary English words.
+#: Commercial formats walled off by ADR-005, plus DWG. Matched as whole
+#: words (case-insensitively) rather than as bare substrings: "sat" and
+#: "nx" occur inside ordinary English words, but \b stops them matching
+#: "saturate" or "linux" while still catching a standalone token.
+#: ``prt`` and ``asm`` are deliberately left out — as whole words they
+#: still collide with ordinary identifiers, and the vendors they stand
+#: for (NX, CATIA) are already listed by name.
 COMMERCIAL_FORMATS: frozenset[str] = frozenset(
-    {"jt", "parasolid", "acis", "sat", "x_t", "sldprt", "nx", "catia"}
+    {
+        "jt",
+        "parasolid",
+        "acis",
+        "sat",
+        "sab",
+        "x_t",
+        "x_b",
+        "sldprt",
+        "nx",
+        "catia",
+        "catpart",
+        "catproduct",
+        "dwg",
+    }
 )
+
+#: Stage-1+ concepts the plan forbids implementing in phase 0. Only
+#: distinctive identifiers are listed: a negative "do not build X" rule
+#: cannot be checked exhaustively, but a tripwire on the names such code
+#: would inevitably use is far better than no assertion at all. Matched
+#: case-insensitively as whole words. Each entry cites its Must-NOT item.
+OUT_OF_SCOPE_CONCEPTS: tuple[tuple[str, str], ...] = (
+    ("inverse_undo", "per-command inverse undo"),
+    ("undo_inverse", "per-command inverse undo"),
+    ("brep_snapshot", "BREP snapshot cache"),
+    ("snapshot_cache", "BREP snapshot cache"),
+    ("elementmap", "ElementMap / topological naming"),
+    ("element_map", "ElementMap / topological naming"),
+    ("constraintsolver", "sketch constraint solver"),
+    ("constraint_solver", "sketch constraint solver"),
+    ("solve_constraints", "sketch constraint solver"),
+    ("igesprovider", "out-of-scope format provider"),
+    ("gltfprovider", "out-of-scope format provider"),
+    ("dxfprovider", "out-of-scope format provider"),
+    ("threemfprovider", "out-of-scope format provider"),
+    ("bill_of_materials", "PLM check-in/BOM"),
+    ("checkout_part", "PLM check-in/BOM"),
+    ("export_inp", "mesher / CAE solver"),
+    ("cae_solver", "mesher / CAE solver"),
+)
+
+#: Build-host identifiers that must not appear in CI: phase 0 is T1 only.
+FORBIDDEN_CI_TOKENS: tuple[str, ...] = ("aarch64", "arm64", "qemu", "loong")
 
 #: Identifiers of the stage-1 STEP import feature, absent from phase 0.
 #: Concatenated for the same reason as ``STEP_READ_APIS`` below.
@@ -128,12 +208,13 @@ def test_no_forbidden_imports_reverse_self_proof(tmp_path: Path) -> None:
 
 
 def test_backend_imports_are_confined_to_geom() -> None:
+    """Same detector as above, narrowed to its backend branch.
+
+    Re-deriving the rule inline would let the two copies drift apart
+    while the reverse self-proof only guards one of them.
+    """
     offenders = [
-        path.relative_to(REPO).as_posix()
-        for path in _python_files(SRC)
-        for _, module in _import_roots(ast.parse(path.read_text(encoding="utf-8")))
-        if module in BACKEND_ROOTS
-        and not path.relative_to(REPO).as_posix().startswith(BACKEND_ALLOWED_PREFIX)
+        v for v in scan_forbidden_imports(SRC, REPO) if v.rsplit(":", 1)[1] in BACKEND_ROOTS
     ]
     assert offenders == []
 
@@ -147,9 +228,11 @@ def scan_out_of_scope(root: Path, repo: Path) -> list[str]:
     for path in _python_files(root):
         rel = path.relative_to(repo).as_posix()
         text = path.read_text(encoding="utf-8")
-        for prefix in ('"view.', '"sketch.', '"datum.'):
-            if prefix in text:
-                violations.append(f"{rel}: reserved command namespace {prefix[1:]}")
+        lowered = text.lower()
+        for namespace in ("view.", "sketch.", "datum."):
+            # Either quote style: 'view.orbit' hid from a '"view.' needle.
+            if f'"{namespace}' in text or f"'{namespace}" in text:
+                violations.append(f"{rel}: reserved command namespace {namespace}")
         for identifier in OUT_OF_SCOPE_IDENTIFIERS:
             if identifier in text:
                 violations.append(f"{rel}: stage-1 identifier {identifier}")
@@ -158,8 +241,11 @@ def scan_out_of_scope(root: Path, repo: Path) -> list[str]:
                 if api in text:
                     violations.append(f"{rel}: STEP read API {api}")
         for fmt in COMMERCIAL_FORMATS:
-            if f".{fmt}" in text.lower() or path.stem.lower() == fmt:
+            if re.search(rf"\b{re.escape(fmt)}\b", lowered) or path.stem.lower() == fmt:
                 violations.append(f"{rel}: commercial format {fmt}")
+        for concept, label in OUT_OF_SCOPE_CONCEPTS:
+            if re.search(rf"\b{re.escape(concept)}\b", lowered):
+                violations.append(f"{rel}: {label} ({concept})")
     return violations
 
 
@@ -169,7 +255,7 @@ def test_no_out_of_scope_code() -> None:
 
 def test_no_out_of_scope_code_reverse_self_proof(tmp_path: Path) -> None:
     (tmp_path / "leak.py").write_text(
-        'ID = "view.orbit"\nPATH = "part.sldprt"\nERR = ImportSourceMissingError\n',
+        "ID = 'view.orbit'\nPATH = \"part.sldprt\"\nERR = ImportSourceMissingError\n",
         encoding="utf-8",
     )
     found = scan_out_of_scope(tmp_path, tmp_path)
@@ -178,26 +264,101 @@ def test_no_out_of_scope_code_reverse_self_proof(tmp_path: Path) -> None:
     assert any("stage-1 identifier" in v for v in found)
 
 
+def test_commercial_format_detector_catches_adapter_shaped_code(tmp_path: Path) -> None:
+    """A provider class and a vendor import carry no dotted extension.
+
+    The earlier ``.{fmt}``-or-stem rule missed both shapes, so the wall
+    only stopped code that happened to spell out a file suffix.
+    """
+    (tmp_path / "jt_adapter.py").write_text(
+        'class JTProvider:\n    suffixes = ("jt",)\n', encoding="utf-8"
+    )
+    (tmp_path / "xt_io.py").write_text("PK_BODY = 'parasolid handle'\n", encoding="utf-8")
+    (tmp_path / "dwg_io.py").write_text('SUFFIX = "dwg"\n', encoding="utf-8")
+    found = scan_out_of_scope(tmp_path, tmp_path)
+    for needle in ("commercial format jt", "commercial format parasolid", "commercial format dwg"):
+        assert any(needle in v for v in found), f"{needle} escaped the detector"
+
+
+def test_out_of_scope_concept_detector_reverse_self_proof(tmp_path: Path) -> None:
+    (tmp_path / "leak.py").write_text(
+        "class ElementMap:\n    pass\n\n\ndef solve_constraints():\n    pass\n", encoding="utf-8"
+    )
+    found = scan_out_of_scope(tmp_path, tmp_path)
+    assert any("ElementMap / topological naming" in v for v in found)
+    assert any("sketch constraint solver" in v for v in found)
+
+
+def test_step_read_whitelist_branch_is_live(tmp_path: Path) -> None:
+    """The whitelist must be the only thing exempting a STEP read API.
+
+    ``test_no_out_of_scope_code`` only scans ``src/``, where the
+    whitelisted path can never appear, so without this the branch could
+    be widened to ``tests/`` and nothing would go red.
+    """
+    helper = tmp_path / STEP_READ_WHITELIST
+    helper.parent.mkdir(parents=True)
+    body = f"x = {STEP_READ_APIS[0]}\n"
+    helper.write_text(body, encoding="utf-8")
+    (tmp_path / "elsewhere.py").write_text(body, encoding="utf-8")
+    found = scan_out_of_scope(tmp_path, tmp_path)
+    assert any(v.startswith("elsewhere.py: STEP read API") for v in found)
+    assert not any(v.startswith(STEP_READ_WHITELIST) for v in found)
+
+
 def test_no_out_of_scope_modules_or_directories() -> None:
     for banned in ("schema_tools", "schema_catalog", "tool_schema"):
         assert list(REPO.glob(f"**/{banned}.py")) == []
     assert not (REPO / "tests" / "snapshots").exists()
 
 
+#: Installer/bundler artefacts. ``msi`` is named by the plan; ``wxs``
+#: is the WiX source that produces one.
+PACKAGING_PATTERNS: tuple[str, ...] = (
+    "*.spec",
+    "*.nsi",
+    "*.iss",
+    "*.AppImage",
+    "*flatpak*",
+    "*.msi",
+    "*.wxs",
+    "*.deb",
+    "*.rpm",
+)
+
+SKIPPED_TREE_PARTS = frozenset({".venv", ".git", ".omo", ".ruff_cache", ".pytest_cache"})
+
+
+def scan_packaging_config(root: Path) -> list[str]:
+    """Installer/bundler files anywhere in the tree, not just at the root."""
+    return sorted(
+        p.relative_to(root).as_posix()
+        for pattern in PACKAGING_PATTERNS
+        for p in root.rglob(pattern)
+        if not (SKIPPED_TREE_PARTS & set(p.parts))
+    )
+
+
 def test_no_network_or_packaging_config() -> None:
     """No installer/bundler configuration: distribution is out of scope."""
-    patterns = ("*.spec", "*.nsi", "*.iss", "*.AppImage", "*flatpak*")
-    offenders = [
-        p.relative_to(REPO).as_posix()
-        for pattern in patterns
-        for p in REPO.glob(pattern)
-        if ".venv" not in p.parts
-    ]
-    assert offenders == []
+    assert scan_packaging_config(REPO) == []
+
+
+def test_no_network_or_packaging_config_reverse_self_proof(tmp_path: Path) -> None:
+    nested = tmp_path / "packaging" / "linux"
+    nested.mkdir(parents=True)
+    (nested / "mycad.spec").touch()
+    assert scan_packaging_config(tmp_path) == ["packaging/linux/mycad.spec"]
+
+
+def test_ci_has_no_out_of_tier_runners() -> None:
+    """Phase 0 CI is T1 only: no aarch64, QEMU or LoongArch jobs (ADR-006)."""
+    text = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8").lower()
+    assert [token for token in FORBIDDEN_CI_TOKENS if token in text] == []
 
 
 def test_src_uses_pathlib_not_hardcoded_separators() -> None:
-    """Paths are pathlib everywhere; no ``os.sep`` or glued '/' literals."""
+    """Paths are pathlib everywhere: no ``os.sep`` and no ``os.path.join``."""
     offenders: list[str] = []
     for path in _python_files(SRC):
         rel = path.relative_to(REPO).as_posix()
@@ -225,8 +386,9 @@ def parse_closure(text: str) -> set[str]:
 
 def test_runtime_closure_clean() -> None:
     result = subprocess.run(UV_TREE_COMMAND, cwd=REPO, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        pytest.skip(f"uv unavailable: {result.stderr.strip()[:120]}")
+    # Not a skip: a skip here would retire the whole closure assertion the
+    # moment uv went missing from a runner, and nothing would say so.
+    assert result.returncode == 0, f"uv tree failed: {result.stderr.strip()[:200]}"
     closure = parse_closure(result.stdout)
     assert FORBIDDEN_DISTRIBUTIONS & closure == set()
     assert REQUIRED_DISTRIBUTIONS <= closure

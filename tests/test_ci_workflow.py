@@ -31,16 +31,25 @@ def test_ci_workflow_file_exists() -> None:
     assert wf.exists(), f"missing {wf}"
 
 
+def missing_tokens(text: str) -> list[str]:
+    """Required tokens absent from a workflow rendering."""
+    return [token for token in REQUIRED_TOKENS if token not in text]
+
+
 def test_ci_workflow_has_all_required_tokens() -> None:
     repo = Path(__file__).resolve().parent.parent
     wf = repo / ".github" / "workflows" / "ci.yml"
-    text = wf.read_text(encoding="utf-8")
-    for token in REQUIRED_TOKENS:
-        assert token in text, f"CI workflow missing required token: {token!r}"
+    assert missing_tokens(wf.read_text(encoding="utf-8")) == []
 
 
-def test_reverse_self_test_for_ci(tmp_path: Path) -> None:
-    bad = tmp_path / "ci.yml"
-    bad.write_text("# no real workflow here\n", encoding="utf-8")
-    text = bad.read_text(encoding="utf-8")
-    assert "ubuntu-22.04" not in text
+def test_reverse_self_test_for_ci() -> None:
+    """Feed the real detector a workflow with one gate dropped.
+
+    Asserting a token is absent from a stub file proves nothing about
+    ``missing_tokens``; this drives the same function the forward test
+    uses.
+    """
+    repo = Path(__file__).resolve().parent.parent
+    text = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert missing_tokens(text.replace("windows-latest", "ubuntu-latest")) == ["windows-latest"]
+    assert missing_tokens(text.replace("basedpyright", "echo skip")) == ["basedpyright"]
