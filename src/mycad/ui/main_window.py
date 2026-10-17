@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Todo-5 shell: the five-zone main window (initial draft §2/§3/§8).
+"""Todo-5 shell + todo-6 left panel: the five-zone main window.
 
 Zones keep the widget-identity contract from todo 4; this module adds the
 §3 menu set (seven menus, verbatim titles), toolbar toggling/locking
 (§4.1), QSettings layout memory, and the five-field status bar wired to
-the core signal union. Panel contents remain owned by todos 6 / 7 / 9.
+the core signal union. The left dock hosts the todo-6 registry-driven
+palette (with its plan-draft controller) when services are provided;
+right/bottom/centre contents remain owned by todos 7 / 9 / 12.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ from PySide6.QtWidgets import (
 from mycad.core.bus import CommandBus
 from mycad.core.exceptions import InvalidHistoryError
 from mycad.core.signals import SignalName
+from mycad.ui.command_palette import CommandPalette
+from mycad.ui.plan_draft import PlanDraftController
 
 if TYPE_CHECKING:
     from mycad.app import AppServices
@@ -146,6 +150,17 @@ class MainWindow(QMainWindow):
             self.status_bar.addPermanentWidget(label)
 
         self._build_menus()
+        # Todo 6: with services the left dock hosts the command palette and
+        # its plan-draft controller; the todo-4 zero-arg form keeps the
+        # dock empty.
+        self.plan_draft: PlanDraftController | None = None
+        self.command_palette: CommandPalette | None = None
+        if services is not None:
+            self.command_palette = CommandPalette(services.registry)
+            self.left_dock.setWidget(self.command_palette)
+            self.left_dock.setWindowTitle("命令库")
+            self.plan_draft = PlanDraftController(services.registry)
+            self.command_palette.command_activated.connect(self._on_palette_command)
         self.restore_window_state()
 
     # ------------------------------------------------------------------
@@ -253,6 +268,16 @@ class MainWindow(QMainWindow):
     def _open_left_palette(self) -> None:
         self.left_dock.show()
         self.left_dock.raise_()
+
+    def _on_palette_command(self, command_id: str) -> None:
+        if self.plan_draft is None:
+            return
+        try:
+            self.plan_draft.new_draft(command_id)
+        except ValueError as err:
+            self.status_command.setText(str(err))
+        else:
+            self.status_command.setText(f"草稿：{command_id}")
 
     def _show_plan_cards(self) -> None:
         self.bottom_dock.show()
