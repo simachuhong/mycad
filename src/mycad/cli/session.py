@@ -53,6 +53,7 @@ Subcommands:
   validate <file>         Validate a plan (.json) or script (.txt) without executing
   commands [--json]       List registered commands
   plugins                 List loaded plugins and skipped ones
+  gui                     Open the five-zone main window (Qt event loop)
   help                    Show this help text
 """
 

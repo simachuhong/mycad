@@ -37,6 +37,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:]) if argv is None else list(argv)
     if not args or args == ["repl"]:
         return CliSession(build_app()).run_repl()
+    if args == ["--help"] or args == ["-h"]:
+        sys.stdout.write(HELP_TEXT)
+        return 0
     sub, rest = args[0], args[1:]
     if sub == "help":
         if rest:
@@ -73,6 +76,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("plugins takes no arguments", file=sys.stderr)
             return 2
         return CliSession(build_app()).list_plugins()
+    if sub == "gui":
+        if rest:
+            print("gui takes no arguments", file=sys.stderr)
+            return 2
+        from mycad.ui.entry import run_gui
+
+        return run_gui()
     print(f"unknown subcommand: {sub}", file=sys.stderr)
     return 2
 

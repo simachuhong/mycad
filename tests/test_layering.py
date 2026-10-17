@@ -65,11 +65,17 @@ def _is_forbidden_in(file_path: Path, module_name: str) -> bool:
         return False
     if rel.startswith(ALLOWED_SRC_IMPORT_PREFIXES):
         return False
+    backend_forbidden = any(
+        module_name == m or module_name.startswith(m + ".") for m in FORBIDDEN_MODULES
+    )
     if rel.startswith(UI_SRC_ALLOWED_PREFIX):
-        return module_name.partition(".")[0] not in UI_SRC_ALLOWED_ROOTS
+        # ui: numpy released for the pyqtgraph ecosystem; build123d/OCP stay
+        # banned; non-backend names (PySide6/QOpenGLContext, ...) belong to
+        # tests/test_scope_audit.py's package carve-out and are neutral here.
+        return module_name.partition(".")[0] not in UI_SRC_ALLOWED_ROOTS and backend_forbidden
     if module_name.startswith(ALLOWED_IMPORT_PREFIXES):
         return False
-    return any(module_name == m or module_name.startswith(m + ".") for m in FORBIDDEN_MODULES)
+    return backend_forbidden
 
 
 def test_src_has_no_backend_imports() -> None:

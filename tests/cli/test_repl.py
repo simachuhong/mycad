@@ -94,7 +94,9 @@ def test_help_subcommand_prints_the_usage_list(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main(["help"]) == 0
-    assert "Subcommands:" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Subcommands:" in out
+    assert "  gui" in out
 
 
 def test_tty_stdin_prints_the_prompt(
