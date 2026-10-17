@@ -15,3 +15,24 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def sandbox_qsettings(tmp_path: Path) -> None:
+    """Route QSettings into an IniFormat file under tmp_path.
+
+    Without this, the roundtrip test would write real $HOME (org/app both
+    ``MyCAD``): layout memory must never leak outside the test sandbox.
+    """
+    from PySide6.QtCore import QSettings
+
+    QSettings.setPath(
+        QSettings.Format.IniFormat,
+        QSettings.Scope.UserScope,
+        str(tmp_path / "settings"),
+    )
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
