@@ -10,7 +10,7 @@ package surfaces in a fresh subprocess.
 # ruff: noqa: I001 — the §4.1 import order below is FIXED by design
 # (dependencies before dependents) and deliberately non-alphabetical:
 # exceptions → selectors → geometry_types → signals → groups →
-# kernel_protocol → handlers → ports → plan → document → bus →
+# kernel_protocol → handlers → ports → viewport_protocol → plan → document → bus →
 # schema_v1 → migrations → persistence (schema_v1 precedes migrations
 # because the migration default targets its ARCHIVE_VERSION constant).
 
@@ -24,6 +24,7 @@ from .groups import NamedGroup
 from .kernel_protocol import Kernel
 from .handlers import BuiltinModelingHandler, CommandHandler, HandlerContext
 from .ports import ExportableKernel, FormatPort, FormatResolver
+from .viewport_protocol import ViewportData, ViewportPort
 from .plan import Plan
 from .document import AFFECTED_OBJECTS, Document, ExecutedCommand, PlannedCommand
 from .bus import CommandBus
@@ -57,6 +58,8 @@ __all__ = [
     "PlannedCommand",
     "SignalBus",
     "Tessellation",
+    "ViewportData",
+    "ViewportPort",
     "migrate",
     "open_document",
     "register",
