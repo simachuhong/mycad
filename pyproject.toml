@@ -6,15 +6,24 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "MyCAD contributors" }]
 requires-python = ">=3.12,<3.15"
-# Phase 0 dependency surface:
+# Dependency surface:
 # - build123d  : parametric geometry primitives, single exact pin (moss hegemon)
-# - cadquery-ocp-novtk : OpenCascade python bindings; the `-novtk` flavor avoids
-#   the Qt5/VTK GUI transitive closure (T1 forbids VTK/PySide6/CadQuery).
+# - cadquery-ocp-novtk : OpenCascade python bindings; the `-novtk` flavor keeps
+#   the VTK/CadQuery transitive closure out.
 #   Pin to the 7.9.3.x patch stream because OCP 7.9.4 dropped TopoDS_Wire fixes
 #   that build123d 0.11.1 depends on.
+# - PySide6 + pyqtgraph : phase-1 desktop shell, allowed in src/mycad/ui/
+#   ONLY (see tests/test_scope_audit.py). VTK stays forbidden, CadQuery
+#   stays forbidden, and mycad.core imports none of these.
 dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk>=7.9.3.1.1,<7.9.4",
+    "PySide6>=6.7,<7",
+    "pyqtgraph>=0.13,<0.14",
+    # pyqtgraph only suggests PyOpenGL, but imports it in pyqtgraph.opengl
+    # (the GLViewWidget the viewport builds on) — declare it explicitly so
+    # the closure cannot silently drift away from what the shell imports.
+    "PyOpenGL>=3.1,<4",
 ]
 
 # PEP 735 group, not an extra: `uv tree --no-dev` only filters dependency
@@ -31,6 +40,8 @@ dev = [
     # dev venv so `pip install -e --no-build-isolation` works offline.
     "hatchling>=1.26",
     "editables>=0.6",
+    # Phase-1 shell tests drive Qt widgets offscreen through pytest-qt.
+    "pytest-qt>=4.4",
 ]
 
 [project.scripts]

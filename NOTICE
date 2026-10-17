@@ -49,7 +49,7 @@ and is therefore attributed on two lines:
       satisfy the LGPL obligations for those native libraries.
 
 --------------------------------------------------------------------------------
-Runtime dependency closure (46 distributions)
+Runtime dependency closure (54 distributions)
 --------------------------------------------------------------------------------
 
   anytree                        Apache-2.0
@@ -94,10 +94,38 @@ Runtime dependency closure (46 distributions)
       license"; the METADATA License field literally reads "UNKNOWN".
   pure-eval                      MIT
   pygments                       BSD-2-Clause
+  pyopengl                       BSD-3-Clause
+      Evidence: pyopengl-3.1.10.dist-info/METADATA carries only the
+      generic `License :: OSI Approved :: BSD License` classifier and
+      the wheel ships no license file (dist-info RECORD enumerates no
+      licenses/ entry). The identifier above reflects the upstream
+      PyOpenGL project's BSD 3-Clause terms rather than a statement
+      inside the wheel.
   pyparsing                      MIT
+  pyqtgraph                      MIT
+  pyside6                        LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+  pyside6-addons                 LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+  pyside6-essentials             LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+  pyside6-pdf                    LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+  pyside6-webengine              LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+      The five pyside6_* wheels and shiboken6 (below) share one
+      License-Expression (`LGPL-3.0-only OR GPL-2.0-only OR
+      GPL-3.0-only` in each dist-info METADATA). Qt is dual-licensed
+      LGPLv3/GPLv3: MyCAD links Qt dynamically through these bindings,
+      so redistributors satisfy the LGPLv3 replaceable-library
+      obligations for the bundled Qt libraries; nothing Qt-derived is
+      merged or copied into MyCAD source.
   requests                       Apache-2.0
   scikit-learn                   BSD-3-Clause
   scipy                          BSD-3-Clause
+  shiboken6                      LGPL-3.0-only OR GPL-2.0-only OR
+                                 GPL-3.0-only
+      License-Expression shared with the pyside6 family above.
   stack-data                     MIT
   svgelements                    MIT
   svgpathtools                   MIT
@@ -123,4 +151,6 @@ transitive dependencies of build123d. No MyCAD module imports them; the
 Platform variation: `pexpect` is installed only on non-Windows systems,
 while `colorama` appears on Windows instead (`sys_platform == 'win32'`
 markers in the lockfile). Both are attributed above; the per-platform
-closure count stays 46 either way.
+closure count stays 54 either way. The phase-1 additions (pyopengl,
+pyqtgraph, the pyside6 wheel family, shiboken6) carry no platform
+markers anywhere in uv.lock, so 54 holds on all three T1 platforms.

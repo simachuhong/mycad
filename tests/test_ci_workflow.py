@@ -18,6 +18,10 @@ REQUIRED_TOKENS: tuple[str, ...] = (
     "windows-latest",
     "astral-sh/setup-uv@v4",
     'python-version: "3.12"',
+    # GL offscreen stack: phase 1 pulls PySide6/PyOpenGL, whose offscreen
+    # import path needs EGL/GL libraries the Linux runners do not ship.
+    "Install GL offscreen libraries",
+    "libxkbcommon-x11-0",
     "ruff check",
     "ruff format --check",
     "basedpyright",

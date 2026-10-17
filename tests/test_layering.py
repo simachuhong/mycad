@@ -3,9 +3,11 @@
 """Layering invariant: ``mycad.core`` and ``mycad`` itself must not import
 build123d / OCP / numpy.
 
-Phase 0 keeps the core domain neutral. Only modules under
-``mycad.geom`` (introduced in a later wave) and ``mycad.app`` are allowed
-to pull CAD backends. The test below also enforces that every type
+Only modules under ``mycad.geom`` and ``mycad.app`` may pull CAD
+backends. ``mycad.ui`` is numpy-capable but Qt-confined: PySide6 is not
+in this file's FORBIDDEN_MODULES (its package-level ban lives in
+``tests/test_scope_audit.py``), while the must-never-reach-``mycad.geom``
+rule below is enforced here. The test also enforces that every type
 suppression comment in the repo lives under ``tests/typing/``.
 """
 
@@ -25,13 +27,18 @@ ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = (
 
 # Only the geom adapter package (any internal module split) may import CAD
 # backends in src/ — judged by package boundary, not per-module allow-list.
+# numpy additionally feeds the ui package (per-frame tessellation buffers),
+# so the slice check below releases exactly numpy there and nothing else.
 ALLOWED_SRC_IMPORT_PREFIXES: tuple[str, ...] = ("src/mycad/geom/",)
+UI_SRC_ALLOWED_PREFIX = "src/mycad/ui/"
+UI_SRC_ALLOWED_ROOTS: frozenset[str] = frozenset({"numpy"})
 
 ALLOWED_IMPORT_FILES: frozenset[str] = frozenset()
 
-# In tests/: only tests/geom/ and the T8 STEP round-trip helper (the file
-# does not exist yet — the entry is the plan's exact whitelist wording).
-TESTS_ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = ("tests/geom/",)
+# In tests/: tests/geom/, the T8 STEP round-trip helper (the file does not
+# exist yet — the entry is the plan's exact whitelist wording), and the
+# tests/ui/ set (mirrors the numpy release above; discipline mirrors src).
+TESTS_ALLOWED_IMPORT_PREFIXES: tuple[str, ...] = ("tests/geom/", "tests/ui/")
 TESTS_ALLOWED_IMPORT_FILES: frozenset[str] = frozenset(
     {
         "tests/helpers/step_roundtrip.py",
@@ -58,6 +65,8 @@ def _is_forbidden_in(file_path: Path, module_name: str) -> bool:
         return False
     if rel.startswith(ALLOWED_SRC_IMPORT_PREFIXES):
         return False
+    if rel.startswith(UI_SRC_ALLOWED_PREFIX):
+        return module_name.partition(".")[0] not in UI_SRC_ALLOWED_ROOTS
     if module_name.startswith(ALLOWED_IMPORT_PREFIXES):
         return False
     return any(module_name == m or module_name.startswith(m + ".") for m in FORBIDDEN_MODULES)
@@ -190,3 +199,26 @@ def test_composition_root_is_the_geom_core_bridge() -> None:
     assert bridging <= {COMPOSITION_ROOT}, f"unexpected src-level bridges: {sorted(bridging)}"
     if (REPO / COMPOSITION_ROOT).exists():
         assert COMPOSITION_ROOT in bridging, "composition root must bridge both sides"
+
+
+def test_ui_package_must_not_import_geom() -> None:
+    """The UI renders data; it never drives the CAD kernel. src/mycad/ui/
+    is banned from importing ``mycad.geom`` at the package root, so a
+    ``from mycad.geom.kernel import`` cannot smuggle a backend in through
+    a submodule path. Vacuously green while mycad.ui does not yet exist
+    (UI package lands in todo 4 on the same plan) — the surgical-hooked
+    reverse case is covered by
+    ``tests/test_scope_audit.py::test_ui_imports_are_confined_to_the_ui_package``.
+    """
+    ui = REPO / "src" / "mycad" / "ui"
+    if not ui.is_dir():
+        return
+    offenders: list[tuple[str, str]] = []
+    for path in sorted(ui.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                for name in _imported_module_names(node):
+                    if name == "mycad.geom" or name.startswith("mycad.geom."):
+                        offenders.append((path.relative_to(REPO).as_posix(), name))
+    assert not offenders, f"mycad.ui must not import mycad.geom: {offenders}"

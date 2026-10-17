@@ -25,8 +25,13 @@ SRC = REPO / "src"
 #: case-insensitive — the real PyPI name is RestrictedPython.
 FORBIDDEN_IMPORT_ROOTS: frozenset[str] = frozenset(
     {
-        # UI toolkits — phase 1 (PySide2/qtpy/shiboken6 are the back doors)
+        # UI toolkits — phase 1. PySide6/shiboken6 are released from outright
+        # ban by the src/mycad/ui/ carve-out (UI_ROOTS below); PySide2/PyQt5/
+        # PyQt6/qtpy/vtk remain banned root-wide, and tkinter/wx close the
+        # remaining toolkit back doors.
         "PySide6",
+        "tkinter",
+        "wx",
         "PySide2",
         "PyQt6",
         "PyQt5",
@@ -62,6 +67,13 @@ FORBIDDEN_IMPORT_ROOTS: frozenset[str] = frozenset(
 BACKEND_ROOTS: frozenset[str] = frozenset({"build123d", "OCP", "numpy"})
 BACKEND_ALLOWED_PREFIX = "src/mycad/geom/"
 
+#: UI stack: allowed only inside the src/mycad/ui/ carve-out. The roots
+#: stay import-banned everywhere else, so no core/geom/app module can
+#: reach Qt (the core Qt-free invariant is re-checked per file by
+#: tests/core/test_signals.py).
+UI_ROOTS: frozenset[str] = frozenset({"PySide6", "shiboken6"})
+UI_ALLOWED_PREFIX = "src/mycad/ui/"
+
 #: Distribution names banned from the runtime closure. Compared by EXACT
 #: name: ``cadquery-ocp-novtk`` is required to be present, so a substring
 #: test against "cadquery" would contradict the positive assertion below.
@@ -69,14 +81,15 @@ BACKEND_ALLOWED_PREFIX = "src/mycad/geom/"
 #: both are transitive dependencies of the pinned build123d backend, so
 #: banning them would mean dropping the backend. The enforceable rule is
 #: that no MyCAD module imports them, which ``FORBIDDEN_IMPORT_ROOTS``
-#: covers.
+#: covers. ``pyside6``/``shiboken6`` are deliberately absent for the
+#: same class of reason: phase 1 requires them in the closure, a
+#: path-qualified allowance is impossible in a set of plain names, and
+#: their imports stay confined to ``src/mycad/ui/`` via ``UI_ROOTS``.
 FORBIDDEN_DISTRIBUTIONS: frozenset[str] = frozenset(
     {
-        "pyside6",
         "pyside2",
         "pyqt6",
         "pyqt5",
-        "shiboken6",
         "vtk",
         "mcp",
         "ollama",
@@ -193,6 +206,8 @@ def scan_forbidden_imports(root: Path, repo: Path) -> list[str]:
         rel = path.relative_to(repo).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for lineno, module in _import_roots(tree):
+            if module in UI_ROOTS and rel.startswith(UI_ALLOWED_PREFIX):
+                continue
             if (
                 module.lower() in lowered
                 or module in BACKEND_ROOTS
@@ -227,6 +242,25 @@ def test_backend_imports_are_confined_to_geom() -> None:
         v for v in scan_forbidden_imports(SRC, REPO) if v.rsplit(":", 1)[1] in BACKEND_ROOTS
     ]
     assert offenders == []
+
+
+def test_ui_imports_are_confined_to_the_ui_package(tmp_path: Path) -> None:
+    """Same detector, narrowed to its UI branch: PySide6/shiboken6 may
+    appear only under src/mycad/ui/, while tkinter stays banned even
+    there — the carve-out releases exactly the two UI_ROOTS members.
+    """
+    ui = tmp_path / "src" / "mycad" / "ui"
+    core = tmp_path / "src" / "mycad" / "core"
+    ui.mkdir(parents=True)
+    core.mkdir(parents=True)
+    (ui / "window.py").write_text(
+        "import PySide6\nfrom shiboken6 import Shiboken\n", encoding="utf-8"
+    )
+    (core / "leak.py").write_text("import PySide6\nimport tkinter\n", encoding="utf-8")
+    found = scan_forbidden_imports(tmp_path, tmp_path)
+    assert not any(v.startswith("src/mycad/ui/") for v in found), found
+    assert any(v == "src/mycad/core/leak.py:1:PySide6" for v in found)
+    assert any(v.endswith(":2:tkinter") for v in found)
 
 
 # -- group 2: out-of-scope code ---------------------------------------------
