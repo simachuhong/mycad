@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import importlib.metadata
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 
 from build123d import Edge, Face, Part
@@ -24,6 +25,7 @@ from build123d import Edge, Face, Part
 from mycad.core.exceptions import GeomVersionError
 from mycad.core.geometry_types import MassProperties, Tessellation
 from mycad.core.selectors import EdgeSelector, FaceSelector
+from mycad.core.viewport_protocol import ViewportData
 from mycad.geom._b123_features import apply_feature
 from mycad.geom._b123_ops import apply_primitive
 from mycad.geom.io import write_step, write_stl
@@ -77,16 +79,32 @@ def assert_b123d_version(raw: str | None = None) -> None:
 assert_b123d_version()
 
 
+# Default mesh extraction tolerances for the viewport port (plan todo 3).
+# Linear = chordal deviation (mm), angular = angular deviation (decimal
+# degrees). Sized for the phase-1 GUI preview scale (OD80-class parts);
+# explicit arguments to ``viewport_data`` always take precedence.
+DEFAULT_MESH_LINEAR_TOLERANCE_MM: float = 0.1
+DEFAULT_MESH_ANGULAR_TOLERANCE_DEG: float = 15.0
+
+
 class BuildKernel:
-    """Geometry kernel facade: applies feature commands to an in-memory part."""
+    """Geometry kernel facade: applies feature commands to an in-memory part.
+
+    Implements the core ``ViewportPort`` protocol structurally: every
+    successful ``apply`` freezes a snapshot of the post-execution part.
+    """
 
     def __init__(self) -> None:
         self._part: Part | None = None
+        self._snapshots: list[tuple[str, Part]] = []
 
     def reset(self) -> None:
-        """Drop the current solid: the kernel returns to empty-geometry state."""
+        """Drop the current solid and the snapshot list: empty-geometry state."""
+        # Snapshot list joins the cleared state: undo/redo rebuild resets the
+        # kernel first, so full replay re-populates snapshots in ordinal order.
 
         self._part = None
+        self._snapshots = []
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
         """Apply one feature command to the in-memory part.
@@ -96,12 +114,47 @@ class BuildKernel:
         boolean_cut) share this entry point. ``mode`` selects the boolean
         behaviour where applicable: ``new`` replaces the current solid,
         ``add`` fuses into it, ``cut`` subtracts from it.
+
+        On success a snapshot is frozen (plan todo 3): a deepcopy of the
+        post-execution part appended as ``("<command id>:<snapshot
+        index>", Part)``. The 0-based index equals the feature_history
+        ordinal whenever the history holds only geometry-affecting
+        commands — metadata and named-group annotations never enter the
+        replay sequence (document.py), and undo/redo rebuild by full
+        replay, so the list is naturally rebuilt in ordinal order.
         """
 
         if command_id in ("feature.box", "feature.cylinder"):
             self._part = apply_primitive(self._part, command_id, params)
         else:
             self._part = apply_feature(self._part, command_id, params)
+        if self._part is not None:
+            self._snapshots.append((f"{command_id}:{len(self._snapshots)}", deepcopy(self._part)))
+
+    def viewport_data(
+        self,
+        linear_tolerance_mm: float = DEFAULT_MESH_LINEAR_TOLERANCE_MM,
+        angular_tolerance_deg: float = DEFAULT_MESH_ANGULAR_TOLERANCE_DEG,
+    ) -> tuple[ViewportData, ...]:
+        """Per-snapshot meshes in feature order, implementing ``ViewportPort``.
+
+        Zero-argument calls keep the protocol call shape valid; the
+        defaulted tolerance parameters let callers request a finer mesh
+        explicitly (the kernel tessellation contract below applies).
+        No caching/invalidation (phase 1, plan todo 3 "Must NOT"):
+        every call re-triangulates every snapshot through
+        ``build_tessellation``, which deepcopies again — the
+        stale-triangulation annotation in query.py applies unchanged.
+        Empty document → empty tuple.
+        """
+
+        return tuple(
+            ViewportData(
+                feature_id=feature_id,
+                mesh=build_tessellation(part, linear_tolerance_mm, angular_tolerance_deg),
+            )
+            for feature_id, part in self._snapshots
+        )
 
     def mass_properties(self) -> MassProperties:
         """Measure the current solid; empty geometry yields zeros, not errors."""
