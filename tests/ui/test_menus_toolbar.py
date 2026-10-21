@@ -29,11 +29,12 @@ def test_seven_menus_in_order(qapp: QApplication) -> None:
 
 def test_file_lifecycle_actions_disabled_except_quit(qapp: QApplication) -> None:
     win = MainWindow()
-    disabled = ("新建", "打开", "保存", "另存为", "导入", "导出（STEP/STL）", "截图")
+    # todo 8 起：新建/打开/保存/另存为/导出转活；导入/截图保持禁（F-DOC-03）。
     texts = {action.text(): action.isEnabled() for action in win.menu_file.actions()}
-    for name in disabled:
+    for name in ("导入", "截图"):
         assert name in texts and texts[name] is False
-    assert texts["退出"] is True
+    for name in ("新建", "打开", "保存", "另存为", "导出（STEP/STL）", "退出"):
+        assert texts[name] is True
 
 
 def test_undo_redo_guarded_without_document(qapp: QApplication) -> None:

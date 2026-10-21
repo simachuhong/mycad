@@ -75,6 +75,16 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
     return AppServices(registry=registry, kernel=kernel, formats=formats, plugins=plugins)
 
 
+def handlers_for(services: AppServices) -> dict[str, CommandHandler]:
+    """Public forwarding entry for ``_handler_map`` (phase-1 UI same-source consumption).
+
+    The private bridge is consumed by the CLI via getattr (with an acknowledgment
+    comment); the UI is prohibited from adding another granting comment, so this
+    opens a public re-export — the assembly source of truth is still only this function.
+    """
+    return _handler_map(services.registry, services.plugins)
+
+
 def _handler_map(registry: CommandRegistry, plugins: PluginManager) -> dict[str, CommandHandler]:
     """Assemble the per-document handler map from the registry and plugins.
 

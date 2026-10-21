@@ -14,12 +14,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, override
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDockWidget,
+    QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -28,10 +30,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mycad import app as mycad_app
+from mycad.app import handlers_for
 from mycad.commands.registry import CommandRegistry
 from mycad.core.bus import CommandBus
-from mycad.core.exceptions import InvalidHistoryError
+from mycad.core.exceptions import InvalidHistoryError, ValidationError
+from mycad.core.persistence import open_document, save_document
 from mycad.core.signals import SignalName
+from mycad.formats.registry import UnknownFormatError
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
@@ -114,6 +120,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MyCAD")
 
         self._services = services
+        self._loaded: LoadedDocument | None = None
+        self._document_path: Path | None = None
         self._bus: CommandBus | None = None
         self.rebuild_hook: Callable[[], None] | None = None
         # Strong references to the per-signal adapters: the signal bus holds
@@ -202,18 +210,15 @@ class MainWindow(QMainWindow):
         self.act_screenshot = self.menu_file.addAction("截图")
         self.act_quit = self.menu_file.addAction("退出")
         self.act_quit.triggered.connect(self.close)
-        # Document lifecycle actions are todo 8; screenshot/import are the
-        # F-DOC-03 disabled tiers. Only 退出 is live at todo 5.
-        for action in (
-            self.act_new,
-            self.act_open,
-            self.act_save,
-            self.act_save_as,
-            self.act_import,
-            self.act_export,
-            self.act_screenshot,
-        ):
+        # Screenshot/import stay disabled (F-DOC-03 tier); new/open/save/
+        # save-as/export go live in todo 8. 退出 was wired at todo 5.
+        for action in (self.act_import, self.act_screenshot):
             action.setEnabled(False)
+        self.act_new.triggered.connect(self._on_new_document)
+        self.act_open.triggered.connect(self._on_open_document)
+        self.act_save.triggered.connect(self._on_save_document)
+        self.act_save_as.triggered.connect(self._on_save_document_as)
+        self.act_export.triggered.connect(self._on_export_document)
 
         self.menu_edit = self.menuBar().addMenu("编辑")
         self.act_undo = self.menu_edit.addAction("撤销")
@@ -334,6 +339,10 @@ class MainWindow(QMainWindow):
     # Document binding and core-signal wiring
     # ------------------------------------------------------------------
 
+    def loaded_document(self) -> LoadedDocument | None:
+        """当前绑定的 LoadedDocument；测试与后续计划确认流的同源读取入口。"""
+        return self._loaded
+
     def bind_document(self, loaded: LoadedDocument) -> None:
         """Bind the app-provided LoadedDocument and subscribe the status fields.
 
@@ -342,6 +351,10 @@ class MainWindow(QMainWindow):
         window holds the strong references until unbind.
         """
         self._bus = loaded.bus
+        # Replacement semantics: dropping our strong adapter list unsubscribes
+        # the previous document—its bus only holds subscribers weakly.
+        self._signal_adapters.clear()
+        self._loaded = loaded
         events = loaded.document.events
         for name in STATUS_SIGNALS:
             adapter = partial(self.handle_core_signal, name)
@@ -419,7 +432,148 @@ class MainWindow(QMainWindow):
         settings.setValue(SETTINGS_KEY_TOOLBAR_LOCKED, self.act_lock_toolbar.isChecked())
         settings.sync()
 
+    # ------------------------------------------------------------------
+    # Document lifecycle (todo 8)
+    # ------------------------------------------------------------------
+
+    def _on_new_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法新建")
+            return
+        if not self._confirm_unsaved_changes():
+            return
+        self._replace_document(mycad_app.new_document(self._services), None)
+
+    def _on_open_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法打开")
+            return
+        if not self._confirm_unsaved_changes():
+            return
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self, "打开存档", "", "MyCAD 存档 (*.mc.json)"
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        try:
+            loaded = open_document(
+                path,
+                registry=self._services.registry,
+                kernel=self._services.kernel,
+                handlers=handlers_for(self._services),
+            )
+        except ValidationError as exc:
+            self._show_error(f"存档格式无效：{str(exc)[:200]}")
+            return
+        except OSError as exc:
+            self._show_error(f"无法读取存档：{exc}")
+            return
+        self._replace_document(loaded, path)
+
+    def _on_save_document(self) -> None:
+        if self._loaded is None:
+            self.status_command.setText("未绑定文档")
+            return
+        if self._document_path is None:
+            self._on_save_document_as()
+            return
+        self._store_document(self._document_path)
+
+    def _on_save_document_as(self) -> None:
+        if self._loaded is None:
+            self.status_command.setText("未绑定文档")
+            return
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            self, "保存存档", "untitled.mc.json", "MyCAD 存档 (*.mc.json)"
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        self._store_document(path)
+        self._document_path = path
+
+    def _store_document(self, path: Path) -> None:
+        if self._loaded is None:
+            return
+        try:
+            save_document(self._loaded.document, path)
+        except OSError as exc:
+            self._show_error(f"写入失败：{exc}")
+            return
+        # persistence 不清脏；保存成功后显式 mark_clean（document.py 约定）。
+        self._loaded.document.mark_clean()
+        self.status_dirty.setText("未修改")
+
+    def _on_export_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法导出")
+            return
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出（STEP/STL）",
+            "",
+            "STEP 文件 (*.step *.stp);;STL 文件 (*.stl)",
+        )
+        if not selected:
+            return
+        target = Path(selected)
+        try:
+            self._services.formats.resolve(target).write(self._services.kernel, target)
+        except UnknownFormatError as exc:
+            self._show_error(f"不支持的导出格式：{exc}")
+            return
+        except OSError as exc:
+            self._show_error(f"写入失败：{exc}")
+            return
+        self.status_command.setText(f"已导出：{target}")
+
+    def _confirm_unsaved_changes(self) -> bool:
+        """True 放行（无文档/未脏/用户放弃），False 一律不动当前文档。"""
+        if self._loaded is None or not self._loaded.document.is_dirty:
+            return True
+        choice = self._ask_save_dialog()
+        if choice == "save":
+            self._on_save_document()
+            return not self._loaded.document.is_dirty
+        return choice == "discard"
+
+    def _ask_save_dialog(self) -> str:
+        """三选弹窗：save/discard/cancel；exec 阻塞至用户选择。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("未保存的修改")
+        box.setText("当前文档有未保存的修改。")
+        save_button = box.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("放弃修改", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_button:
+            return "save"
+        if clicked is cancel_button:
+            return "cancel"
+        return "discard"
+
+    def _show_error(self, message: str) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("错误")
+        box.setText(message)
+        box.show()
+
+    def _replace_document(self, loaded: LoadedDocument, path: Path | None) -> None:
+        """单文档替换语义（A4）：整面重绑 + 重置草稿 + 记住存档路径。"""
+        self._document_path = path
+        self.bind_document(loaded)
+        if self._services is not None:
+            self.plan_draft = PlanDraftController(self._services.registry)
+            if self.right_panel is not None:
+                self.right_panel.bind_draft(self.plan_draft)
+
     @override
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_unsaved_changes():
+            event.ignore()
+            return
         self.store_window_state()
         super().closeEvent(event)
