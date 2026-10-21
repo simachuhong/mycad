@@ -53,24 +53,41 @@ def palette(services: AppServices, qapp: object) -> CommandPalette:
 
 def _all_leaf_ids(palette: CommandPalette) -> list[str]:
     ids: list[str] = []
-    for i in range(palette.tree.topLevelItemCount()):
-        group = palette.tree.topLevelItem(i)
+    tree = palette.tree
+    for i in range(tree.topLevelItemCount()):
+        group = tree.topLevelItem(i)
+        if group is None:
+            continue
         for j in range(group.childCount()):
-            ids.append(str(group.child(j).data(0, Qt.ItemDataRole.UserRole)))
+            child = group.child(j)
+            if child is not None:
+                ids.append(str(child.data(0, Qt.ItemDataRole.UserRole)))
     return ids
+
+
+def _group_titles(palette: CommandPalette) -> set[str]:
+    titles: set[str] = set()
+    tree = palette.tree
+    for i in range(tree.topLevelItemCount()):
+        item = tree.topLevelItem(i)
+        if item is not None:
+            titles.add(item.text(0))
+    return titles
 
 
 def test_all_eight_builtins_appear_grouped(palette: CommandPalette) -> None:
     assert palette.tree.topLevelItemCount() == 2
-    groups = {palette.tree.topLevelItem(i).text(0) for i in range(palette.tree.topLevelItemCount())}
-    assert groups == {"feature", "modify"}
+    assert _group_titles(palette) == {"feature", "modify"}
     ids = _all_leaf_ids(palette)
     assert len(ids) == 8
     assert set(ids) == EIGHT_BUILTIN_IDS
 
 
 def test_leaf_labels_are_zh_with_id(palette: CommandPalette) -> None:
-    box = palette.tree.topLevelItem(0).child(0)
+    root = palette.tree.topLevelItem(0)
+    assert root is not None
+    box = root.child(0)
+    assert box is not None
     assert box.text(0) == "长方体（feature.box）"
 
 
@@ -89,11 +106,14 @@ def test_search_matches_id_and_zh_label(
 
 
 def _leaf_is_hidden(palette: CommandPalette, command_id: str) -> bool:
-    for i in range(palette.tree.topLevelItemCount()):
-        group = palette.tree.topLevelItem(i)
+    tree = palette.tree
+    for i in range(tree.topLevelItemCount()):
+        group = tree.topLevelItem(i)
+        if group is None:
+            continue
         for j in range(group.childCount()):
             child = group.child(j)
-            if child.data(0, Qt.ItemDataRole.UserRole) == command_id:
+            if child is not None and child.data(0, Qt.ItemDataRole.UserRole) == command_id:
                 return child.isHidden()
     raise AssertionError(f"leaf {command_id} not found")
 
@@ -118,7 +138,11 @@ def test_plan_draft_controller_contract(
     assert len(replaced) == 1
 
     changed: list[tuple[int, dict[str, object]]] = []
-    controller.params_changed.connect(lambda index, params: changed.append((index, params)))
+
+    def capture(index: int, params: dict[str, object]) -> None:
+        changed.append((index, params))
+
+    controller.params_changed.connect(capture)
     validated = controller.set_params(step, {"radius": 10.0, "height": 5.0})
     assert validated["radius"] == 10.0
     # PlannedCommand is frozen: the edited step is replaced in the steps
@@ -179,8 +203,7 @@ def test_plugin_command_appears_via_discovery(qapp: object) -> None:
     services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
     palette = CommandPalette(services.registry)
     assert "demo.widget" in _all_leaf_ids(palette)
-    groups = {palette.tree.topLevelItem(i).text(0) for i in range(palette.tree.topLevelItemCount())}
-    assert groups == {"demo", "feature", "modify"}
+    assert _group_titles(palette) == {"demo", "feature", "modify"}
 
 
 def test_refresh_pickups_later_registration(

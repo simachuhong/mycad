@@ -28,11 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mycad.commands.registry import CommandRegistry
 from mycad.core.bus import CommandBus
 from mycad.core.exceptions import InvalidHistoryError
 from mycad.core.signals import SignalName
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.plan_draft import PlanDraftController
+from mycad.ui.right_panel import RightPanel
 
 if TYPE_CHECKING:
     from mycad.app import AppServices
@@ -82,6 +84,20 @@ STATUS_SIGNALS: tuple[SignalName, ...] = (
     "named_group_added",
     "named_group_removed",
     "document_saved",
+)
+
+# 面板刷新订阅集：结构树的数据面（document.commands / named_groups /
+# metadata）被这些信号击中时需要整树重建（todo 7 计划 References 明示
+# named_group 信号驱动树刷新；post_command/geometry_rebuilt/command_amended
+# 同理改变 feature_history 投影）。尾部 document_saved 只动脏标记，不缓存
+# 结构，故不在此列。
+STRUCTURE_REFRESH_SIGNALS: tuple[SignalName, ...] = (
+    "post_command",
+    "geometry_rebuilt",
+    "command_amended",
+    "metadata_changed",
+    "named_group_added",
+    "named_group_removed",
 )
 
 
@@ -155,11 +171,19 @@ class MainWindow(QMainWindow):
         # dock empty.
         self.plan_draft: PlanDraftController | None = None
         self.command_palette: CommandPalette | None = None
+        # Todo 7: with services the right dock hosts the five fixed tabs;
+        # its document binding still happens in ``bind_document``.
+        self.right_panel: RightPanel | None = None
+        self._registry: CommandRegistry | None = None
         if services is not None:
             self.command_palette = CommandPalette(services.registry)
             self.left_dock.setWidget(self.command_palette)
             self.left_dock.setWindowTitle("命令库")
             self.plan_draft = PlanDraftController(services.registry)
+            self._registry = services.registry
+            self.right_panel = RightPanel()
+            self.right_dock.setWidget(self.right_panel)
+            self.right_dock.setWindowTitle("属性")
             self.command_palette.command_activated.connect(self._on_palette_command)
         self.restore_window_state()
 
@@ -323,6 +347,16 @@ class MainWindow(QMainWindow):
             adapter = partial(self.handle_core_signal, name)
             self._signal_adapters.append(adapter)
             events.subscribe(name, adapter)
+        if self.right_panel is not None and self._registry is not None:
+            self.right_panel.bind_document(loaded, self._registry)
+            for name in STRUCTURE_REFRESH_SIGNALS:
+                adapter = partial(self._on_structure_signal, name)
+                self._signal_adapters.append(adapter)
+                events.subscribe(name, adapter)
+
+    def _on_structure_signal(self, name: str, payload: Mapping[str, object] | None) -> None:
+        if self.right_panel is not None:
+            self.right_panel.refresh_structure()
 
     def handle_core_signal(self, name: str, payload: Mapping[str, object]) -> None:
         """Map one signal name + payload onto the five status fields."""
