@@ -218,6 +218,11 @@ class MainWindow(QMainWindow):
             self.bottom_tabs = tabs
             self.bottom_dock.setWidget(tabs)
             self.bottom_dock.setWindowTitle("控制台")
+            # Todo 10: 结构树↔视口双向联动。树→视口由用户点击发信号；
+            # 视口→树走右栏编程式选中，不再二次发 selection 信号，
+            # 因此无回环。
+            self.right_panel.structure_selection_changed.connect(self._on_structure_pick)
+            self.viewport.feature_picked.connect(self._on_viewport_pick)
         self.restore_window_state()
 
     # ------------------------------------------------------------------
@@ -399,6 +404,16 @@ class MainWindow(QMainWindow):
             self.viewport.bind_document(loaded)
         if self.cli_tab is not None:
             self.cli_tab.bind_document(loaded)
+
+    def _on_structure_pick(self, ordinal: int) -> None:
+        """树→视口：用户点击结构叶，视口高亮对应 feature 快照。"""
+        if self.viewport is not None:
+            self.viewport.highlight_feature(ordinal)
+
+    def _on_viewport_pick(self, ordinal: int) -> None:
+        """视口→树：点击拾取到 feature → 树选中同一命令叶；-1 清除。"""
+        if self.right_panel is not None:
+            self.right_panel.select_feature_ordinal(ordinal if ordinal >= 0 else None)
 
     def _on_cli_document_replace(self, loaded: LoadedDocument | None) -> None:
         if loaded is None:

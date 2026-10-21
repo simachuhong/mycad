@@ -27,7 +27,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QLabel,
@@ -246,11 +246,54 @@ class RightPanel(QWidget):
         if not isinstance(ordinal, int) or isinstance(ordinal, bool):
             return
         self.structure_selection_changed.emit(ordinal)
-        if self._document is not None:
-            for command in self._document.commands:
-                if command.ordinal == ordinal:
-                    self.show_command_properties(command.id, command.params)
-                    return
+        self._show_properties_for_ordinal(ordinal)
+
+    def _show_properties_for_ordinal(self, ordinal: int) -> None:
+        if self._document is None:
+            return
+        for command in self._document.commands:
+            if command.ordinal == ordinal:
+                self.show_command_properties(command.id, command.params)
+                return
+
+    def select_feature_ordinal(self, ordinal: int | None) -> None:
+        """视口→树方向（todo 10）：编程式选中对应特征叶并联动属性表。
+
+        与用户点击不同，这里**不**再发 ``structure_selection_changed``——
+        树→视口才是信号方向，视口→树由本方法直接落地，避免回环。
+        ``None`` 清除树选中，属性表回到文档级 metadata 视图。
+        """
+        tree = self._structure_tree
+        if ordinal is None:
+            # Qt 的 setCurrentItem(None) 会清空选中，但 PySide stub 把参数定
+            # 型为非 None；clearSelection 是同一个视觉效果的类型安全写法。
+            tree.clearSelection()
+            tree.setCurrentIndex(QModelIndex())
+            self._show_document_properties()
+            return
+        item = self._find_ordinal_item(tree.invisibleRootItem(), ordinal)
+        if item is not None:
+            tree.setCurrentItem(item)
+            tree.scrollToItem(item)
+        self._show_properties_for_ordinal(ordinal)
+
+    def _find_ordinal_item(
+        self, item: QTreeWidgetItem | None, ordinal: int
+    ) -> QTreeWidgetItem | None:
+        """递归找 ORDINAL_ROLE == ordinal 的叶节点。"""
+        if item is None:
+            return None
+        for index in range(item.childCount()):
+            child = item.child(index)
+            if child is None:  # Qt stubs type child(index) as QTreeWidgetItem | None
+                continue
+            data = child.data(0, ORDINAL_ROLE)
+            if isinstance(data, int) and not isinstance(data, bool) and data == ordinal:
+                return child
+            found = self._find_ordinal_item(child, ordinal)
+            if found is not None:
+                return found
+        return None
 
     def show_command_properties(self, command_id: str, params: Mapping[str, object]) -> None:
         spec = self._registry.get(command_id) if self._registry is not None else None

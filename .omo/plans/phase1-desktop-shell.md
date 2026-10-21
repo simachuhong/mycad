@@ -205,7 +205,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): pyqtgraph mesh viewport with shading/wireframe and fit
   Recommended task executor category: deep-low
 
-- [ ] 10. 颜色编码拾取 + 结构树↔视口双向高亮
+- [x] 10. 颜色编码拾取 + 结构树↔视口双向高亮
   What to do / Must NOT do: 拾取（A9）：按 viewport_data() 快照条目操作——每 ordinal 快照唯一编码色（feature_id→颜色映射表，稳定 hash 生成；**快照语义注意：破坏性命令（boolean_cut）高亮的是其执行后状态，验收按此断言**）；点击时离屏渲染 pass 用编码色画全部 mesh → glReadPixels 反查点击位置 → feature_id → 选中；选中反馈：该 feature mesh 材质高亮（emissive/亮度）+ 结构树对应节点选中（接 todo 7 selectionChanged）；反向：树节点点击 → 视口高亮同一 feature（必要时 fit 到该特征）。tests/ui/test_picking.py（offscreen）：两 feature 场景，模拟点击（直接调拾取函数传已知颜色坐标）→ 选中正确树节点；树选→viewport 高亮标志断言；点空白→无选中。Must NOT：不做框选/多选；不做编辑 gizmo/handle。
   Closes: GAP-4（交互半）
   Parallelization: Wave 3 | Blocked by: 7,9 | Blocks: 13
