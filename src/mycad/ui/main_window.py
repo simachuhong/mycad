@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QStatusBar,
+    QTabWidget,
     QToolBar,
     QWidget,
 )
@@ -38,6 +39,7 @@ from mycad.core.exceptions import InvalidHistoryError, ValidationError
 from mycad.core.persistence import open_document, save_document
 from mycad.core.signals import SignalName
 from mycad.formats.registry import UnknownFormatError
+from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
@@ -181,6 +183,8 @@ class MainWindow(QMainWindow):
         # dock empty.
         self.plan_draft: PlanDraftController | None = None
         self.command_palette: CommandPalette | None = None
+        self.bottom_tabs: QTabWidget | None = None
+        self.cli_tab: CliTab | None = None
         # Todo 7: with services the right dock hosts the five fixed tabs;
         # its document binding still happens in ``bind_document``.
         self.right_panel: RightPanel | None = None
@@ -205,6 +209,15 @@ class MainWindow(QMainWindow):
             self.act_shaded_wireframe.toggled.connect(self._on_toggle_shading)
             self.act_fit_view.setEnabled(True)
             self.act_fit_view.triggered.connect(self.viewport.fit_view)
+            # Todo 11: bottom dock hosts the same-source CLI tab + chat placeholder.
+            tabs = QTabWidget()
+            tabs.setObjectName("bottomTabs")
+            self.cli_tab = CliTab(services=services, on_replace_doc=self._on_cli_document_replace)
+            tabs.addTab(self.cli_tab, "CLI")
+            tabs.addTab(QWidget(), "Chat")
+            self.bottom_tabs = tabs
+            self.bottom_dock.setWidget(tabs)
+            self.bottom_dock.setWindowTitle("控制台")
         self.restore_window_state()
 
     # ------------------------------------------------------------------
@@ -384,6 +397,13 @@ class MainWindow(QMainWindow):
                 events.subscribe(name, adapter)
         if self.viewport is not None:
             self.viewport.bind_document(loaded)
+        if self.cli_tab is not None:
+            self.cli_tab.bind_document(loaded)
+
+    def _on_cli_document_replace(self, loaded: LoadedDocument | None) -> None:
+        if loaded is None:
+            return
+        self._replace_document(loaded, None)
 
     def _on_structure_signal(self, name: str, payload: Mapping[str, object] | None) -> None:
         if self.right_panel is not None:

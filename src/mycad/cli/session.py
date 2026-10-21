@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from mycad.core.handlers import CommandHandler
     from mycad.plugins.manager import PluginManager
 
-__all__ = ["HELP_TEXT", "CliSession"]
+__all__ = ["HELP_TEXT", "QUIT_SENTINEL", "CliSession", "execute_line"]
 
 HELP_TEXT = """\
 Usage: mycad <subcommand> [args]
@@ -69,6 +69,9 @@ _assemble_handlers = cast(
 #: Sentinel return code for ``quit``/``exit`` — an internal stop signal handed
 #: to the loop drivers, never a process exit code (contract codes are 0/1/2).
 _QUIT_REQUESTED = -1
+
+#: GUI-facing alias so the CLI tab can stop on the same sentinel.
+QUIT_SENTINEL = _QUIT_REQUESTED
 
 
 def _print_rollback(exc: BaseException, base: int) -> None:
@@ -128,11 +131,22 @@ def _builtin_syntax_error(head: str, rest: str) -> str | None:
 class CliSession:
     """One document session driven by text lines (REPL or script file)."""
 
-    def __init__(self, services: AppServices) -> None:
+    def __init__(
+        self,
+        services: AppServices,
+        *,
+        doc: LoadedDocument | None = None,
+        on_replace_doc: Callable[[LoadedDocument | None], None] | None = None,
+        messages: list[str] | None = None,
+    ) -> None:
         self._services = services
-        self._doc: LoadedDocument | None = None
+        self._doc: LoadedDocument | None = doc
         self._archive_path: Path | None = None
         self._batch: list[tuple[str, dict[str, object]]] | None = None
+        self._on_replace_doc: Callable[[LoadedDocument | None], None] | None = on_replace_doc
+        # Message sink: None keeps the headless print behaviour; a list
+        # collects the same strings for the GUI tab (pure ``execute_line``).
+        self._sink: list[str] | None = messages
 
     def run_repl(self) -> int:
         """Read lines from stdin until quit/exit/EOF; errors never stop the loop.
@@ -204,10 +218,10 @@ class CliSession:
             for target in (outputs.step, outputs.stl):
                 if target is not None:
                     services.formats.resolve(target).write(services.kernel, target)
-                    print(target)
+                    self._say(str(target))
             if outputs.archive is not None:
                 save_document(loaded.document, outputs.archive)
-                print(outputs.archive)
+                self._say(str(outputs.archive))
         except (MycadError, OSError) as exc:
             _print_rollback(exc, 0)
             self._emit_error(exc)
@@ -225,7 +239,7 @@ class CliSession:
             except MycadError as exc:
                 self._emit_error(exc)
                 return 1
-            print(f"valid: plan {count} step(s)")
+            self._say(f"valid: plan {count} step(s)")
             return 0
         if path.suffix == ".txt":
             return self._validate_script(path)
@@ -271,7 +285,7 @@ class CliSession:
         if batch is not None:
             self._emit_error("unterminated batch")
             return 2
-        print(f"valid: script {count} step(s)")
+        self._say(f"valid: script {count} step(s)")
         return 0
 
     def execute_line(self, line: str) -> int:
@@ -319,17 +333,36 @@ class CliSession:
             return 1
         return 0
 
+    def _replace_doc(self, loaded: LoadedDocument) -> None:
+        """Single replacement point: the session keeps it, and any injected
+        GUI callback (todo 8 lifecycle packing on the UI side) is notified."""
+        self._doc = loaded
+        if self._on_replace_doc is not None:
+            self._on_replace_doc(loaded)
+
     def _require_doc(self) -> LoadedDocument:
         """Lazily create the document on first modeling use (REPL semantics)."""
         if self._doc is None:
-            self._doc = new_document(self._services)
+            self._replace_doc(new_document(self._services))
+        assert self._doc is not None  # _replace_doc always leaves it bound
         return self._doc
 
+    def _say(self, message: str) -> None:
+        """Stdout line — collected by a sink, printed headless otherwise."""
+        if self._sink is not None:
+            self._sink.append(message)
+        else:
+            print(message)
+
     def _emit_error(self, message: object) -> None:
-        """Print exactly one stderr line (first line of the message)."""
+        """Exactly one stderr line (first line of the message) — or its sink
+        equivalent so the GUI tab receives the same content."""
         first = str(message).split("\n", 1)[0]
         if first:
-            print(first, file=sys.stderr)
+            if self._sink is not None:
+                self._sink.append(first)
+            else:
+                print(first, file=sys.stderr)
 
     def _finish(self, code: int) -> int:
         """Shared loop-end gate: an unterminated batch is a usage error (2)."""
@@ -346,9 +379,9 @@ class CliSession:
         if rest:
             self._emit_error("new takes no arguments")
             return 2
-        self._doc = new_document(self._services)
+        self._replace_doc(new_document(self._services))
         self._archive_path = None
-        print("new document")
+        self._say("new document")
         return 0
 
     def _cmd_open(self, rest: str) -> int:
@@ -365,7 +398,7 @@ class CliSession:
             return 2
         handlers = _assemble_handlers(self._services.registry, self._services.plugins)
         try:
-            self._doc = open_document(
+            replaced = open_document(
                 path,
                 registry=self._services.registry,
                 kernel=self._services.kernel,
@@ -374,8 +407,9 @@ class CliSession:
         except MycadError as exc:
             self._emit_error(exc)
             return 1
+        self._replace_doc(replaced)
         self._archive_path = path
-        print(f"opened {path}")
+        self._say(f"opened {path}")
         return 0
 
     def _cmd_save(self, rest: str) -> int:
@@ -395,7 +429,7 @@ class CliSession:
             self._emit_error(exc)
             return 1
         self._archive_path = path
-        print(path)
+        self._say(str(path))
         return 0
 
     def _cmd_export(self, rest: str) -> int:
@@ -409,7 +443,7 @@ class CliSession:
         except (MycadError, OSError) as exc:
             self._emit_error(exc)
             return 1
-        print(path)
+        self._say(str(path))
         return 0
 
     def _cmd_meta(self, rest: str) -> int:
@@ -425,7 +459,7 @@ class CliSession:
         except MycadError as exc:
             self._emit_error(exc)
             return 1
-        print(f"{key}={value}")
+        self._say(f"{key}={value}")
         return 0
 
     def _cmd_undo(self, rest: str) -> int:
@@ -472,7 +506,7 @@ class CliSession:
                 if not command.amendments:
                     del entry["amendments"]
                 entries.append(entry)
-            print(json.dumps({"commands": entries}, ensure_ascii=False))
+            self._say(json.dumps({"commands": entries}, ensure_ascii=False))
             return 0
         if rest:
             self._emit_error("usage: history [--json]")
@@ -486,7 +520,7 @@ class CliSession:
                 if command.confirmed_by is not None
                 else ""
             )
-            print(f"{command.ordinal}: {command.id} {line}{actor}")
+            self._say(f"{command.ordinal}: {command.id} {line}{actor}")
         return 0
 
     def list_commands(self, as_json: bool) -> int:
@@ -502,10 +536,10 @@ class CliSession:
                     for row in rows
                 ]
             }
-            print(json.dumps(payload, ensure_ascii=False))
+            self._say(json.dumps(payload, ensure_ascii=False))
         else:
             for verb, command_id, summary, _zh in rows:
-                print(f"{verb}\t{command_id}\t{summary}")
+                self._say(f"{verb}\t{command_id}\t{summary}")
         return 0
 
     def list_plugins(self) -> int:
@@ -513,19 +547,19 @@ class CliSession:
         for plugin in self._services.plugins.loaded():
             manifest = plugin.manifest
             assert manifest is not None  # loaded() guarantees a parsed manifest
-            print(
+            self._say(
                 f"loaded: {manifest.id} v{manifest.version} api={manifest.api_version} "
                 f"commands={len(plugin.commands)} formats={len(plugin.formats)}"
             )
         for name, reason in self._services.plugins.skipped():
-            print(f"skipped: {name} reason={reason}")
+            self._say(f"skipped: {name} reason={reason}")
         return 0
 
     def _cmd_help(self, rest: str) -> int:
         if rest:
             self._emit_error("help takes no arguments")
             return 2
-        sys.stdout.write(HELP_TEXT)
+        self._say(HELP_TEXT)
         return 0
 
     def _cmd_quit(self, rest: str) -> int:
@@ -593,3 +627,22 @@ class CliSession:
         "quit": _cmd_quit,
         "exit": _cmd_quit,
     }
+
+
+def execute_line(
+    line: str,
+    *,
+    loaded: LoadedDocument | None,
+    services: AppServices,
+    on_replace_doc: Callable[[LoadedDocument | None], None],
+) -> tuple[int, list[str]]:
+    """Pure single-line dispatch (todo 11): parse/feedback from CliSession
+    verbatim, messages returned instead of printed. Headless print behaviour
+    converges to the REPL/script drivers, which keep ``CliSession`` directly
+    (cross-line batch state). The GUI tab embeds no extra parser: this is the
+    same dispatch surface, with document ownership left to the caller —
+    ``new``/``open`` replacements route through ``on_replace_doc``."""
+    collected: list[str] = []
+    session = CliSession(services, doc=loaded, on_replace_doc=on_replace_doc, messages=collected)
+    rc = session.execute_line(line)
+    return rc, collected

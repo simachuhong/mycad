@@ -195,7 +195,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): document lifecycle with unsaved-change guard
   Recommended task executor category: unspecified-high
 
-- [ ] 9. 视口渲染（pyqtgraph.opengl）
+- [x] 9. 视口渲染（pyqtgraph.opengl）
   What to do / Must NOT do: src/mycad/ui/viewport.py：GLViewWidget 装 viewport_data()→**场景仅渲染最终快照**（一条整体 MeshData 着色 + LineSegment 边，三角形边去重得线框；中间快照条目供 todo 10 拾取/树联动，不上屏）；交互：鼠标旋转/平移/滚轮缩放（GLViewWidget 内置）+ `fit_view()`（算整体 bbox 设 camera distance/center）；着色/线框切换动作挂 todo 5 视图菜单；刷新订阅=致 todo 8 同一**并集信号集**（post_command/geometry_rebuilt/command_amended/metadata_changed/named_group±：单命令与批执行每步只发 pre/post_command（bus.py:101/115，批成功路径无 _rebuild bus.py:196-235 逐行读证）、undo/redo/重放/回滚恢复只发 geometry_rebuilt（bus.py:165）——只订单一族会漏），订阅者统一收敛到单一 **_schedule_refresh()（QTimer.singleShot(0) 合帧**：同一事件循环轮内多信号只触发一次重建=批执行循环末渲染最终快照，持守 C3）→ 重取 kernel.viewport_data() 重建（同步，A5）；数据获取经 AppServices.kernel（BuildKernel 已实现 ViewportPort）。**平台兜底阶梯（钉死不留判断）**：Linux apt 库后 GL 仍不可用 → xvfb-run 跑 GL 测试（apt 可装；ci.yml 允许编辑——冻结的只是 T1 三 job matrix 边界）；Windows → GL 测试逐测试覆写 QT_QPA_PLATFORM 为 native（conftest 的 setdefault 恰好允许；注：GitHub Actions windows runner 上 native GL 稳定性未证，若 CI 不稳则该子集降级为本地证据+CI 显式 skip 入 F4 呈报——兜底阶梯由此闭环）；残余平台差异=显式 skip 记录进证据并在 F4 呈报，绝不静默。**类型策略**：pyqtgraph/PyOpenGL 无官方 stub → 手写最小 typings/pyqtgraph/pyqtgraph.pyi 与 typings/OpenGL/…（仅覆盖所用 API），pyrightconfig.json 增 "stubPath": "typings" 附理由注释（镜像 pyproject E501/N818 carve-out 先例）；显式拒绝 executionEnvironment 按目录放宽；stub 是声明非抑制——零抑制扫描保持绿。tests/ui/test_viewport.py（offscreen）：喂法兰序列→数据条数=特征数、上屏 item 数=1（仅最终快照）；fit_view 后 camera 参数变化断言；线框切换状态翻转；空文档→零 item。Must NOT：不在 ui import build123d/OCP；core 不动；不做拾取（todo 10）；不做抗锯齿/材质精细调（工业灰蓝底色即可，初稿 §9）。
   Closes: GAP-4（渲染半）
   Parallelization: Wave 3 | Blocked by: 2,3,4 | Blocks: 10,13
@@ -215,7 +215,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): color-coded picking with tree<->viewport bidirectional highlight
   Recommended task executor category: deep-low
 
-- [ ] 11. 底栏 CLI Tab（与 session 同源）
+- [x] 11. 底栏 CLI Tab（与 session 同源）
   What to do / Must NOT do: 底栏 QTabWidget：「CLI」页 = QPlainTextEdit 输出 + QLineEdit 输入，命令派发复用 src/mycad/cli/session.py 的解析与反馈文案（同 registry/bus/grammar，不复制实现——**扩展 session.execute_line（session.py:276-295 既有单行入口）为纯函数 execute_line(line, *, loaded: LoadedDocument | None, services, on_replace_doc: Callable[[LoadedDocument | None], None]) -> tuple[int, list[str]]**（双审收敛修批）：返回 (rc, messages)，messages 替代 print（print 收敛到 headless CLI 边缘薄壳，GUI Tab 消费同一字符串）；on_replace_doc=换文档回调由调用方注入：GUI Tab 传入 todo 8 生命周期打包（app.new_document/open_document、脏态复位、树/视口/草稿刷新）——session 既有 _cmd_new/_cmd_open（session.py:344-378，静态读证直接替换 self._doc）纯函数化后一律改经该回调；GUI Tab 自身持有 LoadedDocument（不借 session._doc——文档所有权单一定义：headless 时 session 自持、GUI 时 UI 持有）；headless 路径传内部回调保持现行为；改 session 需保 CLI 既有测试全绿）；「Chat」页容器本 todo 先占位（todo 12 填卡片流）。F-AGT-05 同源断言：GUI CLI 执行命令的输出与 headless session 对同一命令的输出一致（白名单差异仅前缀提示符）。tests/ui/test_cli_tab.py。Must NOT：不做自然语言；不另写命令解析器；不绕过确认红线（确认类命令在 GUI 同样走确认——与 session 行为一致即可）。
   Closes: GAP-5（底栏半）、GAP-7（同源半）（双审收敛：on_replace_doc 接 todo 8 生命周期 → Blocked by 增 8）
   Parallelization: Wave 3 | Blocked by: 4,8 | Blocks: 13

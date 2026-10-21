@@ -100,6 +100,12 @@ class GLViewport(GLViewWidget):
         self._snapshot_count = 0
         self._refresh_pending = False
         self._disposed = False
+        # Parented so a pending rebuild dies with the widget: an orphaned
+        # singleShot outlives the C++ object and would call refresh() on
+        # deleted shiboken memory.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self._run_scheduled_refresh)
         # The signal bus holds subscribers weakly (core/signals.py), so the
         # per-signal adapters need strong owners until the next bind/close.
         self._adapters: list[Callable[[Mapping[str, object]], None]] = []
@@ -127,17 +133,24 @@ class GLViewport(GLViewWidget):
         if self._refresh_pending:
             return
         self._refresh_pending = True
-        QTimer.singleShot(0, self._run_scheduled_refresh)
+        self._refresh_timer.start()
 
     def _run_scheduled_refresh(self) -> None:
         self._refresh_pending = False
         if self._disposed:
             return
-        self.refresh()
+        try:
+            self.refresh()
+        except RuntimeError:
+            # shiboken: a wrapper can outlive its C++ deletion when teardown
+            # bypasses closeEvent; a post-mortem rebuild stays inert instead
+            # of poisoning the next test's event loop.
+            return
 
     def dispose(self) -> None:
         """Drop the subscriptions and stop pending rebuilds on window close."""
         self._disposed = True
+        self._refresh_timer.stop()
         self._adapters.clear()
 
     def refresh(self) -> None:
