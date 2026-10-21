@@ -41,6 +41,7 @@ from mycad.core.signals import SignalName
 from mycad.formats.registry import UnknownFormatError
 from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
+from mycad.ui.plan_cards import PlanCards
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
 from mycad.ui.viewport import GLViewport
@@ -185,6 +186,7 @@ class MainWindow(QMainWindow):
         self.command_palette: CommandPalette | None = None
         self.bottom_tabs: QTabWidget | None = None
         self.cli_tab: CliTab | None = None
+        self.plan_cards: PlanCards | None = None
         # Todo 7: with services the right dock hosts the five fixed tabs;
         # its document binding still happens in ``bind_document``.
         self.right_panel: RightPanel | None = None
@@ -214,9 +216,13 @@ class MainWindow(QMainWindow):
             tabs.setObjectName("bottomTabs")
             self.cli_tab = CliTab(services=services, on_replace_doc=self._on_cli_document_replace)
             tabs.addTab(self.cli_tab, "CLI")
-            tabs.addTab(QWidget(), "Chat")
+            # Todo 12: the Chat page is the plan-card confirmation stream.
+            self.plan_cards = PlanCards()
+            tabs.addTab(self.plan_cards, "Chat")
             self.bottom_tabs = tabs
             self.bottom_dock.setWidget(tabs)
+            assert self.plan_cards is not None  # created just above
+            self.plan_cards.bind_draft(self.plan_draft)
             self.bottom_dock.setWindowTitle("控制台")
             # Todo 10: 结构树↔视口双向联动。树→视口由用户点击发信号；
             # 视口→树走右栏编程式选中，不再二次发 selection 信号，
@@ -332,10 +338,15 @@ class MainWindow(QMainWindow):
         if self.plan_draft is None:
             return
         try:
-            self.plan_draft.new_draft(command_id)
+            step = self.plan_draft.new_draft(command_id)
         except ValueError as err:
             self.status_command.setText(str(err))
         else:
+            # Todo 12: 用 schema 默认值起底参数（validate_params 只补缺省键）。
+            try:
+                self.plan_draft.set_params(step, {})
+            except ValidationError as err:
+                self.status_command.setText(f"{command_id} 参数默认值失败：{err}")
             self.status_command.setText(f"草稿：{command_id}")
 
     def _on_toggle_shading(self, shaded: bool) -> None:
@@ -396,6 +407,8 @@ class MainWindow(QMainWindow):
             events.subscribe(name, adapter)
         if self.right_panel is not None and self._registry is not None:
             self.right_panel.bind_document(loaded, self._registry)
+        if self.plan_cards is not None:
+            self.plan_cards.bind_document(loaded)
             for name in STRUCTURE_REFRESH_SIGNALS:
                 adapter = partial(self._on_structure_signal, name)
                 self._signal_adapters.append(adapter)
@@ -622,6 +635,8 @@ class MainWindow(QMainWindow):
             self.plan_draft = PlanDraftController(self._services.registry)
             if self.right_panel is not None:
                 self.right_panel.bind_draft(self.plan_draft)
+            if self.plan_cards is not None:
+                self.plan_cards.bind_draft(self.plan_draft)
 
     @override
     def closeEvent(self, event: QCloseEvent) -> None:

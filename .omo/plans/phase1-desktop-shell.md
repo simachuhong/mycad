@@ -225,7 +225,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): CLI tab reusing session dispatch for parity
   Recommended task executor category: unspecified-low
 
-- [ ] 12. 计划卡片 + 六态确认管道
+- [x] 12. 计划卡片 + 六态确认管道
   What to do / Must NOT do: Chat 页=计划卡片流（初稿 §7 交互样例）：左栏双击（todo 6 信号）→ 新建 Plan 草稿（core.plan.Plan）→ 渲染卡片（命令名/参数表/影响对象预览=spec 目标参数）序列；三键：「编辑」→参数对话框（与右栏「选项」Tab 经**同一 PlanDraftController**（todo 6 契约、todo 7 编辑组件）双向同步）；「取消」→plan.cancel()；「执行」→plan.confirm(actor="gui")（非空 actor）→ **bus.execute_batch(plan) 一次调用整批**（Bus 自带快照/mark_executing/mark_done/mark_failed；失败抛 BatchRollbackError，UI 捕获标红卡片，回滚 ordinal 列表取 exc.executed_ids——镜像 cli/session.py:73-77 _print_rollback 与 :548-577 _cmd_end_batch 既有用法）→成功卡片转 done、失败整批回滚+卡片标红+错误文案可见。影响对象=PlannedCommand.affected_object 字面值（AFFECTED_OBJECTS 表，document.py:59-68）——不是 spec 目标参数。草稿编辑=draft 态内改 steps（经 PlanDraftController）；执行后修订（command_amended 信号路径）阶段 1 显式无 UI 入口（属性 Tab 只读），阶段 2 再议。tests/ui/test_plan_confirm.py：六态真实序列往返（draft→confirmed→executing→done/failed/cancelled，core/plan.py:19-31）；非法转换 UI 不可触发（按钮态断言）；回滚场景：两命令计划其一必失败（如 boolean_cut 空目标）→ execute_batch 抛 BatchRollbackError、history 长度不变（零新增）、内核 mass_properties 与批前一致（恢复经 _rebuild，bus.py:224——oracle N10）+卡片标红；正常计划→done+history 恰 2 条；选项 Tab 改参数→卡片参数同步显示。Must NOT：不做 NL 生成；不绕过 plan.confirm 直提 bus；不实现网络 confirmation_token（阶段 2 MCP 落点，本阶段 actor="gui" 即产品侧交互雏形）；不做多计划并行（一次一张活动卡片）。
   Closes: GAP-5（确认半）
   Parallelization: Wave 3 | Blocked by: 6,7 | Blocks: 13
