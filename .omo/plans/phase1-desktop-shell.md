@@ -265,7 +265,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | ci(platform): t2 aarch64 qemu regression evidence and rerunnable script
   Recommended task executor category: unspecified-high
 
-- [ ] 16. T3 龙芯 spike → go/no-go 决议 + ADR-006 更新
+- [x] 16. T3 龙芯 spike → go/no-go 决议 + ADR-006 更新
   What to do / Must NOT do: 龙芯 loongarch64 探测：pypi.loongnix.cn 镜像上 build123d/cadquery-ocp 系（novtk 变体是否存在）可得性探测 + 若可得跑最小 flange 建模脚本；不可得则源构建 OCCT/OCP 时间盒评估（文献+社区证据，不实际编译超时间盒）；PySide6 loongarch64 wheel 可得性一并记录。产出决议：go=阶段 2 纳入路线/no=降级战略路线并记理由；更新 docs/adr/ADR-006-platform-tiering.md（决议段+日期+证据指针）；**改 ADR 前先读 tests/test_adr_docs.py 的断言并同步**。证据 .omo/evidence/t3-loongson-spike-phase1-desktop-shell.md（探测命令、输出、决议理由）。Must NOT：不实际购硬件；不把 loong 加进 CI（FORBIDDEN_CI_TOKENS 红线）；不在本 todo 尝试源构建超时间盒。
   Closes: GAP-8（T3 半）
   Parallelization: Wave 4 | Blocked by: 1 | Blocks: —（可提前启动）
