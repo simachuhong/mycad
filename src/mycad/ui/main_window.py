@@ -41,6 +41,7 @@ from mycad.formats.registry import UnknownFormatError
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
+from mycad.ui.viewport import GLViewport
 
 if TYPE_CHECKING:
     from mycad.app import AppServices
@@ -124,13 +125,14 @@ class MainWindow(QMainWindow):
         self._document_path: Path | None = None
         self._bus: CommandBus | None = None
         self.rebuild_hook: Callable[[], None] | None = None
+        self.viewport: GLViewport | None = None
         # Strong references to the per-signal adapters: the signal bus holds
         # subscribers weakly, so anything not anchored here would die
         # immediately at subscribe time.
         self._signal_adapters: list[Callable[[Mapping[str, object]], None]] = []
 
-        # Center: real viewport replaces this host in todo 9; five-region
-        # layout stores an empty host widget (placeholder).
+        # Center: services build the real GL viewport (todo 9); the bare
+        # shell keeps the placeholder host widget with the same name.
         center = QWidget()
         center.setObjectName(CENTER_OBJECT_NAME)
         self.setCentralWidget(center)
@@ -193,6 +195,16 @@ class MainWindow(QMainWindow):
             self.right_dock.setWidget(self.right_panel)
             self.right_dock.setWindowTitle("属性")
             self.command_palette.command_activated.connect(self._on_palette_command)
+            # Todo 9: real viewport in the centre; snapshot refresh + 视图 actions.
+            self.viewport = GLViewport(viewport_port=services.kernel)
+            self.viewport.setObjectName(CENTER_OBJECT_NAME)
+            self.setCentralWidget(self.viewport)
+            self.rebuild_hook = self.viewport.refresh
+            self.act_shaded_wireframe.setEnabled(True)
+            self.act_shaded_wireframe.setChecked(True)
+            self.act_shaded_wireframe.toggled.connect(self._on_toggle_shading)
+            self.act_fit_view.setEnabled(True)
+            self.act_fit_view.triggered.connect(self.viewport.fit_view)
         self.restore_window_state()
 
     # ------------------------------------------------------------------
@@ -308,6 +320,10 @@ class MainWindow(QMainWindow):
         else:
             self.status_command.setText(f"草稿：{command_id}")
 
+    def _on_toggle_shading(self, shaded: bool) -> None:
+        if self.viewport is not None:
+            self.viewport.set_shaded(shaded)
+
     def _show_plan_cards(self) -> None:
         self.bottom_dock.show()
         self.bottom_dock.raise_()
@@ -366,6 +382,8 @@ class MainWindow(QMainWindow):
                 adapter = partial(self._on_structure_signal, name)
                 self._signal_adapters.append(adapter)
                 events.subscribe(name, adapter)
+        if self.viewport is not None:
+            self.viewport.bind_document(loaded)
 
     def _on_structure_signal(self, name: str, payload: Mapping[str, object] | None) -> None:
         if self.right_panel is not None:
@@ -575,5 +593,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_changes():
             event.ignore()
             return
+        if self.viewport is not None:
+            self.viewport.dispose()
         self.store_window_state()
         super().closeEvent(event)

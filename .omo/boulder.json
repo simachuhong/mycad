@@ -1,24 +1,40 @@
 {
   "schema_version": 2,
-  "active_work_id": "phase0-mvp",
+  "active_work_id": "phase1-desktop-shell",
   "works": {
     "phase0-mvp": {
       "work_id": "phase0-mvp",
       "active_plan": ".omo/plans/phase0-mvp.md",
       "plan_name": "phase0-mvp",
-      "session_ids": ["codex:sisyphus-main"],
+      "session_ids": [
+        "codex:sisyphus-main"
+      ],
       "status": "completed",
       "worktree_path": null,
       "started_at": "2026-10-04T14:40:40.000Z",
       "ended_at": "2026-10-11T18:55:44.992Z",
       "elapsed_ms": 620104992,
       "updated_at": "2026-10-11T18:55:44.992Z"
+    },
+    "phase1-desktop-shell": {
+      "work_id": "phase1-desktop-shell",
+      "active_plan": ".omo/plans/phase1-desktop-shell.md",
+      "plan_name": "phase1-desktop-shell",
+      "session_ids": [
+        "codex:sisyphus-main"
+      ],
+      "status": "active",
+      "worktree_path": null,
+      "started_at": "2026-10-19T00:00:00.000Z",
+      "updated_at": "2026-10-21T06:10:24.870Z"
     }
   },
-  "active_plan": ".omo/plans/phase0-mvp.md",
-  "plan_name": "phase0-mvp",
-  "status": "completed",
-  "session_ids": ["codex:sisyphus-main"],
+  "active_plan": ".omo/plans/phase1-desktop-shell.md",
+  "plan_name": "phase1-desktop-shell",
+  "status": "active",
+  "session_ids": [
+    "codex:sisyphus-main"
+  ],
   "session_origins": {},
   "worktree_path": null,
   "task_sessions": {},

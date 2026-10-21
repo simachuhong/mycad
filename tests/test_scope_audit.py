@@ -63,8 +63,14 @@ FORBIDDEN_IMPORT_ROOTS: frozenset[str] = frozenset(
     }
 )
 
-#: CAD backends: allowed in the geom adapter package and nowhere else.
+#: CAD backends: build123d/OCP stay in the geom adapter package; numpy
+#: additionally feeds the viewport mesh conversion (pyqtgraph::MeshData
+#: needs ndarrays at paint time) inside src/mycad/ui/ — the phase-1
+#: desktop-shell carve-out, per the phase-1 plan (todo 1 / todo 9).
 BACKEND_ROOTS: frozenset[str] = frozenset({"build123d", "OCP", "numpy"})
+BACKEND_ALLOWED_PREFIXES: tuple[str, ...] = ("src/mycad/geom/", "src/mycad/ui/")
+# the geom-only confinement, narrowed to the pure-CAD backend members.
+BACKEND_GEO_ONLY_ROOTS: frozenset[str] = frozenset({"build123d", "OCP"})
 BACKEND_ALLOWED_PREFIX = "src/mycad/geom/"
 
 #: UI stack: allowed only inside the src/mycad/ui/ carve-out. The roots
@@ -211,7 +217,7 @@ def scan_forbidden_imports(root: Path, repo: Path) -> list[str]:
             if (
                 module.lower() in lowered
                 or module in BACKEND_ROOTS
-                and not rel.startswith(BACKEND_ALLOWED_PREFIX)
+                and not rel.startswith(BACKEND_ALLOWED_PREFIXES)
             ):
                 violations.append(f"{rel}:{lineno}:{module}")
     return violations
@@ -239,7 +245,9 @@ def test_backend_imports_are_confined_to_geom() -> None:
     while the reverse self-proof only guards one of them.
     """
     offenders = [
-        v for v in scan_forbidden_imports(SRC, REPO) if v.rsplit(":", 1)[1] in BACKEND_ROOTS
+        v
+        for v in scan_forbidden_imports(SRC, REPO)
+        if v.rsplit(":", 1)[1] in BACKEND_GEO_ONLY_ROOTS
     ]
     assert offenders == []
 

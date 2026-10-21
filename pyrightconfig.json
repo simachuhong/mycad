@@ -1,6 +1,12 @@
 {
-  "include": ["src", "tests"],
+  "include": [
+    "src",
+    "tests",
+    "typings",
+    "typings"
+  ],
   "typeCheckingMode": "strict",
   "venvPath": ".",
-  "venv": ".venv"
+  "venv": ".venv",
+  "stubPath": "typings"
 }

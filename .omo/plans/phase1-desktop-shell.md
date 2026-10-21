@@ -115,7 +115,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 1. 依赖引入与守卫/合规迁移（PySide6 进主依赖 + M1/layering/NOTICE 一次到位）
+- [x] 1. 依赖引入与守卫/合规迁移（PySide6 进主依赖 + M1/layering/NOTICE 一次到位）
   What to do / Must NOT do: pyproject.toml [project.dependencies] 增 PySide6 与 pyqtgraph（版本由 uv 解析并锁入 uv.lock；**不动 build123d/cadquery-ocp-novtk pin**）；dev 组增 pytest-qt；改写 pyproject:12-14「T1 forbids VTK/PySide6/CadQuery」注释为阶段 1 现实（PySide6 解禁仅限 src/mycad/ui/，VTK 经 OCP 仍禁，CadQuery 仍禁）。守卫迁移（动手前先通读 tests/test_scope_audit.py 与 tests/test_layering.py 全文）：①import 扫描是 AST 级、仅扫 src/**/*.py（pyproject/NOTICE/docs/.github/tests 本不在扫描面，无需豁免）——a) FORBIDDEN_DISTRIBUTIONS（:73-92；test_runtime_closure_clean :422-438 是闭包级断言）移除 pyside6+shiboken6 两项（保留 pyside2/pyqt5/pyqt6/vtk；闭包禁词不可路径限定，删词是唯一合法解除法）；b) FORBIDDEN_IMPORT_ROOTS（:26-58）为 PySide6/shiboken6 加 ui 豁免前缀 src/mycad/ui/（镜像 BACKEND_ALLOWED_PREFIX :63 机制；pyqtgraph 今不在任何禁词表无需动作；PySide2/PyQt5/PyQt6/qtpy/vtk 保持全域禁），顺手补 tkinter/wx 进禁词表（backlog M1 项收口）；②tests/test_layering.py 常量重构（:19/:21-28/:34）：build123d/OCP 仅 geom/ 与 app.py 可引；numpy 放行 geom/ 与 src/mycad/ui/（pyqtgraph 生态）；TESTS_ALLOWED_IMPORT_PREFIXES 增 tests/ui/；新 AST 规则「src/mycad/ui/** 禁 import mycad.geom」——禁到包名才堵得住 from mycad.geom.kernel import 的传递后端；core 的 Qt-free 由 tests/core/test_signals.py:95-105（signals 子进程检查，不动即绿）继续承担（test_layering 里并无「core Qt-free」既有断言，勿凭空造）；app.py 仍是唯一 core+geom 桥（ui 可 import mycad.app）；③NOTICE 增恰四个新条目：PySide6/shiboken6（LGPL）、pyqtgraph（MIT）、PyOpenGL（BSD-3）——numpy 已在闭包与 NOTICE（经 build123d，NOTICE:83；MAJOR_COMPONENTS 见 test_notice.py:25-31），勿重复添加；同时 grep uv.lock 新依赖子树的 sys_platform 平台条件项（colorama 教训）写入平台差异注记（backlog 该项收口）；④tests/test_notice.py 与 test_scope_audit.py 的闭包基线（46→新计数，以真实 uv tree 输出为准）同步；⑤若 ubuntu CI runner 缺 GL 离屏库，ci.yml ubuntu job 加 apt 安装（libgl1、libegl1、libxkbcommon-x11-0、libglib2.0-0），同时保持 tests/test_ci_workflow.py REQUIRED_TOKENS 断言同步；apt 后 GL 仍不可用的兜底阶梯在 todo 9 钉死（本 todo 只管 apt 半）。Must NOT：不改 .mc.json schema、不引 PyQt5/VTK、core 零 Qt、不加 per-file ignore、零 type:ignore。
   Closes: GAP-9（守卫半）；为全部后续 todo 解锁
   Parallelization: Wave 1 | Blocked by: — | Blocks: 4,9,13,15,16
@@ -125,7 +125,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | build(deps): add PySide6+pyqtgraph and migrate layering/M1/NOTICE guards for the ui package
   Recommended task executor category: unspecified-high
 
-- [ ] 2. core ViewportData 依赖倒置协议
+- [x] 2. core ViewportData 依赖倒置协议
   What to do / Must NOT do: src/mycad/core/ 新增 viewport_protocol.py（风格对齐 ports.py）：`ViewportData` frozen dataclass = feature_id: str + mesh: Tessellation（**复用 mycad.core.geometry_types.Tessellation 的 vertices/triangle_indices 及 __post_init__ 索引校验——不新写顶点/索引字段，守单一定义点规则**）+ 可选 normals: tuple[tuple[float, float, float], ...]（ViewportData 层）+ `ViewportPort` Protocol（`viewport_data() -> tuple[ViewportData, ...]`，每 feature_history ordinal 一条=该命令执行后的整体状态快照；feature_id=命令 id+ordinal——快照语义细节在 todo 3）。线框边由渲染侧从三角形边去重派生（协议不带边数据，减协议面）。tests/core/test_viewport_protocol.py：契约测试（空元组语义、索引校验红路、frozen 不可变）。Must NOT：不 import Qt/numpy/build123d；不重复定义顶点/索引字段（Tessellation 已有）；不改既有 Kernel Protocol 的 reset/apply 两方法；不带渲染语义（颜色/光照）进 core。
   Closes: GAP-4（core 半）
   Parallelization: Wave 1 | Blocked by: — | Blocks: 3,9,13
@@ -135,7 +135,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(core): add ViewportData protocol for decoupled mesh preview
   Recommended task executor category: deep-low
 
-- [ ] 3. geom 按特征网格化实现 ViewportPort
+- [x] 3. geom 按特征网格化实现 ViewportPort
   What to do / Must NOT do: src/mycad/geom/kernel.py 的 BuildKernel 实现 ViewportPort，**快照语义**：apply() 成功后对执行后的 Part deepcopy 追加进 list[tuple[str, Part]]（feature_id=命令 id+ordinal；undo/redo 走全量重放=重跑 apply，列表自然重建）；viewport_data() 对每快照调 geom/query.py 的 build_tessellation（deepcopy(part).tessellate(...) 语义，:80-84 陈旧三角化注记照抄——**勿用 BRepMesh_IncrementalMesh：src 零用例，STL 导出走 build123d.export_stl**）装 ViewportData.mesh=Tessellation（tuple 化，不引 numpy 类型进协议）；空文档返回空元组。tests/geom/ 新增：给定法兰命令序列（cylinder+hole_pattern 即 F3 用过的序列），viewport_data() 条数=特征数、每条顶点数>0、同容差两次调用结果一致、更细容差三角形数单调不减（kernel.py:114-117 已承诺的契约）；失败路=空文档。Must NOT：不做缓存/失效逻辑（阶段 1 同步重建，geometry_rebuilt 后整体重取）；上屏渲染只画最终快照（渲染语义归 todo 9）；ui 无关；不在 geom 之外引 OCP。
   Closes: GAP-4（geom 半）
   Parallelization: Wave 1 | Blocked by: 2 | Blocks: 9,13
@@ -145,7 +145,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(geom): per-feature mesh extraction implementing ViewportPort
   Recommended task executor category: deep-low
 
-- [ ] 4. ui 包骨架 + `mycad gui` 入口 + offscreen 冒烟
+- [x] 4. ui 包骨架 + `mycad gui` 入口 + offscreen 冒烟
   What to do / Must NOT do: 新建 src/mycad/ui/（__init__.py、main_window.py，SPDX 头）：QMainWindow 五区容器——左 QDockWidget（objectName=leftPanelDock）、中央占位 QWidget（objectName=viewportHost，todo 9 换真视口）、右 QDockWidget（rightPanelDock）、底 QDockWidget（bottomPanelDock）、QToolBar（mainToolBar）、QStatusBar；各Dock 允许浮动/关闭按初稿 §2。CLI：src/mycad/cli/__main__.py 增 `gui` 子命令 → build_app() + new_document() + 主窗 show（信号循环）；HELP_TEXT 同步增 gui 行（tests/cli/test_repl.py:93-96 帮助断言随本 todo 更新）；tests/ui/conftest.py（pytest-qt qapp fixture + os.environ.setdefault("QT_QPA_PLATFORM","offscreen")——**仅此机制**：pytest ini 不能设 env（需 pytest-env 新依赖，拒）；setdefault 保留逐测试覆写能力，todo 9 的 Windows native 兜底依赖它）。tests/ui/test_shell_smoke.py：窗体构建、五区 objectName 全存在、**GL 能力探针（QOffscreenSurface+QOpenGLContext.create() 成功断言——Wave 1 即让三平台 CI 暴露 GL 现实，不等到 todo 9）**、QTimer 单触发后干净退出。Must NOT：不做面板内容（todo 5-8）、不引 pyqtgraph（todo 9）、不动 core/geom、gui 子命令不做任何 headless 无法测试的路径（无 daemon/无 fork）。
   Closes: GAP-1（骨架半）、GAP-7（入口半）
   Parallelization: Wave 1 | Blocked by: 1 | Blocks: 5,6,7,8,11,13
@@ -155,7 +155,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): five-zone main window shell and `mycad gui` entry point
   Recommended task executor category: unspecified-high
 
-- [ ] 5. 菜单七项 + Toolbar 行为 + QSettings + 状态栏
+- [x] 5. 菜单七项 + Toolbar 行为 + QSettings + 状态栏
   What to do / Must NOT do: 菜单按初稿 §3 七项**逐字**：文件/编辑/视图/特征/工具/智能体/帮助。文件=todo 8 占位（本 todo 先挂 enabled=False 或空 slot 注明；截图/导入（F-DOC-03）占位 disabled）；编辑=撤销/重做（bus.undo/redo 既有）+删除/选择过滤器（enabled=False 占位）；视图=着色/线框切换动作占位（todo 9 挂真 slot）+ Toolbar/各 Dock/底栏显隐开关；特征=「打开左栏命令库」（与左栏重复可接受）；工具=选项（QSettings 说明）/单位（只读 mm）/测量（占位 disabled）/重建（触发视口重取，接 todo 9）；智能体=查看待确认计划（切底栏 Chat Tab 并聚焦活动卡片——todo 12 产物）+清空对话（清卡片流）；帮助=快捷键列表/关于/开源许可说明（Apache-2.0 + 指向 NOTICE——PySide6 LGPL 的产品内归属面）。Toolbar：可消隐（视图+右键菜单）、四边可停靠、可锁定（QToolBar.setMovable/setFloatable + lock 动作）、QSettings 记忆（saveState/restoreState + geometry，org="MyCAD"/app="MyCAD" 常量）。状态栏五字段（F-UI-06 P0 + 初稿 §8）：当前命令/空闲提示 + 选择计数 + 单位 mm + 重建状态（订 post_command/geometry_rebuilt 并集，与 todo 8/9 同一信号集）+ 修改标记。图标与 QSS 本期延后：文本按钮 + 默认样式（初稿 §4.2 图标 12-17、§9 工业灰蓝、§7.3 底栏折叠已登记 backlog）。tests/ui/test_menus_toolbar.py：七菜单（§3 名称逐字）存在、toggle→saveState→restoreState 往返一致、锁定态断言、状态栏五字段变更。Must NOT：不加初稿未列菜单项；关于不写版本号以外内容；不做快捷键全覆盖（只做初稿列出的）。
   Closes: GAP-1（交互半）
   Parallelization: Wave 2 | Blocked by: 4 | Blocks: 13
@@ -165,7 +165,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): menus, dockable lockable toolbar with QSettings persistence, status bar
   Recommended task executor category: visual-engineering
 
-- [ ] 6. 左栏注册表驱动命令库
+- [x] 6. 左栏注册表驱动命令库
   What to do / Must NOT do: 左栏：搜索 QLineEdit + QTreeWidget 分类折叠树；数据=CommandRegistry 全量 spec（按命令 id 首段分组——CommandSpec 无 category 字段，registry.list_by_category（registry.py:105-113）即此语义；八条 P0 分 feature/modify 两类）；双击条目 → 构造 **PlanDraftController**（本 todo 新建 src/mycad/ui/plan_draft.py：持有 core.plan.Plan + selected_step_index；API steps()/params_of(step)->dict/set_params(step,dict)（经 registry validate_params 校验）/select_step(i)；Qt 信号 params_changed(step, params)/plan_replaced()——todo 7/12 共享的草稿契约一次钉死）；底部说明「插件命令自动出现」；register_left_item 扩展约定写 API 注释（初稿 §5.3）。tests/ui/test_command_palette.py：八条 P0 全出现且分组正确；PlanDraftController 契约（set_params 经校验、params_changed 发射）；搜索「hole」过滤剩 2 条（feature.hole/hole_pattern）；搜索同时匹配 id 与 label_zh（registry.search 默认排除中文、docstring 注明留给 Phase 1 UI——UI 侧过滤或扩展 search(include_zh=True)；「孔」可搜出两条 hole）；插件同源——用既有 discoverer 注入缝（build_app(discoverers=…) app.py:52-64 + tests/fixtures/plugins 夹具；**不做 editable 安装**）后其贡献命令出现在树里。Must NOT：不新增命令 id；不做拖拽（初稿 P0 只要求点击）；不实现灰显 P1/P2（registry 无即自然满足）。
   Closes: GAP-2
   Parallelization: Wave 2 | Blocked by: 4 | Blocks: 12,13
@@ -175,7 +175,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): registry-driven categorized command library with search
   Recommended task executor category: visual-engineering
 
-- [ ] 7. 右栏五 Tab（结构/属性/选项 + 显示/测量占位）
+- [x] 7. 右栏五 Tab（结构/属性/选项 + 显示/测量占位）
   What to do / Must NOT do: 右栏 QTabWidget 五页：「结构」QTreeWidget 树根=文档节点（part_name/文件名 stem——F-TREE-01），下按 基准/草图/特征/实体 四分组（阶段 1 数据源=Document.feature_history（特征组）+named_groups（实体/组）；基准/草图组空显示占位文案），节点=命令 id+用户可读名，点击发 selectionChanged（接 todo 10 双向联动）；「属性」=当前选中命令的 spec 参数只读表（参数名/类型/当前值）；无选中时显示文档级属性（document.metadata 六键只读表，document.py:147-150——F-PROP-01 P0 后半）；「选项」=当前草稿命令的参数编辑表（数据源=todo 6 的 PlanDraftController——本 todo 编辑组件对其 API 编码、测试用 fake，todo 12 接真实例；selected_step_index 即「选项 Tab 编辑哪一步」的唯一答案；落地 QTableWidget 参数编辑→dict 的受控组件与变更信号）；「显示」「测量」=占位页（disabled 说明文字，初稿 §6）。register_right_tab 约定 API 注释。tests/ui/test_right_tabs.py：五 Tab 在位；喂三命令文档后结构树特征组 3 节点+文档根节点在位；属性表显示 spec 参数、空选择显示文档级属性；选项页编辑→信号携带新 dict。Must NOT：不做测量；不做草图/基准真数据；属性表不做编辑（只读）。
   Closes: GAP-3
   Parallelization: Wave 2 | Blocked by: 4 | Blocks: 10,12,13
@@ -185,7 +185,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): right dock with structure/properties/options tabs
   Recommended task executor category: visual-engineering
 
-- [ ] 8. 文档生命周期（新建/打开/保存/另存/导出/未保存提示）
+- [x] 8. 文档生命周期（新建/打开/保存/另存/导出/未保存提示）
   What to do / Must NOT do: 文件菜单落地：「新建」=经 app.new_document()（kernel.reset 独占路径，绝不直调 kernel.reset）+ 重置 UI 面（树/视口/草稿）；「打开」=QFileDialog 选 .mc.json → persistence 加载（坏文件报 QMessageBox 不崩）；「保存/另存」=持久化 API；「导出」=STEP/STL 两动作走 formats registry 既有 provider（QFileDialog 定路径）；dirty 追踪：绑定 document.is_dirty——订阅 **post_command/geometry_rebuilt/command_amended/metadata_changed/named_group_added/named_group_removed 并集**信号集（两族互不可替代：单命令 bus.execute 与 execute_batch 每步只发 pre/post_command（bus.py:101/115；批成功路径无 _rebuild，bus.py:196-235 逐行读证），undo/redo/edit_and_replay/批回滚恢复只发 geometry_rebuilt（bus.py:136/149/181/224→165）——只订任一族都漏：CLI Tab 单命令与计划卡片批执行缺 post_command 则 dirty 永不置位（oracle 双审 B1），重放路径缺 geometry_rebuilt 则 undo 后不复位（Metis G10 既有发现），故必须并集）；保存成功后显式调 document.mark_clean()（persistence.save_document 不清脏标记，document.py:172-174）；关闭/新建时有脏变更 → QMessageBox「保存/放弃/取消」三选；单文档语义=替换当前（A4）。tests/ui/test_document_lifecycle.py（tmp_path 往返：new→命令→save→reopen 内容一致；undo 后关闭→拦截仍出现；保存后 is_dirty=False；脏态关闭拦截用 monkeypatch 拦 dialog 模拟三选）。Must NOT：不绕过 CommandBus 改 Document；不直调 kernel.reset；不做多文档；导出不新增格式。
   Closes: GAP-6
   Parallelization: Wave 2 | Blocked by: 4 | Blocks: 13
