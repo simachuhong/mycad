@@ -12,12 +12,19 @@ hand-written golden constants — never reverse-recorded from output.
 
 from __future__ import annotations
 
+import os
+
+# The UI acceptance below drives the full Qt shell offscreen (todo 13);
+# set the platform before pytest-qt materializes any QApplication.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import json
 import math
 from pathlib import Path
 from typing import cast
 
 import pytest
+from pytestqt.qtbot import QtBot
 
 from mycad.app import AppServices, build_app, new_document
 from mycad.cli.session import CliSession
@@ -282,8 +289,104 @@ def test_script_and_plan_describe_the_same_geometry(services: AppServices) -> No
 # -- §8.4 UI layout: phase 1 -------------------------------------------------
 
 
-def test_ui_layout_acceptance() -> None:
-    pytest.skip("phase 1: PySide6 shell")
+def test_ui_layout_acceptance(
+    qapp: object,
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Phase-1 UI acceptance (UI初稿 §11 five items) + the todo-13 minimal
+    workflow: palette drafting -> six-state confirm -> STEP export ->
+    ``bus.undo(len(plan.steps))`` back to the pre-plan state. Fully offscreen.
+    """
+    del qapp  # pytest-qt's QApplication exists as soon as this fixture resolves
+    # The plan execution leaves the document dirty; teardown closes the main
+    # window, whose unsaved-changes dialog must never run offscreen (the
+    # stale pytest-qt widget close blocks on a modal exec — todo-13 hang).
+    from mycad.ui.main_window import MainWindow
+
+    def _discard(self: MainWindow) -> str:  # noqa: ARG001 (Qt receiver shape)
+        return "discard"
+
+    monkeypatch.setattr(MainWindow, "_ask_save_dialog", _discard)
+    from PySide6.QtCore import Qt
+
+    from mycad.ui.main_window import MainWindow
+    from mycad.ui.right_panel import RIGHT_TAB_TITLES
+    from mycad.ui.viewport import GLViewport
+
+    services = build_app(discoverers=[])
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    loaded = new_document(services)
+    window.bind_document(loaded)
+
+    # §11.1 five-zone skeleton + menu/toolbar/status bar all in place.
+    viewport = window.viewport
+    palette = window.command_palette
+    panel = window.right_panel
+    bottom = window.bottom_dock
+    assert viewport is not None and isinstance(viewport, GLViewport)
+    assert palette is not None
+    assert panel is not None
+    assert bottom is not None
+    assert window.menuBar().actions()
+    toolbar = window.main_toolbar
+    assert window.status_bar.children()  # permanent widgets + central default child
+
+    # §11.2 toolbar can be hidden and moved to another edge.
+    toolbar.hide()
+    assert not toolbar.isVisible()
+    window.addToolBar(Qt.ToolBarArea.RightToolBarArea, toolbar)
+    assert window.toolBarArea(toolbar) == Qt.ToolBarArea.RightToolBarArea
+    toolbar.show()
+
+    # §11.3 right pane: structure/properties/options present (+ placeholders).
+    tabs = panel.tabs
+    titles = [tabs.tabText(i) for i in range(tabs.count())]
+    for title in RIGHT_TAB_TITLES:
+        assert title in titles
+
+    # §11.5 left palette: all P0 commands discoverable, searchable.
+    assert palette.apply_filter("") == 8
+    assert palette.apply_filter("box") == 1
+
+    # §11.4 Chat page: a drafted plan renders as cards and the model only
+    # changes after confirm (execute_plan). Draft via the todo-6 controller.
+    draft = window.plan_draft
+    cards = window.plan_cards
+    assert draft is not None
+    assert cards is not None
+    assert len(loaded.document.commands) == 0
+
+    draft.set_params(
+        draft.new_draft("feature.box"),
+        {"size_x": 80.0, "size_y": 80.0, "size_z": 8.0, "center": [0.0, 0.0, 0.0], "mode": "new"},
+    )
+    step_box = draft.plan().steps[0]
+    draft.set_params(
+        draft.new_draft("feature.cylinder"),
+        {"radius": 10.0, "height": 30.0, "center": [0.0, 0.0, 14.0], "mode": "new"},
+    )
+    step_cyl = draft.plan().steps[0]
+    draft.replace_plan(Plan([step_box, step_cyl]))
+    texts = cards.card_texts()
+    assert len(texts) == 2 and all("mode=new" in text for text in texts)
+    assert draft.plan().status == "draft"
+
+    cards.execute_plan()
+    plan = cards.plan
+    assert plan is not None and plan.status == "done"
+    assert len(loaded.document.commands) == 2
+
+    # STEP export of the post-execution state (§8.3 acceptance workflow).
+    step_path = tmp_path / "acceptance.step"
+    services.formats.resolve(step_path).write(services.kernel, step_path)
+    assert step_path.stat().st_size > 0
+
+    # §8.3 batch-level undo semantics: restore the pre-plan state.
+    loaded.bus.undo(len(plan.steps))
+    assert len(loaded.document.commands) == 0
 
 
 # -- §8.5 licensing artifacts ------------------------------------------------

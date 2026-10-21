@@ -36,3 +36,18 @@ def sandbox_qsettings(tmp_path: Path) -> None:
         str(tmp_path / "settings"),
     )
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+
+
+@pytest.fixture(autouse=True)
+def discard_unsaved_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close-time ``_ask_save_dialog`` opens a blocking modal (exec) that
+    hangs offscreen teardown — patch it to "discard" globally (todo 10/13
+    root cause, ledger note). Tests exercising the dialog patch it again
+    inside themselves; their patch registration runs after this fixture.
+    """
+    from mycad.ui.main_window import MainWindow
+
+    def _discard(self: MainWindow) -> str:  # noqa: ARG001 (Qt receiver shape)
+        return "discard"
+
+    monkeypatch.setattr(MainWindow, "_ask_save_dialog", _discard)

@@ -235,7 +235,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | feat(ui): plan-card confirmation pipeline on the six-state plan machine
   Recommended task executor category: unspecified-high
 
-- [ ] 13. 验收解跳 + 全量回归收口
+- [x] 13. 验收解跳 + 全量回归收口
   What to do / Must NOT do: tests/test_acceptance_flange.py:282-286 的 test_ui_layout_acceptance 去 skip，落地 UI 初稿 §11 五条（五区布局在位/最小工作流=命令库建模→计划确认→导出 STEP/整批撤销（bus.undo(len(plan.steps)) 恢复计划前状态——§8.3「可回退该批计划」的钉死解读，验收断言之）/Toolbar QSettings 记忆/整体离屏可用）；跑全量四门（ruff check/format 全树 + basedpyright + pytest 全量，Linux 本地）；推 CI 三平台全绿。Must NOT：不放宽既有断言；不删既有测试；新增测试全部 offscreen 可跑。
   Closes: GAP-1/10（收口）
   Parallelization: Wave 3 | Blocked by: 5,6,7,8,9,10,11,12 | Blocks: 14
