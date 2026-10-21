@@ -15,7 +15,7 @@ Ubuntu 桌面端开源 CAD 建模软件，并内置智能体助手：以可编�
 ## 技术栈摘要
 
 - **几何内核**：OpenCascade（OCCT），经 build123d 暴露
-- **桌面 UI**：PySide6（Qt6）——阶段 1，阶段 0 不含
+- **桌面 UI**：PySide6（Qt6）——阶段 1 五区外壳已交付（离屏可跑，见快速开始）
 - **智能体**：计划生成 → 用户确认 → 经统一 Command Bus 执行
 - **目标平台**：Ubuntu 22.04+
 
@@ -30,11 +30,11 @@ Apache-2.0 相对 MIT 增加了明确的专利授权与 NOTICE 保留义务，�
 
 ## 贡献
 
-目前处于文档与规格阶段。提交代码或文档补丁前，请先阅读 `docs/` 下三份基线文档，并确保改动与其中约定一致。贡献默认按 Apache-2.0 授权（见 License 第 5 节）。
+提交代码或文档补丁前，请先阅读 `docs/` 下三份基线文档，并确保改动与其中约定一致。贡献默认按 Apache-2.0 授权（见 License 第 5 节）。
 
-## 状态：阶段 0（headless 可编程内核）
+## 状态：阶段 1（headless 内核 + 桌面外壳）
 
-阶段 0 交付一个**无 UI** 的可编程建模内核，以法兰件为验收牵引。已具备：
+阶段 0 交付了**无 UI** 的可编程建模内核，以法兰件为验收牵引，并已在阶段 1 增加桌面外壳。已具备：
 
 - **八条内置建模命令**：`box` / `cylinder` / `extrude` / `revolve` / `hole` /
   `hole-pattern` / `fillet` / `cut`（`mycad commands` 可列出）。
@@ -50,8 +50,9 @@ Apache-2.0 相对 MIT 增加了明确的专利授权与 NOTICE 保留义务，�
 - **CLI**：REPL、ASCII 脚本、JSON 计划三种驱动方式，文本与 JSON 双向等价。
 - **插件缝**：entry-points 发现 + manifest 主版本门控
   （[ADR-003](docs/adr/ADR-003-extension-points-and-plugin-api-versioning.md)）。
+- **桌面外壳（阶段 1）**：五区 MainWindow——文件生命周期、GL 3D 视口、底栏 CLI/Chat、拾取与结构树双向高亮、计划卡片六态确认。
 
-尚未开始：PySide6 外壳与 3D 预览（阶段 1）、智能体对话闭环（阶段 2）。
+阶段 1 已交付：五区桌面外壳与 3D 预览（生命周期、GL 视口、CLI 同源 Tab、拾取与结构树双链、计划卡片确认）。尚未开始：智能体对话闭环（阶段 2）。
 
 ## 快速开始：三条命令跑通法兰
 
@@ -68,6 +69,8 @@ uv run mycad run --json examples/flange_plan.json
 `tests/test_acceptance_flange.py` 断言。
 
 交互式使用直接运行 `uv run mycad`，输入 `help` 查看内建命令。
+桌面壳（阶段 1）：`uv run mycad gui` 打开五区主窗；无显示环境（CI/远程桌面/SSH）
+先 `export QT_QPA_PLATFORM=offscreen` 再运行。
 
 ## 平台支持矩阵
 

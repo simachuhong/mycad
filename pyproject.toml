@@ -1,7 +1,7 @@
 [project]
 name = "mycad"
 version = "0.1.0"
-description = "MyCAD headless programmable CAD kernel (Phase 0 MVP)."
+description = "MyCAD programmable CAD kernel with a PySide6 desktop shell (Phase 1)."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "MyCAD contributors" }]

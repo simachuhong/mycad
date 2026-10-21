@@ -37,14 +37,14 @@
 
 ## OVERVIEW
 
-Ubuntu 22.04+ 桌面端开源 CAD（Apache-2.0）。阶段 0 = headless 可编程内核 MVP，以法兰件（φ80×8 / 4×φ6 PCD50）为验收牵引；UI（PySide6 壳）与 3D 预览后置到阶段 1。
+Ubuntu 22.04+ 桌面端开源 CAD（Apache-2.0）。阶段 0 = headless 可编程内核 MVP（法兰件 φ80×8 / 4×φ6 PCD50 验收牵引）已交付；阶段 1 = PySide6 五区桌面外壳已落地（生命周期 / GL 视口 / CLI Tab / 拾取双链 / 计划卡片，882 测试全绿）；智能体对话闭环属阶段 2。
 
 - **几何内核**：OpenCascade（OCCT），经 `build123d==0.11.1` + `cadquery-ocp-novtk>=7.9.3.1.1,<7.9.4` 暴露
 - **写入路径**：唯一 Command Bus；undo = 删命令 + 全量重放（ADR-001）
 - **持久化**：`.mc.json` v1 = 纯 JSON 命令历史 + 审计六字段（ADR-002）
-- **智能体**：阶段 0 = Plan 数据结构 + 六态机 + 确认红线（无 UI/Chat/MCP）；MCP 边界见 ADR-004
+- **智能体**：阶段 0 = Plan 数据结构 + 六态机 + 确认红线（无 UI/Chat/MCP）；阶段 1 增 GUI 计划卡片确认（同六态机，无对话生成）；MCP 边界见 ADR-004
 - **平台分层**：T1（ubuntu 22.04/24.04 x64 + windows）/ T2（信创 aarch64）/ T3（龙芯 go/no-go 阶段 1 末）
-- **README 已同步**：快速开始三命令（含国内镜像路径）经 F3 干净克隆实测可用；随 docs 改动同步维护
+- **README 已同步**：快速开始三命令 + `mycad gui`（含国内镜像路径）经 F3 干净克隆实测可用；随 docs 改动同步维护
 
 ## STRUCTURE
 
@@ -59,7 +59,8 @@ MyCAD/
 │   ├── formats/              # 格式提供方；阶段 0 = STEP 只写产品化 + STL 只写 + STEP 测试辅助读
 │   ├── plugins/              # entry-point 发现 + manifest + loader + manager
 │   ├── cli/                  # mycad CLI：repl/run/validate/commands/plugins
-│   └── agent/                # plan_types（阶段 2 智能体预留）
+│   ├── agent/                # plan_types（阶段 2 智能体预留）
+│   └── ui/                   # PySide6 桌面壳（五区 MainWindow/GL 视口/右栏/底栏）；src 唯一允许 import PySide6 的包，禁 build123d/OCP/mycad.geom，允 numpy
 ├── tests/                    # 镜像 src 结构；插件测试夹具在 tests/fixtures/plugins/
 ├── docs/
 │   ├── 需求分析书.md / 技术路线.md / UI设计初稿.md
@@ -96,14 +97,17 @@ MyCAD/
 | `PluginManager` | `src/mycad/plugins/manager.py` | 插件命令贡献 + handler 覆盖 |
 | `LoadedDocument` | `src/mycad/core/persistence.py` | Document + Bus 配对（`new_document()` 返回） |
 | `PluginManifest` | `src/mycad/plugins/manifest.py` | `CURRENT_API_VERSION="1.0"` 主版本门控 |
+| `MainWindow` | `src/mycad/ui/main_window.py` | 五区组合根（UI）：菜单/工具栏 QSettings 记忆/左命令库/中 GL 视口/右 Tabs/底栏 CLI+Chat |
+| `GLViewport` | `src/mycad/ui/viewport.py` | 快照 → pyqtgraph GL 网格；数学射线拾取 + 高亮 overlay |
 
 ## CONVENTIONS
 
 - **T1 分层硬规则**（`tests/test_layering.py` 强制执行）：
   - `mycad.core/*` 禁 import `build123d` / `OCP` / `numpy`
   - `mycad.geom/*` 是 src 中**唯一**允许引 CAD 后端的包
+  - `mycad.ui/*` 是 src 中**唯一**允许 import `PySide6`/`shiboken6` 的包；ui 禁 import `build123d`/`OCP`/`mycad.geom`，允许 `numpy`
   - `src/mycad/app.py` 是**唯一**同时引 `mycad.core.*` 与 `mycad.geom.*` 的文件
-  - 测试中只有 `tests/geom/` + `tests/helpers/step_roundtrip.py` 可引后端
+  - 测试中只有 `tests/geom/`、`tests/ui/` + `tests/helpers/step_roundtrip.py` 可引后端/Qt
 - **零类型抑制**：项目内 `# type: ignore` / `# pyright: ignore` 必须为 0（白名单 `tests/typing/` 不存在时违规则必现）
 - **一规则一套**：ruff `E/F/W/I/B/UP/C4/N/SIM/RET` 全树统一，不允许 per-file 忽略；唯一记录在案的 carve-out：`E501`（恰 4 处逐字 CLI 命令行）与 `N818`（`InvalidPlanTransition` 之名由计划与 tests/test_exceptions.py 锁定），理由在 pyproject.toml 配置注释
 - **改模型只能经 Bus**：任何修改 `Document` 的代码只能走 `CommandBus.submit()`，直改模型视为架构违规

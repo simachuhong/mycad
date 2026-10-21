@@ -245,7 +245,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | test(acceptance): unskip ui layout acceptance and close the phase-1 regression gate
   Recommended task executor category: unspecified-high
 
-- [ ] 14. README + AGENTS.md + 文档同步
+- [x] 14. README + AGENTS.md + 文档同步
   What to do / Must NOT do: README 快速开始增 `uv run mycad gui`（附 offscreen 提示：CI/远程桌面场景设 QT_QPA_PLATFORM=offscreen）；AGENTS.md：STRUCTURE 树加 src/mycad/ui/ 行、CODE MAP 加主窗/视口条目、CONVENTIONS「T1 分层硬规则」增 ui 条款（ui 唯一 PySide6 包、ui 禁 build123d/OCP/mycad.geom、ui 允 numpy、tests/ui 进测试白名单）；README:52-54（「尚未开始：PySide6 外壳」行）与 :18（tech-stack 阶段措辞）、pyproject.toml:4（description 的 Phase 0 MVP 字样）、AGENTS.md OVERVIEW 阶段措辞与 CONVENTIONS 测试条款（todo 1 落地后同步文档）；技术路线.md §9 增 PySide6 LGPL 动态链接评估一行注记；docs/UI设计初稿.md 如实现有偏差处加「实现注记」（**改 docs/ 下文件必须同步 tests/test_scope_audit.py 的 hash_tracked_docs 基线**——先跑该测试看红再更新基线）。Must NOT：不写营销文案；不改 ADR-001..005（ADR-006 由 todo 16 改）；不改需求书正文（只允许初稿加注记）。
   Closes: GAP-7（文档半）
   Parallelization: Wave 4 | Blocked by: 13 | Blocks: —
