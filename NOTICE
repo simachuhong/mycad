@@ -101,6 +101,8 @@ Runtime dependency closure (54 distributions)
       licenses/ entry). The identifier above reflects the upstream
       PyOpenGL project's BSD 3-Clause terms rather than a statement
       inside the wheel.
+  py-lib3mf                      LGPL-3.0-or-later (aarch64-only runtime dep;
+                                 NOT loaded by any T1 x86-64 install)
   pyparsing                      MIT
   pyqtgraph                      MIT
   pyside6                        LGPL-3.0-only OR GPL-2.0-only OR

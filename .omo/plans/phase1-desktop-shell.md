@@ -255,7 +255,7 @@ Your next move: run a high-accuracy review or start execution ($ulw-execute). Fu
   Commit: Y | docs: gui quickstart, layering rules, and implementation notes
   Recommended task executor category: writing
 
-- [ ] 15. T2 aarch64 QEMU 回归（ADR-006 第 2 条收口）
+- [x] 15. T2 aarch64 QEMU 回归（ADR-006 第 2 条收口）
   What to do / Must NOT do: 产出可复跑脚本（建议 scripts/t2_qemu_regression.sh 或 .py，取实施成本低者）：QEMU（qemu-user 容器路线或 qemu-system aarch64 + Ubuntu 22.04 云镜像路线，二选一并记录理由）内：aarch64 Python 3.12 + uv sync（PySide6/build123d/cadquery-ocp-novtk 的 manylinux aarch64 wheel 可得性实证）+ 全量 pytest（或最小：四门 scoped+全量 pytest，时间盒内跑不完则记录跑到的子集与理由）。本机执行一次，证据写 .omo/evidence/t2-qemu-regression-phase1-desktop-shell.md（QEMU 版本、镜像、命令、输出摘要、结论行=T2 通过/不通过+问题清单）。Must NOT：不改 CI matrix（ADR-006:31-32：阶段 1 CI 仅 T1）；不因 QEMU 慢删测试；不购硬件。
   Closes: GAP-8（T2 半）
   Parallelization: Wave 4 | Blocked by: 1 | Blocks: —（可提前启动）
