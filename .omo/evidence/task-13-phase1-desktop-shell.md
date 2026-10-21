@@ -32,4 +32,4 @@ by the conftest autouse discard patch + an in-test patch inside the acceptance t
 ## Acceptance criteria
 - [x] pytest full run green (882)
 - [x] ruff check / format / basedpyright tree-wide green
-- [ ] CI three-platform green (pushed with this commit; tracked in ledger)
+- - [ ] CI three-platform green (BLOCKED ON PR: ci.yml triggers only on push→main or any pull_request; feature-branch push 2084fc2 did NOT start a run — confirmed via Actions API total_runs=7, all Oct 11 on main. Origin has 2084fc2 (ls-remote verified). Manual draft PR from phase1-desktop-shell → main is the gate trigger; no GitHub API token in env (SSH-only remote) so the PR must be opened by the user at https://github.com/simachuhong/mycad/compare/main...phase1-desktop-shell or via a provided token. (pushed with this commit; tracked in ledger)
