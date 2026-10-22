@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, override
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -66,6 +66,15 @@ APP_VERSION = "0.1.0"
 
 #: UI draft §3, menu order and titles verbatim — pinned by tests/ui.
 MENU_TITLES: tuple[str, ...] = ("文件", "编辑", "视图", "特征", "工具", "智能体", "帮助")
+
+#: UI draft §4.2 "建模高频" group: toolbar shortcuts that start the very same
+#: plan draft the left palette starts (草稿 → 确认 → 执行).
+TOOLBAR_MODELING_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("拉伸", "feature.extrude"),
+    ("旋转", "feature.revolve"),
+    ("孔", "feature.hole"),
+    ("圆角", "modify.fillet"),
+)
 
 #: The plan todo-5/todo-8 union: signals that count as document changes
 #: (dirty marker) and drive the rebuild-status field.
@@ -122,6 +131,8 @@ class MainWindow(QMainWindow):
     def __init__(self, *, services: AppServices | None = None) -> None:
         super().__init__()
         self.setWindowTitle("MyCAD")
+        # resize() before restore_window_state(): a saved layout still wins.
+        self.resize(1400, 900)
 
         self._services = services
         self._loaded: LoadedDocument | None = None
@@ -229,6 +240,7 @@ class MainWindow(QMainWindow):
             # 因此无回环。
             self.right_panel.structure_selection_changed.connect(self._on_structure_pick)
             self.viewport.feature_picked.connect(self._on_viewport_pick)
+        self._populate_toolbar()
         self.restore_window_state()
 
     # ------------------------------------------------------------------
@@ -324,6 +336,37 @@ class MainWindow(QMainWindow):
         self.act_about.triggered.connect(self._show_about)
         self.act_license = self.menu_help.addAction("开源许可说明")
         self.act_license.triggered.connect(self._show_license)
+
+    def _populate_toolbar(self) -> None:
+        """给工具栏装按钮（UI 初稿 §4.2）。
+
+        菜单动作复用同一批 QAction 对象——菜单与工具栏共用一份状态，
+        勾选/启用不会分叉；建模快捷键走左栏命令库同一条起草路径
+        （草稿 → 确认 → 执行），没有 services 时禁用。
+        """
+        # 首期无图标资源：按 §4.2 的"最小图标集"落成文字按钮。
+        self.main_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        for action in (
+            self.act_new,
+            self.act_open,
+            self.act_save,
+            self.act_undo,
+            self.act_redo,
+            self.act_fit_view,
+            self.act_shaded_wireframe,
+            self.act_view_plans,
+        ):
+            self.main_toolbar.addAction(action)
+        for label, command_id in TOOLBAR_MODELING_COMMANDS:
+            action = QAction(label, self)
+            action.setToolTip(f"{label}（{command_id}）：起草命令，在 Chat 页确认后执行")
+            action.setEnabled(self.plan_draft is not None)
+            action.triggered.connect(partial(self._on_toolbar_modeling, command_id))
+            self.main_toolbar.addAction(action)
+
+    def _on_toolbar_modeling(self, command_id: str, _checked: bool = False) -> None:
+        """工具栏建模按钮：与左栏命令库双击同一条路径。"""
+        self._on_palette_command(command_id)
 
     def _apply_toolbar_lock(self, locked: bool) -> None:
         """锁定工具栏：锁定后既不可拖动也不可悬浮."""
