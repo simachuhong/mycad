@@ -75,14 +75,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import cast
 
 from mycad.commands.registry import CommandRegistry
+from mycad.commands.spec import CommandSpec
 from mycad.commands.validation import schema_matches
 from mycad.core.exceptions import CliSyntaxError, UnknownCommandError, ValidationError
 
-__all__ = ["parse_line", "to_cli"]
+__all__ = ["ParamDoc", "describe_params", "parse_line", "to_cli"]
 
 _BARE_RE = re.compile(r"^[+-]?[A-Za-z_][A-Za-z0-9_.+-]*$")
 _INT_RE = re.compile(r"^-?[0-9]+$")
@@ -230,6 +232,81 @@ def _schema_at(schema: object, segments: list[str], defs: Mapping[str, object]) 
         if current is None:
             return None
     return current
+
+
+@dataclass(frozen=True)
+class ParamDoc:
+    """One CLI-usable parameter of a command, derived from its schema.
+
+    ``key``: the top-level CLI key (the one a user types directly).
+    ``required``: the key is listed in the schema's ``required`` list.
+    ``children``: nested key names when the parameter is an object
+    (``target_face`` -> ``("surface", "axis", "rank")``); empty for scalars.
+    """
+
+    key: str
+    required: bool
+    children: tuple[str, ...]
+
+
+def _variant_objects(
+    schema: Mapping[str, object], defs: Mapping[str, object]
+) -> list[Mapping[str, object]]:
+    """Object branches of a ``oneOf`` schema, or the schema itself."""
+    one_of = schema.get("oneOf")
+    if not isinstance(one_of, list):
+        return [schema]
+    branches: list[Mapping[str, object]] = []
+    for branch in cast("list[object]", one_of):
+        mapped = _as_mapping(branch)
+        if mapped is not None:
+            branches.append(mapped)
+    return branches
+
+
+def _string_set(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {item for item in cast("list[object]", value) if isinstance(item, str)}
+
+
+def describe_params(spec: CommandSpec, defs: Mapping[str, object]) -> tuple[ParamDoc, ...]:
+    """List the CLI-usable parameters of one command.
+
+    Top-level keys only (the keys a user types directly); object parameters
+    additionally carry their nested key names so the CLI's dotted-key form
+    (``target_face.axis=+Z``) is discoverable. ``oneOf`` variants contribute
+    the union of their branch keys.
+    """
+    resolved = _deref(spec.params_schema, defs)
+    if resolved is None:
+        return ()
+    variants = _variant_objects(resolved, defs)
+    required: set[str] = set()
+    for variant in variants:
+        required |= _string_set(variant.get("required"))
+    docs: list[ParamDoc] = []
+    seen: set[str] = set()
+    for variant in variants:
+        properties = _as_mapping(variant.get("properties"))
+        if properties is None:
+            continue
+        for key, child in properties.items():
+            if key in seen:
+                continue
+            seen.add(key)
+            child_resolved = _deref(child, defs)
+            children: list[str] = []
+            if child_resolved is not None:
+                for branch in _variant_objects(child_resolved, defs):
+                    branch_properties = _as_mapping(branch.get("properties"))
+                    if branch_properties is None:
+                        continue
+                    for name in branch_properties:
+                        if name not in children:
+                            children.append(name)
+            docs.append(ParamDoc(key=key, required=key in required, children=tuple(children)))
+    return tuple(docs)
 
 
 # ---------------------------------------------------------------------------

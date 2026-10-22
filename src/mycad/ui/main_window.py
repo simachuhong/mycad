@@ -41,6 +41,7 @@ from mycad.core.signals import SignalName
 from mycad.formats.registry import UnknownFormatError
 from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
+from mycad.ui.command_reference import CommandReferenceDialog
 from mycad.ui.plan_cards import PlanCards
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
@@ -208,6 +209,7 @@ class MainWindow(QMainWindow):
             self.left_dock.setWindowTitle("命令库")
             self.plan_draft = PlanDraftController(services.registry)
             self._registry = services.registry
+            self.act_command_reference.setEnabled(True)
             self.right_panel = RightPanel()
             self.right_dock.setWidget(self.right_panel)
             self.right_dock.setWindowTitle("属性")
@@ -332,6 +334,11 @@ class MainWindow(QMainWindow):
         self.menu_help = self.menuBar().addMenu("帮助")
         self.act_shortcuts = self.menu_help.addAction("快捷键")
         self.act_shortcuts.triggered.connect(self._show_shortcuts)
+        # Verb <-> command-id lookup needs the registry: disabled until the
+        # services branch below has one.
+        self.act_command_reference = self.menu_help.addAction("命令速查…")
+        self.act_command_reference.setEnabled(False)
+        self.act_command_reference.triggered.connect(self._show_command_reference)
         self.act_about = self.menu_help.addAction("关于")
         self.act_about.triggered.connect(self._show_about)
         self.act_license = self.menu_help.addAction("开源许可说明")
@@ -412,6 +419,13 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts(self) -> None:
         QMessageBox.information(self, "快捷键", "暂无快捷键覆盖（计划不做全覆盖）。")
+
+    def _show_command_reference(self) -> None:
+        """Open the verb <-> command-id lookup table (needs the registry)."""
+        if self._registry is None:
+            return
+        dialog = CommandReferenceDialog(self._registry, self)
+        dialog.exec()
 
     def _show_about(self) -> None:
         QMessageBox.about(self, "关于", f"MyCAD v{APP_VERSION}")
