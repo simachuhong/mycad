@@ -19,8 +19,10 @@ def run_gui() -> int:
     """Compose services, seed one fresh document, run the window's loop."""
     qapp = QApplication.instance() or QApplication([])
     services = build_app()
-    # Fresh document; kernel reset stays exclusive to mycad.app.new_document.
-    _ = new_document(services)
-    window = MainWindow()
+    # Fresh document; kernel reset stays exclusive to mycad.app.new_document,
+    # and the window must come after it: the viewport takes the kernel port.
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    window.bind_document(loaded)
     window.show()
     return qapp.exec()
