@@ -103,11 +103,11 @@
 
 **Interfaces:** 产出上述 DTO/reducer/场景接口及不可变值对象；精确曲线联合含 line/arc/ellipse/bspline（degree、knots、multiplicities、weights）。
 
-- [ ] 写 RED 测试 `test_first_and_third_angle_layout`、`test_scale_does_not_change_measurement`、`test_parent_cycles_and_cross_sheet_links_rejected`。断言第一角 top 在下、left 在右，第三角相反；80 mm 在 1:2 纸上 40 mm；非法父子关系失败且输入状态不变。
-- [ ] 运行 `uv run pytest tests/core/test_drawing_model.py tests/core/test_drawing_coordinates.py -q`，确认缺失实现导致失败。
-- [ ] 实现 Sheet/View/Annotation/State 与引用 DTO，正交基拒绝零向量/共线输入；纸张 A4=210×297、A3=297×420 mm，旋转交换宽高；比例严格正且有限。
-- [ ] 实现 reducer 和父子有效属性解析：存储继承标志，解除/恢复对齐显式可逆；更换投影法只通过明确重排操作作用于既有视图。
-- [ ] GREEN 跑同组测试及 `uv run pytest tests/test_layering.py -q`；仅对新增 core 文件执行 lint/format/type 检查。交付纯数据契约，不加入 Qt/CAD 导入。
+- [x] 写 RED 测试 `test_first_and_third_angle_layout`、`test_scale_does_not_change_measurement`、`test_parent_cycles_and_cross_sheet_links_rejected`。断言第一角 top 在下、left 在右，第三角相反；80 mm 在 1:2 纸上 40 mm；非法父子关系失败且输入状态不变。
+- [x] 运行 `uv run pytest tests/core/test_drawing_model.py tests/core/test_drawing_coordinates.py -q`，确认缺失实现导致失败。
+- [x] 实现 Sheet/View/Annotation/State 与引用 DTO，正交基拒绝零向量/共线输入；纸张 A4=210×297、A3=297×420 mm，旋转交换宽高；比例严格正且有限。
+- [x] 实现 reducer 和父子有效属性解析：存储继承标志，解除/恢复对齐显式可逆；更换投影法只通过明确重排操作作用于既有视图。
+- [x] GREEN 跑同组测试及 `uv run pytest tests/test_layering.py -q`；仅对新增 core 文件执行 lint/format/type 检查。交付纯数据契约，不加入 Qt/CAD 导入。
 
 ### Task 2: T2 — 命令、事务、历史和存档
 

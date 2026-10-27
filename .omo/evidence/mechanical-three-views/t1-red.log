@@ -1,0 +1,27 @@
+
+==================================== ERRORS ====================================
+______________ ERROR collecting tests/core/test_drawing_model.py _______________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/core/test_drawing_model.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/core/test_drawing_model.py:10: in <module>
+    from mycad.core.drawing import (
+E   ModuleNotFoundError: No module named 'mycad.core.drawing'
+___________ ERROR collecting tests/core/test_drawing_coordinates.py ____________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/core/test_drawing_coordinates.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/core/test_drawing_coordinates.py:9: in <module>
+    from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView
+E   ModuleNotFoundError: No module named 'mycad.core.drawing'
+=========================== short test summary info ============================
+ERROR tests/core/test_drawing_model.py
+ERROR tests/core/test_drawing_coordinates.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 errors in 0.65s
