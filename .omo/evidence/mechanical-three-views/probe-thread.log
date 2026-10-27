@@ -1,0 +1,77 @@
+{
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "processor": "x86_64",
+  "solids": 100,
+  "edges": 300,
+  "faces": 300,
+  "runs_s": [
+    0.4299870480026584,
+    0.4325258099997882,
+    0.41846643199096434,
+    0.41020436499093194,
+    0.39984784700209275
+  ],
+  "p50_s": 0.41846643199096434,
+  "observed_max_s": 0.4325258099997882,
+  "heartbeat_samples": 13,
+  "max_gap_s": 0.4339165849960409
+}
+F
+=================================== FAILURES ===================================
+____________________ test_exact_hlr_worker_keeps_heartbeat _____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7bc8231fec30>
+
+    def test_exact_hlr_worker_keeps_heartbeat(qtbot: QtBot) -> None:
+        # 100 disjoint solids, 300 BREP edges, three views, no artificial sleep.
+        shape = Compound(children=[Pos(x * 5, y * 5, 0) * Cylinder(2, 8)
+                                   for x in range(10) for y in range(10)])
+        times: list[float] = []
+        durations: list[float] = []
+        completed: list[ExecutionResult] = []
+        timer = QTimer()
+        timer.setInterval(100)
+        timer.timeout.connect(lambda: times.append(perf_counter()))
+        unit = SerializedExecutionUnit()
+        unit.set_session(1)
+    
+        def action() -> tuple[int, ...]:
+            counts: list[int] = []
+            for _ in range(5):
+                start = perf_counter()
+                for normal, up in (((0, 0, 1), (0, 1, 0)),
+                                   ((0, -1, 0), (0, 0, 1)),
+                                   ((-1, 0, 0), (0, 0, 1))):
+                    result = project(shape, normal, up)
+                    counts.append(len(result.visible) + len(result.hidden) + len(result.outline))
+                durations.append(perf_counter() - start)
+            return tuple(counts)
+    
+        timer.start()
+        qtbot.wait(150)
+        times.append(perf_counter())
+        try:
+            assert unit.submit(action, operation="HLR probe", session_id=1,
+                               on_complete=completed.append)
+            qtbot.waitUntil(lambda: bool(completed), timeout=120000)
+            times.append(perf_counter())
+            assert completed[0].error is None
+        finally:
+            timer.stop()
+            unit.shutdown(wait_for_running=True)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        ordered = sorted(durations)
+        print(json.dumps({"platform": platform.platform(), "processor": platform.processor(),
+                          "solids": len(shape.solids()), "edges": len(shape.edges()),
+                          "faces": len(shape.faces()), "runs_s": durations,
+                          "p50_s": ordered[2], "observed_max_s": ordered[-1],
+                          "heartbeat_samples": len(times), "max_gap_s": max(gaps)}, indent=2))
+>       assert max(gaps) <= 0.25, "Exact HLR holds up Qt heartbeat; process isolation required"
+E       AssertionError: Exact HLR holds up Qt heartbeat; process isolation required
+E       assert 0.4339165849960409 <= 0.25
+E        +  where 0.4339165849960409 = max([0.0523996440024348, 0.19394251200719737, 0.015404559002490714, 0.2139756149990717, 0.4339165849960409, 0.1991582619957626, ...])
+
+tests/ui/test_drawing_execution_probe.py:63: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_execution_probe.py::test_exact_hlr_worker_keeps_heartbeat
+1 failed in 12.52s

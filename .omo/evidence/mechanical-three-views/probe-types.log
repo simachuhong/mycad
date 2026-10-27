@@ -1,0 +1,10 @@
+/media/sima/Data/projects/MyCAD/tests/geom/test_drawing_projection_probe.py
+  /media/sima/Data/projects/MyCAD/tests/geom/test_drawing_projection_probe.py:57:32 - error: Argument of type "TopoDS_Shape" cannot be assigned to parameter "obj" of type "TopoDS_Compound | Iterable[Shape[Unknown]] | None" in function "__init__"
+    Type "TopoDS_Shape" is not assignable to type "TopoDS_Compound | Iterable[Shape[Unknown]] | None"
+      "TopoDS_Shape" is not assignable to "TopoDS_Compound"
+      "TopoDS_Shape" is incompatible with protocol "Iterable[Shape[Unknown]]"
+        "__iter__" is not present
+      "TopoDS_Shape" is not assignable to "None" (reportArgumentType)
+  /media/sima/Data/projects/MyCAD/tests/geom/test_drawing_projection_probe.py:92:16 - error: Type "Compound" is not assignable to declared type "Part"
+    "Compound" is not assignable to "Part" (reportAssignmentType)
+2 errors, 0 warnings, 0 notes

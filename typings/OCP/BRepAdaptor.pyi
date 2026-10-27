@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 MyCAD contributors
+# SPDX-License-Identifier: Apache-2.0
+from .Geom import Geom_BSplineCurve
+from .gp import gp_Cylinder
+from .TopoDS import TopoDS_Edge, TopoDS_Face
+
+class BRepAdaptor_Surface:
+    def __init__(self, face: TopoDS_Face) -> None: ...
+    def Cylinder(self) -> gp_Cylinder: ...
+
+class BRepAdaptor_Curve:
+    def __init__(self, edge: TopoDS_Edge) -> None: ...
+    def BSpline(self) -> Geom_BSplineCurve: ...

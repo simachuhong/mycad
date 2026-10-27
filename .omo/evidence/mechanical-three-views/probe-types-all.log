@@ -1,0 +1,9 @@
+/media/sima/Data/projects/MyCAD/tests/geom/test_drawing_projection_probe.py
+  /media/sima/Data/projects/MyCAD/tests/geom/test_drawing_projection_probe.py:317:22 - error: Argument of type "Compound | Wire" cannot be assigned to parameter "shape" of type "ProbeShape" in function "project"
+    Type "Compound | Wire" is not assignable to type "ProbeShape"
+      Type "Wire" is not assignable to type "ProbeShape"
+        "Wire" is not assignable to "Compound"
+        "Wire" is not assignable to "Solid"
+        "Wire" is not assignable to "Face"
+        "Wire" is not assignable to "Edge" (reportArgumentType)
+1 error, 0 warnings, 0 notes

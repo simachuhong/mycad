@@ -1,6 +1,6 @@
 # MyCAD 机械三视图与三工作区 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 当前仅交付评估和计划，未获本轮实现指令；执行前读取配套设计和最新 AGENTS.md。
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 用户于 2026-10-27 确认实施：先提交基线，再完成 T0；通过后继续后续阶段。执行前读取配套设计和最新 AGENTS.md。
 
 **Goal:** 在“平面草图｜工程图｜3D图”常驻画布页中，完成当前零件的关联三视图、基础测量标注及按比例出图。
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 用户已要求草图/工程图分离及三个画布 Tab；同文件保存、第一角默认、工程图测量语义、首版范围为建议默认值，仍需实施前确认。
+- 用户已要求草图/工程图分离及三个画布 Tab；同文件保存、第一角默认、工程图测量语义、首版范围为建议默认值，已随本 Plan 获用户确认。
 - 当前 MyCAD 原生零件的已提交实体为源；多实体一起计算遮挡；不自动提交正在编辑的草图。
 - 草图新尺寸默认驱动；工程图默认关联测量，不反向修改模型。
 - 第一角主/俯/左为建议默认，支持第三角及左右侧视；A4/A3 横纵纸张，标准比例和可编辑简式标题栏。
@@ -63,6 +63,10 @@
 - `build_drawing_scene(state: DrawingState, sheet_id: UUID, projections: Mapping[UUID, ProjectionResult]) -> DrawingScene`：纯纸张合成，结果包含页尺寸、转换后的几何、纸上文字/线型和阻止出图的问题。
 - `export_drawing_dxf(scene: DrawingScene, target: Path) -> None` 与 `export_drawing_pdf(scene: DrawingScene, target: Path) -> None`；先校验冻结场景再原子写入。
 
+## T0 实测裁定（2026-10-27）
+
+详见 [.omo/evidence/mechanical-three-views/probe.md](../../../.omo/evidence/mechanical-three-views/probe.md)。QThread 直接 HLR 未通过250ms UI门槛；spawn进程通过。T3/T5 必须采用常驻进程、异步预热、BREP快照及中性DTO、版本匹配和资源清理。冷启动时明确显示准备中，不计入预热后3s计算目标；正式DTO全程性能仍在T3验收。追加4–6人日，合计38–60人日。
+
 ## 实施顺序与投入
 
 | 包 | 产出 | 依赖 | 估计人日 |
@@ -79,21 +83,21 @@
 
 合计 **34–54 人日**，一名熟悉项目工程师约 7–11 工作周；不等同代理运行时间。T0 后重估，独立工作进程或扩大拓扑命名范围需另列工作。T2/T3 可在契约稳定后独立开展，但合入前必须共同验证。
 
-### T0：先证明几何与架构路径可用
+### Task 0: T0 — 先证明几何与架构路径可用
 
 **Files:** 新增 `tests/geom/test_drawing_projection_probe.py`、`tests/ui/test_drawing_execution_probe.py`；证据 `.omo/evidence/mechanical-three-views/probe.md`。必要原型只在 geom 测试合法边界或临时实验文件，不接产品按钮。
 
 **Interfaces:** 输入当前精确 Part 和显式坐标基；输出探针报告、支持曲线/来源策略、实际耗时与线程证据。
 
-- [ ] 写数值断言：不对称阶梯块+偏心孔的正反/左右不能镜像混淆；法兰四孔圆心距离和直径正确；双实体遮挡边不错误可见。
-- [ ] 运行 `uv run pytest tests/geom/test_drawing_projection_probe.py -q`，记录基准失败而非跳过未支持曲线。
-- [ ] 用已安装 HLR 精确接口验证 visible/hidden/tangent、圆柱轮廓来源、椭圆及有理样条；检查 BuildCurves3d 等必要修复。明确轮廓来自面，不能伪造原始边引用。
-- [ ] 探针验证改长度/改孔径后唯一重绑定、删除和重复孔后拒绝歧义。至少记录一个成功、一个 orphaned、一个 ambiguous 案例及来源证据，不接受最近边兜底。
-- [ ] 验证非几何历史项进入 reset/replace_state_from/预览不会改变 BodyOrigin；确认 v3 command params 足以保存图纸，无需添加顶层字段。
-- [ ] 记录参考硬件、边/面数、p50/p95、内存和 UI 心跳；运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_execution_probe.py -q` 并在真实桌面观察一次。100 ms 心跳，>250 ms 停顿诊断；≤1000 边三视图 ≤3 s 为待审定目标。
-- [ ] 写 go/no-go：精确曲线和有界引用通过才能进入 T1/T3；若 GIL 阻塞严重，先补进程隔离设计与预算，不把 QThread 包装当作解决。报告不满足条件的样本和原因。
+- [x] 写数值断言：不对称阶梯块+偏心孔的正反/左右不能镜像混淆；法兰四孔圆心距离和直径正确；双实体遮挡边不错误可见。
+- [x] 运行 `uv run pytest tests/geom/test_drawing_projection_probe.py -q`，记录基准失败而非跳过未支持曲线。
+- [x] 用已安装 HLR 精确接口验证 visible/hidden/tangent、圆柱轮廓来源、椭圆及有理样条；检查 BuildCurves3d 等必要修复。明确轮廓来自面，不能伪造原始边引用。
+- [x] 探针验证改长度/改孔径后唯一重绑定、删除和重复孔后拒绝歧义。至少记录一个成功、一个 orphaned、一个 ambiguous 案例及来源证据，不接受最近边兜底。
+- [x] 验证非几何历史项进入 reset/replace_state_from/预览不会改变 BodyOrigin；确认 v3 command params 足以保存图纸，无需添加顶层字段。
+- [x] 记录参考硬件、边/面数、p50/p95、内存和 UI 心跳；运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_execution_probe.py -q` 并在真实桌面观察一次。100 ms 心跳，>250 ms 停顿诊断；≤1000 边三视图 ≤3 s 为待审定目标。
+- [x] 写 go/no-go：精确曲线和有界引用通过才能进入 T1/T3；若 GIL 阻塞严重，先补进程隔离设计与预算，不把 QThread 包装当作解决。报告不满足条件的样本和原因。
 
-### T1：领域对象、坐标和继承规则
+### Task 1: T1 — 领域对象、坐标和继承规则
 
 **Files:** 新增三个 core/drawing* 文件（见上表）、`tests/core/test_drawing_model.py`、`tests/core/test_drawing_coordinates.py`。
 
@@ -105,7 +109,7 @@
 - [ ] 实现 reducer 和父子有效属性解析：存储继承标志，解除/恢复对齐显式可逆；更换投影法只通过明确重排操作作用于既有视图。
 - [ ] GREEN 跑同组测试及 `uv run pytest tests/test_layering.py -q`；仅对新增 core 文件执行 lint/format/type 检查。交付纯数据契约，不加入 Qt/CAD 导入。
 
-### T2：命令、事务、历史和存档
+### Task 2: T2 — 命令、事务、历史和存档
 
 **Files:** 新增 `builtin_commands/drawing_specs.py`、`tests/core/test_drawing_commands.py`、`tests/core/test_drawing_archive.py`、`tests/geom/test_drawing_state.py`；修改 specs/defs 注册入口、geom/kernel.py、core/persistence.py 与必要 schema 选择路径、app.py。
 
@@ -118,7 +122,7 @@
 - [ ] 新工程图 part 以 v3 存档，旧 v1/v2 在保存含新命令的文档时升级；打开不写回。仅新命令 params 保存对象，缓存不入档；未知命令版本给出明确错误。
 - [ ] GREEN 跑同组；追加既有 persistence/undo/app 候选加载相关 scoped 测试。提交前检查仅本包文件差异，保留用户前序修改。
 
-### T3：精确投影与可追踪曲线
+### Task 3: T3 — 精确投影与可追踪曲线
 
 **Files:** 新增 `geom/drawing_projection.py`、`tests/geom/test_drawing_projection.py`；修改 kernel.py/app.py 的能力接线。
 
@@ -131,7 +135,7 @@
 - [ ] 缓存以模型内容指纹+来源+基方向+几何策略/内核版本索引；纸上移动/比例不得进 HLR 缓存键。空模型可显示空页，但创建视图明确失败。
 - [ ] GREEN 跑同组和 T0 几何回归，输出数值及定向截图证据；按 T0 审定容差验收。
 
-### T4：三工作区与图纸放置
+### Task 4: T4 — 三工作区与图纸放置
 
 **Files:** 新增 `ui/workspace_tabs.py`、`drawing_workbench.py`、`drawing_canvas.py`、`drawing_tools.py`、`tests/ui/test_workspace_tabs.py`、`tests/ui/test_drawing_views.py`；修改 main_window.py/sketch_editor.py/workspace_console.py 的接入点。
 
@@ -144,11 +148,11 @@
 - [ ] 右侧设置纸张、标题、第一/第三角、比例、基准方向；预览在画布跟随鼠标，单击定位，Enter 通过一个事务提交整组，Esc 撤销整组临时预览。
 - [ ] GREEN 跑同组及现有 toolbar/workspace_console/草图关闭回归；真实桌面验证窄窗与浮动面板，截图说明画布空间。草图 DIM→0 工具切换既有规则仍通过。
 
-### T5：视图句柄、对齐与更新
+### Task 5: T5 — 视图句柄、对齐与更新
 
 **Files:** 修改 drawing_tools.py/drawing_workbench.py/drawing_canvas.py/execution.py；新增 `tests/ui/test_drawing_grips.py`、`tests/ui/test_drawing_updates.py`。
 
-**Interfaces:** 视图拖动生成 T2 update 操作；后台只通过 ProjectionPort 返回冻结结果，应用结果同时匹配 session、source_fingerprint、view_id、generation。
+**Interfaces:** 视图拖动生成 T2 update 操作；后台通过常驻 spawn 进程实现 ProjectionPort 并返回冻结结果，应用结果同时匹配 session、source_fingerprint、view_id、generation。
 
 - [ ] RED：`test_parent_move_keeps_children_aligned`、`test_child_move_is_axis_constrained`、`test_scale_override_and_restore`、`test_stale_same_session_result_is_discarded`、`test_delete_view_subtree_is_one_undo`。
 - [ ] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_grips.py tests/ui/test_drawing_updates.py -q`，确认失败。
@@ -157,7 +161,7 @@
 - [ ] 删除父视图时预览子树及关联标注影响，确认后一个事务删除；undo 恢复全部。取消计算只停止接收结果，UI 不谎称已物理中断线程。
 - [ ] GREEN 跑同组并复测 T0 心跳。整组生成/拖动/取消/更新能通过 CLI 调用相同命令能力，不为 AI 另建写模型后门。
 
-### T6：关联标注和失关联修复
+### Task 6: T6 — 关联标注和失关联修复
 
 **Files:** 新增 `geom/drawing_references.py`、`tests/geom/test_drawing_references.py`、`tests/ui/test_drawing_annotations.py`；修改 drawing_tools.py/canvas.py 及 T1 场景合成。
 
@@ -170,7 +174,7 @@
 - [ ] 图中拖文字、双击编辑精度/表达、选新几何重附着均经 T2 命令；不允许通过输入虚假尺寸覆盖测量值，不修改实体或草图 driving 默认。
 - [ ] GREEN 跑同组和 T2 重放/存档测试；重复孔、孔消失、改长度后人工检查警示，导出前问题清单能定位具体标注。
 
-### T7：同源纸张预览与 DXF/PDF
+### Task 7: T7 — 同源纸张预览与 DXF/PDF
 
 **Files:** 新增 formats/drawing_export.py、ui/drawing_pdf.py、`tests/formats/test_drawing_export.py`、`tests/ui/test_drawing_pdf.py`；修改工作区导出入口。
 
@@ -183,7 +187,7 @@
 - [ ] clean 且无失关联/缺失几何才允许最终出图；生成临时文件，完整成功后替换目标。标明 DXF 是静态交付，不宣称保存 AutoCAD VIEWBASE/跨软件关联。
 - [ ] GREEN 跑同组；解析 DXF 数值验证 80 mm 在 1:2 纸上 40 mm、尺寸文本 80；纸上定位目标≤0.05 mm。外部查看器人工核对 DXF/PDF 线型、中文、页尺寸和打印实际大小。
 
-### T8：贯通验收、文档和发布门
+### Task 8: T8 — 贯通验收、文档和发布门
 
 **Files:** 新增 `tests/ui/test_mechanical_three_views.py`；更新 README.md、docs 下实际用户指南与 ADR（仅必要决策）、`.omo/evidence/mechanical-three-views/acceptance.md`、ledger。
 
@@ -200,4 +204,4 @@
 
 规格覆盖映射：对标流程→T4/T5；三 Tab→T4；数据/重放→T1/T2；HLR→T0/T3；标注/身份→T0/T6；线程/缓存→T0/T5；输出→T7；兼容和全程→T8。五项 Review Focus 均有指定测试。
 
-本轮只生成此 Plan 与评估文档；没有运行上述尚不存在的功能测试，也没有达到任何实现里程碑。推荐实施从 T0 开始，以实测决定后续风险范围。
+本轮原为评估交付；用户已批准实施。T0 证据记录在 probe.md，任务完成情况以勾选和执行账本为准，未勾选的后续功能仍未交付。

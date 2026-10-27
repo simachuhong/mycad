@@ -1,0 +1,17 @@
+....F...                                                                 [100%]
+=================================== FAILURES ===================================
+___________________ test_cylinder_silhouette_has_face_source ___________________
+
+    def test_cylinder_silhouette_has_face_source() -> None:
+        cylinder = Cylinder(5, 12)
+        side = next(face for face in cylinder.faces() if face.geom_type == GeomType.CYLINDER)
+        result = project(cylinder, (0, -1, 0), (0, 0, 1), source=side)
+>       assert len(result.outline) == 2
+E       assert 1 == 2
+E        +  where 1 = len((<build123d.topology.one_d.Edge object at 0x7840080e1cd0>,))
+E        +    where (<build123d.topology.one_d.Edge object at 0x7840080e1cd0>,) = ProbeProjection(visible=(<build123d.topology.one_d.Edge object at 0x78400932d3d0>, <build123d.topology.one_d.Edge obje...one_d.Edge object at 0x7840080e1280>), tangent=(), outline=(<build123d.topology.one_d.Edge object at 0x7840080e1cd0>,)).outline
+
+tests/geom/test_drawing_projection_probe.py:157: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection_probe.py::test_cylinder_silhouette_has_face_source
+1 failed, 7 passed in 9.41s

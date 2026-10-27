@@ -1,0 +1,16 @@
+F....                                                                    [100%]
+=================================== FAILURES ===================================
+_________________ test_length_edit_rebinds_unique_planar_sides _________________
+
+    def test_length_edit_rebinds_unique_planar_sides() -> None:
+>       assert planar_width_reference(Box(40, 20, 8)) == pytest.approx(40)
+E       assert None == 40 ± 4.0e-05
+E         
+E         comparison failed
+E         Obtained: None
+E         Expected: 40 ± 4.0e-05
+
+tests/geom/test_drawing_projection_probe.py:282: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection_probe.py::test_length_edit_rebinds_unique_planar_sides
+1 failed, 4 passed, 10 deselected in 8.57s

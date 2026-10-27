@@ -1,0 +1,70 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___ test_non_geometry_history_preserves_body_source_through_replay_and_open ____
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-44/test_non_geometry_history_pres0')
+
+    def test_non_geometry_history_preserves_body_source_through_replay_and_open(tmp_path: Path) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        kernel = services.kernel
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
+        before = kernel.viewport_data()[-1]
+        loaded.bus.execute("drawing.layers.set", {
+            "layers": kernel.drawing_layers.to_mapping(), "dimension_layer": "DIM",
+        }, "test")
+        after = kernel.viewport_data()[-1]
+        assert after.body_origins[0].result == before.body_origins[0].result
+        assert kernel.mass_properties().volume == pytest.approx(6400)
+>       assert len(kernel.snapshots()) == 2
+                   ^^^^^^^^^^^^^^^^
+E       AttributeError: 'BuildKernel' object has no attribute 'snapshots'. Did you mean: '_snapshots'?
+
+tests/geom/test_drawing_history_probe.py:32: AttributeError
+____ test_v3_can_store_new_command_parameters_without_new_top_level_fields _____
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-44/test_v3_can_store_new_command_0')
+
+    def test_v3_can_store_new_command_parameters_without_new_top_level_fields(tmp_path: Path) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services, document_type="part")
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
+        path = tmp_path / "source.my3d"
+        save_document(loaded.document, path)
+        archive = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+        archive["version"] = 3
+        archive["document_type"] = "part"
+        commands = cast("list[dict[str, object]]", archive["commands"])
+        first_audit = deepcopy(commands[0])
+        commands.append({
+            "id": "drawing.view.create", "version": 1,
+            "params": {"view_id": "probe-view", "sheet_id": "probe-sheet",
+                       "source": {"kind": "current_part"}, "scale": 0.5,
+                       "basis": {"right": [1, 0, 0], "up": [0, 0, 1], "normal": [0, -1, 0]}},
+            "ordinal": 1, "timestamp_utc": "2026-10-27T00:00:00+00:00", "confirmed_by": "test",
+        })
+>       validate_archive_v3(archive)
+
+tests/geom/test_drawing_history_probe.py:66: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/schema_v3.py:30: in validate_archive_v3
+    validate_archive_v2(v2_payload)
+src/mycad/core/schema_v2.py:133: in validate_archive_v2
+    _closed(root, _TOP_LEVEL_KEYS, "archive")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+data = {'format': 'mycad.document', 'version': 2, 'metadata': {'part_no': '', 'revision': '', 'material': '', 'source': 'loca...obe-view', 'sheet_id': 'probe-sheet', 'source': {'kind': 'current_part'}, 'scale': 0.5, ...}, 'ordinal': 1, ...}], ...}
+keys = ('format', 'version', 'metadata', 'commands', 'named_groups', 'provenance')
+pointer = 'archive'
+
+    def _closed(data: dict[str, object], keys: tuple[str, ...], pointer: str) -> None:
+        for key in keys:
+            if key not in data:
+>               raise ValidationError(f"{pointer}: missing required field {key!r}")
+E               mycad.core.exceptions.ValidationError: archive: missing required field 'provenance'
+
+src/mycad/core/schema_v2.py:41: ValidationError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_history_probe.py::test_non_geometry_history_preserves_body_source_through_replay_and_open
+FAILED tests/geom/test_drawing_history_probe.py::test_v3_can_store_new_command_parameters_without_new_top_level_fields
+2 failed in 11.04s

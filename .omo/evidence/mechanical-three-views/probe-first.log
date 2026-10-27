@@ -1,0 +1,31 @@
+...FF...                                                                 [100%]
+=================================== FAILURES ===================================
+________________ test_occluded_body_edge_is_hidden_in_joint_hlr ________________
+
+    def test_occluded_body_edge_is_hidden_in_joint_hlr() -> None:
+        near = Pos(0, 0, 5) * Box(30, 30, 2)
+        far = Pos(0, 0, -5) * Box(8, 6, 2)
+        scene = Compound(children=[near, far])
+        far_result = project(scene, source=far)
+        assert not far_result.visible
+>       assert sum(edge.length for edge in far_result.hidden) > 20
+E       assert 0 > 20
+E        +  where 0 = sum(<generator object test_occluded_body_edge_is_hidden_in_joint_hlr.<locals>.<genexpr> at 0x7f725e6662c0>)
+
+tests/geom/test_drawing_projection_probe.py:137: AssertionError
+___________________ test_cylinder_silhouette_has_face_source ___________________
+
+    def test_cylinder_silhouette_has_face_source() -> None:
+        cylinder = Cylinder(5, 12)
+        side = next(face for face in cylinder.faces() if face.geom_type == GeomType.CYLINDER)
+        result = project(cylinder, (0, -1, 0), (0, 0, 1), source=side)
+>       assert len(result.outline) == 2
+E       assert 0 == 2
+E        +  where 0 = len(())
+E        +    where () = ProbeProjection(visible=(), hidden=(), tangent=(), outline=()).outline
+
+tests/geom/test_drawing_projection_probe.py:145: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection_probe.py::test_occluded_body_edge_is_hidden_in_joint_hlr
+FAILED tests/geom/test_drawing_projection_probe.py::test_cylinder_silhouette_has_face_source
+2 failed, 6 passed in 9.05s

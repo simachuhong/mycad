@@ -1,0 +1,40 @@
+{
+  "pid": 169975,
+  "edges": 900,
+  "faces": 900,
+  "runs_s": [
+    1.7556598489900352,
+    1.6959382350032683,
+    1.7527981830062345,
+    1.7978039439913118,
+    2.0051408509898465
+  ],
+  "p50_s": 1.7556598489900352,
+  "p95_sample_s": 2.0051408509898465,
+  "peak_rss_kib": 658824,
+  "curve_counts": [
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820
+  ],
+  "mode": "process",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "wall_including_startup_s": 25.506019606997143,
+  "heartbeat_samples": 252,
+  "max_gap_s": 0.10698107899224851,
+  "screenshot": "/tmp/pytest-of-sima/pytest-47/test_exact_hlr_execution_probe0/heartbeat.png"
+}
+.
+1 passed, 3 deselected in 37.69s

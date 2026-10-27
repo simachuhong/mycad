@@ -1,0 +1,129 @@
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+________ test_asymmetric_offset_hole_is_not_mirrored[normal0-up0-want0] ________
+
+normal = (0, 0, 1), up = (0, 1, 0), want = (7, 4, 2)
+
+    @pytest.mark.parametrize(
+        "normal,up,want",
+        [
+            ((0, 0, 1), (0, 1, 0), (7, 4, 2)),
+            ((0, 0, -1), (0, 1, 0), (-7, 4, 2)),
+        ],
+    )
+    def test_asymmetric_offset_hole_is_not_mirrored(
+        normal: Point3, up: Point3, want: tuple[float, float, float]
+    ) -> None:
+        shape = Box(40, 24, 8) - Pos(7, 4, 0) * Cylinder(2, 20)
+        projection = project(shape, normal, up)
+>       assert want in circles(projection.visible)
+E       assert (7, 4, 2) in []
+E        +  where [] = circles(())
+E        +    where () = ProbeProjection(visible=(), hidden=(), tangent=(), outline=()).visible
+
+tests/geom/test_drawing_projection_probe.py:75: AssertionError
+________ test_asymmetric_offset_hole_is_not_mirrored[normal1-up1-want1] ________
+
+normal = (0, 0, -1), up = (0, 1, 0), want = (-7, 4, 2)
+
+    @pytest.mark.parametrize(
+        "normal,up,want",
+        [
+            ((0, 0, 1), (0, 1, 0), (7, 4, 2)),
+            ((0, 0, -1), (0, 1, 0), (-7, 4, 2)),
+        ],
+    )
+    def test_asymmetric_offset_hole_is_not_mirrored(
+        normal: Point3, up: Point3, want: tuple[float, float, float]
+    ) -> None:
+        shape = Box(40, 24, 8) - Pos(7, 4, 0) * Cylinder(2, 20)
+        projection = project(shape, normal, up)
+>       assert want in circles(projection.visible)
+E       assert (-7, 4, 2) in []
+E        +  where [] = circles(())
+E        +    where () = ProbeProjection(visible=(), hidden=(), tangent=(), outline=()).visible
+
+tests/geom/test_drawing_projection_probe.py:75: AssertionError
+___________________ test_flange_keeps_pcd_and_hole_diameter ____________________
+
+    def test_flange_keeps_pcd_and_hole_diameter() -> None:
+        result = project(flange())
+        holes = {(x, y, r) for x, y, r in circles(result.visible) if r == 3}
+>       assert holes == {(25, 0, 3), (0, 25, 3), (-25, 0, 3), (0, -25, 3)}
+E       assert set() == {(-25, 0, 3),...), (25, 0, 3)}
+E         
+E         Extra items in the right set:
+E         (0, 25, 3)
+E         (25, 0, 3)
+E         (0, -25, 3)
+E         (-25, 0, 3)
+E         Use -v to get more diff
+
+tests/geom/test_drawing_projection_probe.py:81: AssertionError
+________________ test_occluded_body_edge_is_hidden_in_joint_hlr ________________
+
+    def test_occluded_body_edge_is_hidden_in_joint_hlr() -> None:
+        near = Pos(0, 0, 5) * Box(30, 30, 2)
+        far = Pos(0, 0, -5) * Box(8, 6, 2)
+        scene = Compound(children=[near, far])
+        far_result = project(scene, source=far)
+        assert not far_result.visible
+>       assert sum(edge.length for edge in far_result.hidden) > 20
+E       assert 0 > 20
+E        +  where 0 = sum(<generator object test_occluded_body_edge_is_hidden_in_joint_hlr.<locals>.<genexpr> at 0x757c70ae7580>)
+
+tests/geom/test_drawing_projection_probe.py:92: AssertionError
+___________________ test_cylinder_silhouette_has_face_source ___________________
+
+    def test_cylinder_silhouette_has_face_source() -> None:
+        cylinder = Cylinder(5, 12)
+        side = next(face for face in cylinder.faces() if face.geom_type == GeomType.CYLINDER)
+        result = project(cylinder, (0, -1, 0), (0, 0, 1), source=side)
+>       assert len(result.outline) == 2
+E       assert 0 == 2
+E        +  where 0 = len(())
+E        +    where () = ProbeProjection(visible=(), hidden=(), tangent=(), outline=()).outline
+
+tests/geom/test_drawing_projection_probe.py:100: AssertionError
+_____________ test_oblique_circle_projection_remains_exact_ellipse _____________
+
+    def test_oblique_circle_projection_remains_exact_ellipse() -> None:
+        result = project(Cylinder(5, 12), (0, -1, 1), (0, 1, 1))
+>       assert any(edge.geom_type == GeomType.ELLIPSE for edge in result.visible)
+E       assert False
+E        +  where False = any(<generator object test_oblique_circle_projection_remains_exact_ellipse.<locals>.<genexpr> at 0x757c7063eb50>)
+
+tests/geom/test_drawing_projection_probe.py:106: AssertionError
+_______________ test_radius_change_resolves_without_runtime_ids ________________
+
+    def test_radius_change_resolves_without_runtime_ids() -> None:
+        status, faces = resolve_cylinder(flange(4), (25, 0))
+>       assert status == "resolved"
+E       AssertionError: assert 'orphaned' == 'resolved'
+E         
+E         - resolved
+E         + orphaned
+
+tests/geom/test_drawing_projection_probe.py:111: AssertionError
+___________ test_deleted_and_ambiguous_sources_never_choose_nearest ____________
+
+    def test_deleted_and_ambiguous_sources_never_choose_nearest() -> None:
+        assert resolve_cylinder(Box(80, 80, 8), (25, 0)) == ("orphaned", ())
+        status, faces = resolve_cylinder(flange(), None)
+>       assert status == "ambiguous"
+E       AssertionError: assert 'orphaned' == 'ambiguous'
+E         
+E         - ambiguous
+E         + orphaned
+
+tests/geom/test_drawing_projection_probe.py:119: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection_probe.py::test_asymmetric_offset_hole_is_not_mirrored[normal0-up0-want0]
+FAILED tests/geom/test_drawing_projection_probe.py::test_asymmetric_offset_hole_is_not_mirrored[normal1-up1-want1]
+FAILED tests/geom/test_drawing_projection_probe.py::test_flange_keeps_pcd_and_hole_diameter
+FAILED tests/geom/test_drawing_projection_probe.py::test_occluded_body_edge_is_hidden_in_joint_hlr
+FAILED tests/geom/test_drawing_projection_probe.py::test_cylinder_silhouette_has_face_source
+FAILED tests/geom/test_drawing_projection_probe.py::test_oblique_circle_projection_remains_exact_ellipse
+FAILED tests/geom/test_drawing_projection_probe.py::test_radius_change_resolves_without_runtime_ids
+FAILED tests/geom/test_drawing_projection_probe.py::test_deleted_and_ambiguous_sources_never_choose_nearest
+8 failed in 8.88s
