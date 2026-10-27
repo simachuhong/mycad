@@ -1,0 +1,18 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_source_count_uses_same_tolerance_as_reference_matching __________
+
+    def test_source_count_uses_same_tolerance_as_reference_matching() -> None:
+        from mycad.core.drawing_references import DrawingGeometryReference
+        from mycad.geom.drawing_references import source_key, source_multiplicities
+    
+        a = DrawingGeometryReference("cylindrical_face", (("x", 0.49e-6),))
+        b = DrawingGeometryReference("cylindrical_face", (("x", 0.51e-6),))
+        counts = source_multiplicities((a, b))
+>       assert counts[source_key(a)] == counts[source_key(b)] == 2
+E       assert 1 == 2
+
+tests/geom/test_drawing_references.py:71: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_references.py::test_source_count_uses_same_tolerance_as_reference_matching
+1 failed, 3 deselected in 14.09s

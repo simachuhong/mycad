@@ -1,0 +1,27 @@
+
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/geom/test_drawing_references.py ____________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/geom/test_drawing_references.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/geom/test_drawing_references.py:11: in <module>
+    from mycad.core.drawing_references import reference_for_curve, resolve_reference
+E   ImportError: cannot import name 'reference_for_curve' from 'mycad.core.drawing_references' (/media/sima/Data/projects/MyCAD/src/mycad/core/drawing_references.py)
+____________ ERROR collecting tests/ui/test_drawing_annotations.py _____________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/ui/test_drawing_annotations.py:11: in <module>
+    from mycad.core.drawing_annotations import resolve_annotation
+E   ModuleNotFoundError: No module named 'mycad.core.drawing_annotations'
+=========================== short test summary info ============================
+ERROR tests/geom/test_drawing_references.py
+ERROR tests/ui/test_drawing_annotations.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 errors in 9.22s

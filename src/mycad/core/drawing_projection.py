@@ -14,6 +14,7 @@ from mycad.core.drawing_references import DrawingGeometryReference
 
 if TYPE_CHECKING:
     from mycad.core.drawing import DrawingAnnotation, DrawingState
+    from mycad.core.drawing_annotations import SceneAnnotation
 
 Point2 = tuple[float, float]
 Point3 = tuple[float, float, float]
@@ -179,6 +180,7 @@ class ProjectedCurve:
     visibility: Literal["visible", "hidden", "tangent"] = "visible"
     source: DrawingGeometryReference | None = None
     silhouette: bool = False
+    source_count: int = 1
 
     def __post_init__(self) -> None:
         if not self.curve_id or self.visibility not in ("visible", "hidden", "tangent"):
@@ -240,11 +242,14 @@ class DrawingScene:
     annotations: tuple[DrawingAnnotation, ...] = ()
     issues: tuple[str, ...] = ()
     source_fingerprint: str = ""
+    resolved_annotations: tuple[SceneAnnotation, ...] = ()
 
 
 def build_drawing_scene(
     state: DrawingState, sheet_id: UUID, projections: Mapping[UUID, ProjectionResult]
 ) -> DrawingScene:
+    from mycad.core.drawing_annotations import resolve_annotation
+
     sheet = state.sheet(sheet_id)
     views: list[SceneView] = []
     issues: list[str] = []
@@ -276,6 +281,25 @@ def build_drawing_scene(
     if len(fingerprints) > 1:
         issues.append("视图来源版本不一致，请更新工程图")
     view_ids = {view.view_id for view in state.views if view.sheet_id == sheet_id}
+    resolved: list[SceneAnnotation] = []
+    for annotation in state.annotations:
+        if annotation.view_id not in view_ids:
+            continue
+        scene_view = next((v for v in views if v.view_id == annotation.view_id), None)
+        if scene_view is None:
+            scene_view = SceneView(
+                annotation.view_id,
+                state.effective_anchor(annotation.view_id),
+                state.effective_scale(annotation.view_id),
+                (),
+            )
+        projection = projections.get(
+            annotation.view_id, ProjectionResult(annotation.view_id, "unavailable", 0, ())
+        )
+        item = resolve_annotation(annotation, projection, scene_view)
+        resolved.append(item)
+        if item.status != "resolved":
+            issues.append(f"标注 {annotation.annotation_id}：{item.message}")
     return DrawingScene(
         sheet_id,
         sheet.size_mm,
@@ -285,6 +309,7 @@ def build_drawing_scene(
         tuple(a for a in state.annotations if a.view_id in view_ids),
         tuple(issues),
         next(iter(fingerprints), ""),
+        tuple(resolved),
     )
 
 

@@ -1,0 +1,46 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_canvas_annotation_placement_and_text_drag_are_bus_commands ________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x729a9b078230>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x729ad41fea80>
+
+    def test_canvas_annotation_placement_and_text_drag_are_bus_commands(qtbot: "QtBot", monkeypatch: "pytest.MonkeyPatch") -> None:
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtTest import QTest
+    
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.core.drawing_projection import ViewBasis
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.cylinder", {"radius": 5, "height": 8})
+        sheet = DrawingSheet(uuid4())
+        view = DrawingView(uuid4(), sheet.sheet_id, anchor_mm=(100, 100), basis=ViewBasis.from_normal_up((0, 0, 1), (0, 1, 0)))
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(sheet))
+        loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.updates.sync(bench.session_id, services.kernel.drawing_source_fingerprint, {view.view_id: view.basis})
+        batch = bench.updates.begin()
+        assert batch is not None
+        bench.updates.finish(batch, (services.kernel.project_drawing(batch.requests[0]),))
+        window.resize(1200, 800)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench.canvas.fit_view()
+>       bench.annotations.begin("diameter")
+        ^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingWorkbench' object has no attribute 'annotations'
+
+tests/ui/test_drawing_annotations.py:118: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_annotations.py::test_canvas_annotation_placement_and_text_drag_are_bus_commands
+1 failed, 3 deselected in 10.88s

@@ -1,0 +1,48 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+____________________ test_angle_wedge_follows_text_quadrant ____________________
+
+    def test_angle_wedge_follows_text_quadrant() -> None:
+        from math import sqrt
+    
+        from mycad.core.drawing_projection import SceneView
+    
+        identity = uuid4()
+        a = ProjectedCurve("a", LineCurve((0, 0), (10, 0)), source=DrawingGeometryReference("edge", (("id", 1),)))
+        b = ProjectedCurve("b", LineCurve((0, 0), (sqrt(3) * 5, 5)), source=DrawingGeometryReference("edge", (("id", 2),)))
+        annotation = DrawingAnnotation(uuid4(), identity, "angle", (reference_for_curve(a), reference_for_curve(b)), (-10, 10))
+        item = resolve_annotation(annotation, ProjectionResult(identity, "s", 1, (a, b)), SceneView(identity, (0, 0), 1, (a, b)))
+>       assert item.value == pytest.approx(150)
+E       assert 30.000000000000004 == 150 ± 1.5e-04
+E         
+E         comparison failed
+E         Obtained: 30.000000000000004
+E         Expected: 150 ± 1.5e-04
+
+tests/ui/test_drawing_annotations.py:275: AssertionError
+_______________ test_radius_leader_terminates_on_the_trimmed_arc _______________
+
+    def test_radius_leader_terminates_on_the_trimmed_arc() -> None:
+        from mycad.core.drawing_projection import SceneView
+    
+        identity = uuid4()
+        curve = ProjectedCurve("arc", ArcCurve((0, 0), 5, 0, 90), source=DrawingGeometryReference("edge", (("id", 1),)))
+        annotation = DrawingAnnotation(uuid4(), identity, "radius", (reference_for_curve(curve),), (-10, 0))
+        item = resolve_annotation(annotation, ProjectionResult(identity, "s", 1, (curve,)), SceneView(identity, (0, 0), 1, (curve,)))
+        radial = item.curves[0]
+        assert isinstance(radial, LineCurve)
+>       assert radial.end == pytest.approx((0, 5))
+E       assert (-5.0, 6.123233995736766e-16) == approx((0 ± 1... 5 ± 5.0e-06))
+E         
+E         comparison failed. Mismatched elements: 2 / 2:
+E         Max absolute difference: 5.0
+E         Max relative difference: 8165619676597683.0
+E         Index | Obtained              | Expected   
+E         0     | -5.0                  | 0 ± 1.0e-12
+E         1     | 6.123233995736766e-16 | 5 ± 5.0e-06
+
+tests/ui/test_drawing_annotations.py:287: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_annotations.py::test_angle_wedge_follows_text_quadrant
+FAILED tests/ui/test_drawing_annotations.py::test_radius_leader_terminates_on_the_trimmed_arc
+2 failed, 12 deselected in 12.39s

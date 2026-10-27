@@ -110,6 +110,11 @@ class DrawingCanvas(QGraphicsView):
     paper_moved = Signal(object)
     commit_requested = Signal()
     cancel_requested = Signal()
+    geometry_clicked = Signal(object, str, object)
+    annotation_selected = Signal(object)
+    annotation_edit_requested = Signal(object)
+    annotation_dragged = Signal(object, object, bool)
+    annotation_delete_requested = Signal()
     view_selected = Signal(object)
     view_dragged = Signal(object, str, object, bool)
     drag_cancelled = Signal()
@@ -139,14 +144,22 @@ class DrawingCanvas(QGraphicsView):
         self._drag_scale = 1.0
         self._drag_value: Point2 | float = (0, 0)
         self._drag_started = False
+        self.annotation_mode = False
+        self.selected_annotation: UUID | None = None
+        self._drag_annotation: UUID | None = None
+        self._annotation_drag_position: Point2 = (0, 0)
+        self._annotation_bounds: dict[UUID, QRectF] = {}
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
     def clear_scene(self) -> None:
+        self.selected_annotation = None
+        self.annotation_selected.emit(None)
         self.select_view(None)
         self.drawing_scene = None
         self._needs_fit = True
         graphics = self.scene()
         self._grip_items.clear()
+        self._annotation_bounds.clear()
         self._bounds.clear()
         self._grips.clear()
         graphics.clear()
@@ -155,9 +168,15 @@ class DrawingCanvas(QGraphicsView):
     def set_scene(self, scene: DrawingScene) -> None:
         first = self.drawing_scene is None or self.drawing_scene.sheet_id != scene.sheet_id
         self.drawing_scene = scene
+        if self.selected_annotation is not None and self.selected_annotation not in {
+            a.annotation_id for a in scene.resolved_annotations
+        }:
+            self.selected_annotation = None
+            self.annotation_selected.emit(None)
         graphics = self.scene()
         assert graphics is not None
         self._grip_items.clear()
+        self._annotation_bounds.clear()
         self._bounds.clear()
         self._grips.clear()
         graphics.clear()
@@ -203,6 +222,23 @@ class DrawingCanvas(QGraphicsView):
                 bounds = item.sceneBoundingRect()
                 previous = self._bounds.get(view.view_id)
                 self._bounds[view.view_id] = bounds if previous is None else previous.united(bounds)
+        for annotation in scene.resolved_annotations:
+            color = QColor("#087589" if annotation.status == "resolved" else "#bc3540")
+            pen = QPen(color, 0.18)
+            if annotation.kind == "center":
+                pen.setStyle(Qt.PenStyle.DashDotLine)
+            for geometry in annotation.curves:
+                item = graphics.addPath(curve_path(geometry), pen)
+                item.setData(2, annotation.annotation_id)
+                item.setZValue(3)
+            font = QFont("sans-serif")
+            font.setPointSizeF(2.5)
+            label = graphics.addText(annotation.text or "中心", font)
+            label.setDefaultTextColor(color)
+            label.setPos(annotation.position_mm[0], -annotation.position_mm[1])
+            label.setData(2, annotation.annotation_id)
+            label.setZValue(4)
+            self._annotation_bounds[annotation.annotation_id] = label.sceneBoundingRect()
         graphics.setSceneRect(-8, -h - 8, w + 16, h + 16)
         self._draw_grips()
         if first:
@@ -231,6 +267,9 @@ class DrawingCanvas(QGraphicsView):
         self._draw_grips()
         if changed:
             self.view_selected.emit(identity)
+
+    def annotation_text_position(self, identity: UUID) -> QPoint:
+        return self.mapFromScene(self._annotation_bounds[identity].center())
 
     def grip_position(self, mode: str) -> QPoint:
         return self.mapFromScene(self._grips[mode].center())
@@ -282,6 +321,38 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self.annotation_mode and event.button() == Qt.MouseButton.LeftButton:
+            point = self.paper_point(event.position())
+            for item in self.items(event.position().toPoint()):
+                identity, curve_id = item.data(0), item.data(1)
+                if isinstance(identity, UUID) and isinstance(curve_id, str):
+                    self.geometry_clicked.emit(identity, curve_id, point)
+                    event.accept()
+                    return
+            self.paper_clicked.emit(point)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self.drawing_scene is not None:
+            for item in self.items(event.position().toPoint()):
+                identity = item.data(2)
+                if isinstance(identity, UUID):
+                    self.selected_annotation = identity
+                    self.select_view(None)
+                    self.annotation_selected.emit(identity)
+                    self._drag_annotation = identity
+                    self._drag_start = self.paper_point(event.position())
+                    annotation = next(
+                        a
+                        for a in self.drawing_scene.resolved_annotations
+                        if a.annotation_id == identity
+                    )
+                    self._drag_anchor = annotation.position_mm
+                    self._drag_started = False
+                    self.viewport().grabMouse()
+                    event.accept()
+                    return
+            self.selected_annotation = None
+            self.annotation_selected.emit(None)
         if self.placing and event.button() == Qt.MouseButton.LeftButton:
             self.paper_clicked.emit(self.paper_point(event.position()))
             event.accept()
@@ -314,6 +385,20 @@ class DrawingCanvas(QGraphicsView):
     @override
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         point = self.paper_point(event.position())
+        if self._drag_annotation is not None:
+            dx, dy = point[0] - self._drag_start[0], point[1] - self._drag_start[1]
+            if math.hypot(dx, dy) * abs(self.transform().m11()) > 2:
+                self._drag_started = True
+            if self._drag_started:
+                self._annotation_drag_position = (
+                    self._drag_anchor[0] + dx,
+                    self._drag_anchor[1] + dy,
+                )
+                self.annotation_dragged.emit(
+                    self._drag_annotation, self._annotation_drag_position, False
+                )
+            event.accept()
+            return
         if self._drag_view is not None:
             dx, dy = point[0] - self._drag_start[0], point[1] - self._drag_start[1]
             if math.hypot(dx, dy) * abs(self.transform().m11()) > 2:
@@ -334,6 +419,15 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._drag_annotation is not None and event.button() == Qt.MouseButton.LeftButton:
+            identity = self._drag_annotation
+            self._drag_annotation = None
+            self.viewport().releaseMouse()
+            if self._drag_started:
+                self.annotation_dragged.emit(identity, self._annotation_drag_position, True)
+            self._drag_started = False
+            event.accept()
+            return
         if self._drag_view is not None and event.button() == Qt.MouseButton.LeftButton:
             identity = self._drag_view
             self._drag_view = None
@@ -345,9 +439,23 @@ class DrawingCanvas(QGraphicsView):
             return
         super().mouseReleaseEvent(event)
 
+    @override
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        for item in self.items(event.position().toPoint()):
+            identity = item.data(2)
+            if isinstance(identity, UUID):
+                self.cancel_drag()
+                self.selected_annotation = identity
+                self.annotation_selected.emit(identity)
+                self.annotation_edit_requested.emit(identity)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def cancel_drag(self) -> None:
-        if self._drag_view is not None:
+        if self._drag_view is not None or self._drag_annotation is not None:
             self._drag_view = None
+            self._drag_annotation = None
             self._drag_started = False
             self.viewport().releaseMouse()
             self.drag_cancelled.emit()
@@ -365,7 +473,10 @@ class DrawingCanvas(QGraphicsView):
             self.cancel_drag()
             self.cancel_requested.emit()
         elif event.key() == Qt.Key.Key_Delete:
-            self.delete_requested.emit()
+            if self.selected_annotation is not None:
+                self.annotation_delete_requested.emit()
+            else:
+                self.delete_requested.emit()
         else:
             super().keyPressEvent(event)
 

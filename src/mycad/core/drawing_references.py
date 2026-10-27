@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from mycad.core.drawing_projection import ProjectedCurve, ProjectionResult
 
 ReferenceStatus = Literal["resolved", "orphaned", "ambiguous"]
 
@@ -47,3 +50,73 @@ class ReferenceResolution:
             raise ValueError("invalid reference status")
         if (self.status == "resolved") != bool(self.curve_ids):
             raise ValueError("only uniquely resolved references carry projected curves")
+
+
+def same_source(a: DrawingGeometryReference, b: DrawingGeometryReference) -> bool:
+    """Exact predicate family with numerical tolerance, never closest candidate."""
+    if a.kind != b.kind or a.owner_command != b.owner_command:
+        return False
+    left = {k: v for k, v in a.parameters if not k.startswith("projected_")}
+    right = {k: v for k, v in b.parameters if not k.startswith("projected_")}
+    return left.keys() == right.keys() and all(
+        math.isclose(value, right[key], rel_tol=1e-9, abs_tol=1e-6) for key, value in left.items()
+    )
+
+
+def _curve_predicate(curve: ProjectedCurve) -> tuple[tuple[str, float], ...]:
+    from mycad.core.drawing_projection import ArcCurve, EllipseCurve, LineCurve
+
+    geometry = curve.geometry
+    if isinstance(geometry, LineCurve):
+        a, b = sorted((geometry.start, geometry.end))
+        length = math.dist(a, b)
+        if length <= 1e-9:
+            raise ValueError("不能关联零长线")
+        return (
+            ("projected_type", 1),
+            ("projected_dx", (b[0] - a[0]) / length),
+            ("projected_dy", (b[1] - a[1]) / length),
+        )
+    if isinstance(geometry, ArcCurve):
+        return (("projected_type", 2),)
+    if isinstance(geometry, EllipseCurve):
+        return (("projected_type", 3),)
+    return (("projected_type", 4),)
+
+
+def reference_for_curve(
+    curve: ProjectedCurve, *, role: Literal["geometry", "start", "end", "center"] = "geometry"
+) -> DrawingGeometryReference:
+    if curve.source is None:
+        raise ValueError("此曲线没有可持久关联的来源证据，请选择其他几何")
+    return DrawingGeometryReference(
+        curve.source.kind,
+        (*curve.source.parameters, *_curve_predicate(curve)),
+        curve.source.owner_command,
+        role,
+    )
+
+
+def resolve_reference(
+    reference: DrawingGeometryReference, result: ProjectionResult
+) -> ReferenceResolution:
+    candidates: list[ProjectedCurve] = []
+    wanted = {k: v for k, v in reference.parameters if k.startswith("projected_")}
+    for curve in result.curves:
+        if curve.source is None or not same_source(reference, curve.source):
+            continue
+        actual = dict(_curve_predicate(curve))
+        if all(
+            k in actual and math.isclose(v, actual[k], abs_tol=1e-6, rel_tol=1e-9)
+            for k, v in wanted.items()
+        ):
+            candidates.append(curve)
+    if not candidates:
+        return ReferenceResolution(
+            "orphaned", message="原几何已删除或超出可关联的几何变化范围，请重附着"
+        )
+    if len(candidates) != 1 or candidates[0].source_count != 1:
+        return ReferenceResolution(
+            "ambiguous", message="存在多个相同来源候选，不能自动选择；请重附着到可唯一识别的几何"
+        )
+    return ReferenceResolution("resolved", (candidates[0].curve_id,))

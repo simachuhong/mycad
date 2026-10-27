@@ -40,6 +40,7 @@ from mycad.core.drawing_projection import (
     projected_basis,
 )
 from mycad.core.persistence import LoadedDocument
+from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
 from mycad.ui.drawing_canvas import DrawingCanvas
 from mycad.ui.drawing_tools import ViewPlacement, move_view, scale_view, set_view_alignment
 from mycad.ui.drawing_updates import ProjectionBatch, ProjectionUpdates
@@ -175,6 +176,21 @@ class DrawingWorkbench(QMainWindow):
         self.tree.setHeaderLabels(["图形信息"])
         self.tree.itemClicked.connect(self._select_tree_sheet)
         self.settings_tabs.addTab(self.tree, "图形信息")
+        self.addToolBarBreak()
+        self.annotation_toolbar = self.addToolBar("工程图标注")
+        self.annotation_toolbar.setObjectName("drawingAnnotationToolbar")
+        self.annotations = DrawingAnnotationTools(
+            self.canvas,
+            self.annotation_toolbar,
+            lambda: self.state,
+            self.projections,
+            self._execute,
+            self._render,
+            self._set_message,
+            self._annotation_source_clean,
+        )
+        self.settings_tabs.addTab(self.annotations, "标注")
+        self.canvas.annotation_edit_requested.connect(self._edit_annotation)
         self.parameter_dock = QDockWidget("工程图功能", self)
         self.parameter_dock.setObjectName("drawingParameterDock")
         self.parameter_dock.setWidget(self.settings_tabs)
@@ -203,6 +219,8 @@ class DrawingWorkbench(QMainWindow):
         self.message.emit(text)
 
     def bind_document(self, loaded: LoadedDocument, session_id: int) -> None:
+        self.annotations.cancel()
+        self.annotations.select(None)
         self.loaded, self.session_id = loaded, session_id
         self.placement = None
         self._placement_stale = False
@@ -217,6 +235,7 @@ class DrawingWorkbench(QMainWindow):
         self._pending = False
         self._snapshot_inflight = False
         enabled = loaded.document.document_type == "part"
+        self.annotation_toolbar.setEnabled(enabled)
         for action in (
             self.sheet_action,
             self.base_action,
@@ -364,6 +383,7 @@ class DrawingWorkbench(QMainWindow):
             )
 
     def begin_placement(self) -> None:
+        self.annotations.cancel()
         if self.loaded is None or self.loaded.document.document_type != "part":
             return
         if self.sheet_id is None:
@@ -559,6 +579,7 @@ class DrawingWorkbench(QMainWindow):
             if self._ghost is not None and self._ghost.view_id not in existing:
                 views = [v for v in views if v.view_id != self._ghost.view_id] + [self._ghost]
             state = replace(state, views=(*state.views, *views))
+        state = self.annotations.preview(state)
         scene = build_drawing_scene(state, self.sheet_id, self.projections)
         labels = {"clean": "已更新", "stale": "待更新", "updating": "更新中", "failed": "更新失败"}
         names = {
@@ -583,11 +604,13 @@ class DrawingWorkbench(QMainWindow):
         self.canvas.set_scene(replace(scene, issues=tuple(dict.fromkeys(issues))))
 
     def _move(self, point: object) -> None:
+        self.annotations.move_preview(cast("Point2", point))
         if self.placement is not None and self.canvas.placing:
             self._ghost = self.placement.preview(cast("Point2", point))
             self._render()
 
     def _click(self, point: object) -> None:
+        self.annotations.click(cast("Point2", point))
         if self.placement is not None and self.canvas.placing:
             self.placement.click(cast("Point2", point))
             self._ghost = None
@@ -619,6 +642,25 @@ class DrawingWorkbench(QMainWindow):
         self._render()
         self.request_update()
         self._set_message("视图放置已结束。")
+
+    def _annotation_source_clean(self, identity: UUID) -> bool:
+        if self.services is None or self.unit is None or self.unit.is_busy:
+            return False
+        result = self.projections.get(identity)
+        current = self.services.kernel.drawing_state
+        return (
+            result is not None
+            and self.updates.status(identity) == "clean"
+            and result.source_fingerprint == self.services.kernel.drawing_source_fingerprint
+            and identity in {v.view_id for v in current.views}
+            and identity in {v.view_id for v in self.state.views}
+            and current.effective_basis(identity) == self.state.effective_basis(identity)
+        )
+
+    def _edit_annotation(self, identity: object) -> None:
+        self.annotations.select(identity)
+        self.settings_tabs.setCurrentWidget(self.annotations)
+        self.annotations.precision.setFocus()
 
     def _selected_view_changed(self, identity: object, activate: bool = True) -> None:
         valid = isinstance(identity, UUID) and identity in {v.view_id for v in self.state.views}
@@ -758,12 +800,17 @@ class DrawingWorkbench(QMainWindow):
         self._render()
 
     def _confirm_canvas(self) -> None:
-        if self._pending_delete is not None:
+        if self.annotations.pending:
+            self.annotations.commit()
+        elif self._pending_delete is not None:
             self.confirm_delete()
         else:
             self.commit_placement()
 
     def _cancel_canvas(self) -> None:
+        if self.canvas.annotation_mode or self.annotations.pending:
+            self.annotations.cancel()
+            return
         self._clear_grip_preview()
         if self._pending_delete is not None:
             self._clear_delete_preview()

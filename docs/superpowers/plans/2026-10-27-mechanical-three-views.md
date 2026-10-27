@@ -167,12 +167,12 @@
 
 **Interfaces:** 实现 `resolve_reference`，复用草图文字/箭头布局组件但输出 DrawingAnnotation；标注保持 DIM 层和纸上样式。
 
-- [ ] RED：`test_length_and_hole_diameter_updates_keep_correct_anchor`、`test_duplicate_holes_are_ambiguous_not_nearest`、`test_deleted_anchor_is_orphaned`、`test_dimension_value_ignores_paper_scale`、`test_ellipse_rejects_circle_dimension`。
-- [ ] 运行 `uv run pytest tests/geom/test_drawing_references.py -q` 和 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_annotations.py -q`，确认失败。
-- [ ] 实现有界语义证据解析；运行期 ID 不入档，ordinal/index 不作最终身份。只有唯一匹配才重新附着；引用删除/多候选保留文字位置并显示原因。
-- [ ] 实现水平/垂直/对齐、真实圆半径/直径、两直线角度、中心线/中心标记。线性测量取视图未缩放局部坐标，投影长度与空间真长明确区别。
-- [ ] 图中拖文字、双击编辑精度/表达、选新几何重附着均经 T2 命令；不允许通过输入虚假尺寸覆盖测量值，不修改实体或草图 driving 默认。
-- [ ] GREEN 跑同组和 T2 重放/存档测试；重复孔、孔消失、改长度后人工检查警示，导出前问题清单能定位具体标注。
+- [x] RED：`test_length_and_hole_diameter_updates_keep_correct_anchor`、`test_duplicate_holes_are_ambiguous_not_nearest`、`test_deleted_anchor_is_orphaned`、`test_dimension_value_ignores_paper_scale`、`test_ellipse_rejects_circle_dimension`。
+- [x] 运行 `uv run pytest tests/geom/test_drawing_references.py -q` 和 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_annotations.py -q`，确认失败。
+- [x] 实现有界语义证据解析；运行期 ID 不入档，ordinal/index 不作最终身份。只有唯一匹配才重新附着；引用删除/多候选保留文字位置并显示原因。
+- [x] 实现水平/垂直/对齐、真实圆半径/直径、两直线角度、中心线/中心标记。线性测量取视图未缩放局部坐标，投影长度与空间真长明确区别。
+- [x] 图中拖文字、双击编辑精度/表达、选新几何重附着均经 T2 命令；不允许通过输入虚假尺寸覆盖测量值，不修改实体或草图 driving 默认。
+- [x] GREEN 跑同组和 T2 重放/存档测试；重复孔、孔消失、改长度后人工检查警示，导出前问题清单能定位具体标注。
 
 ### Task 7: T7 — 同源纸张预览与 DXF/PDF
 

@@ -1,0 +1,17 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_missing_projection_retains_annotation_warning_position __________
+
+    def test_missing_projection_retains_annotation_warning_position() -> None:
+        sheet = DrawingSheet(uuid4())
+        view = DrawingView(uuid4(), sheet.sheet_id)
+        annotation = DrawingAnnotation(uuid4(), view.view_id, "diameter", (DrawingGeometryReference("cylindrical_face"),), (33, 44))
+        scene = build_drawing_scene(DrawingState((sheet,), (view,), (annotation,)), sheet.sheet_id, {})
+>       assert scene.resolved_annotations[0].position_mm == (33, 44)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       IndexError: tuple index out of range
+
+tests/ui/test_drawing_annotations.py:295: IndexError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_annotations.py::test_missing_projection_retains_annotation_warning_position
+1 failed, 14 deselected in 11.70s

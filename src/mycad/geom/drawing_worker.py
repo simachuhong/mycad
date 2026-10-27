@@ -21,9 +21,10 @@ from mycad.core.drawing_projection import (
     ProjectionResult,
     ViewBasis,
 )
-from mycad.geom.drawing_projection import Shape, project_shape
+from mycad.geom.drawing_projection import ProjectionSources, Shape, project_shape
 
 _shape: Shape | None = None
+_sources: ProjectionSources | None = None
 _fingerprint = ""
 _cache: dict[ViewBasis, ProjectionResult] = {}
 
@@ -35,7 +36,7 @@ def _ready() -> int:
 def _project(
     snapshot: DrawingSourceSnapshot, requests: tuple[DrawingProjectionRequest, ...]
 ) -> tuple[ProjectionResult, ...]:
-    global _shape, _fingerprint
+    global _shape, _fingerprint, _sources
     if any(r.source_fingerprint != snapshot.source_fingerprint for r in requests):
         raise ValueError("Projection request does not match source snapshot")
     if _fingerprint != snapshot.source_fingerprint or _shape is None:
@@ -44,6 +45,7 @@ def _project(
             path.write_bytes(snapshot.brep)
             load = cast("Callable[[str], Shape]", build123d.import_brep)
             _shape = load(str(path))
+        _sources = ProjectionSources(_shape)
         _fingerprint = snapshot.source_fingerprint
         _cache.clear()
     results: list[ProjectionResult] = []
@@ -51,7 +53,7 @@ def _project(
         if request.basis not in _cache:
             if len(_cache) >= 24:
                 _cache.clear()
-            _cache[request.basis] = project_shape(_shape, request)
+            _cache[request.basis] = project_shape(_shape, request, _sources)
         results.append(
             replace(_cache[request.basis], view_id=request.view_id, generation=request.generation)
         )

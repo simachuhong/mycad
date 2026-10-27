@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from dataclasses import replace
 from typing import Literal
 
@@ -27,6 +28,7 @@ from mycad.core.drawing_projection import (
     SplineCurve,
 )
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.geom.drawing_references import source_key, source_multiplicities
 
 Shape = Compound | Solid | Face | Edge | Wire
 Visibility = Literal["visible", "hidden", "tangent"]
@@ -94,6 +96,8 @@ def face_reference(face: Face) -> DrawingGeometryReference | None:
         axis = BRepAdaptor_Surface(face.wrapped).Cylinder().Axis()
         n, p = axis.Direction(), axis.Location()
         direction = (n.X(), n.Y(), n.Z())
+        sign = next((1 if v > 0 else -1 for v in direction if abs(v) > 1e-9), 1)
+        direction = tuple(sign * v for v in direction)
         # Axis location is canonical: nearest point on axis to world origin.
         dot = p.X() * n.X() + p.Y() * n.Y() + p.Z() * n.Z()
         point = (p.X() - dot * n.X(), p.Y() - dot * n.Y(), p.Z() - dot * n.Z())
@@ -155,7 +159,35 @@ def _key(edge: Edge) -> CurveKey:
     return min(points, tuple(reversed(points)))
 
 
-def project_shape(shape: Shape, request: DrawingProjectionRequest) -> ProjectionResult:
+class ProjectionSources:
+    """Reusable semantic evidence for one immutable shape, resolved lazily."""
+
+    def __init__(self, shape: Shape) -> None:
+        self.faces = tuple(shape.faces())
+        self._groups: dict[GeomType, tuple[tuple[Face, DrawingGeometryReference], ...]] = {}
+        self._counts: dict[GeomType, dict[tuple[object, ...], int]] = {}
+
+    def groups(
+        self,
+    ) -> Iterator[
+        tuple[tuple[tuple[Face, DrawingGeometryReference], ...], dict[tuple[object, ...], int]]
+    ]:
+        for kind in (GeomType.CYLINDER, GeomType.PLANE):
+            if kind not in self._groups:
+                pairs: list[tuple[Face, DrawingGeometryReference]] = []
+                for face in self.faces:
+                    if face.geom_type == kind:
+                        reference = face_reference(face)
+                        if reference is not None:
+                            pairs.append((face, reference))
+                self._groups[kind] = tuple(pairs)
+                self._counts[kind] = source_multiplicities(tuple(ref for _, ref in pairs))
+            yield self._groups[kind], self._counts[kind]
+
+
+def project_shape(
+    shape: Shape, request: DrawingProjectionRequest, sources: ProjectionSources | None = None
+) -> ProjectionResult:
     if not shape.edges():
         raise ValueError("Cannot project empty source geometry")
     algo = HLRBRep_Algo()
@@ -204,36 +236,53 @@ def project_shape(shape: Shape, request: DrawingProjectionRequest) -> Projection
         outlined_by_original.setdefault(hash(original), []).append(
             (original, Face(TopoDS.Face_s(outlined)))
         )
-    faces = sorted(shape.faces(), key=lambda f: f.geom_type != GeomType.CYLINDER)
+
+    sources = sources or ProjectionSources(shape)
     unassigned = set(geometry)
-    for face in faces:
+    for pairs, counts in sources.groups():
+
+        def priority(pair: tuple[Face, DrawingGeometryReference]) -> float:
+            parameters = dict(pair[1].parameters)
+            return abs(
+                sum(
+                    parameters[name] * value
+                    for name, value in zip(("nx", "ny", "nz"), request.basis.normal, strict=True)
+                )
+            )
+
+        # Cylinders first; only resolve planar evidence if some curves remain.
+        # Edge-on planar sources identify moving sides instead of broad faces.
+        for face, reference in sorted(pairs, key=priority):
+            if not unassigned:
+                break
+            original = face.wrapped
+            mapped = [
+                outlined
+                for source, outlined in outlined_by_original.get(hash(original), ())
+                if source.IsSame(original)
+            ]
+            if not mapped:
+                continue
+            selected = Compound(mapped).wrapped
+            for compound in (
+                output.VCompound(selected),
+                output.HCompound(selected),
+                output.OutLineVCompound(selected),
+                output.OutLineHCompound(selected),
+            ):
+                for edge in _edges(compound):
+                    if edge.length < 1e-7:
+                        continue
+                    key = _key(edge)
+                    if key in geometry and geometry[key].source is None:
+                        geometry[key] = replace(
+                            geometry[key],
+                            source=reference,
+                            source_count=counts[source_key(reference)],
+                        )
+                        unassigned.discard(key)
         if not unassigned:
             break
-        reference = face_reference(face)
-        if reference is None:
-            continue
-        original = face.wrapped
-        mapped = [
-            outlined
-            for source, outlined in outlined_by_original.get(hash(original), ())
-            if source.IsSame(original)
-        ]
-        if not mapped:
-            continue
-        selected = Compound(mapped).wrapped
-        for compound in (
-            output.VCompound(selected),
-            output.HCompound(selected),
-            output.OutLineVCompound(selected),
-            output.OutLineHCompound(selected),
-        ):
-            for edge in _edges(compound):
-                if edge.length < 1e-7:
-                    continue
-                key = _key(edge)
-                if key in geometry and geometry[key].source is None:
-                    geometry[key] = replace(geometry[key], source=reference)
-                    unassigned.discard(key)
     return ProjectionResult(
         request.view_id,
         request.source_fingerprint,
