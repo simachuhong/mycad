@@ -1,0 +1,24 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_narrow_command_bar_keeps_confirmation_visible ______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x70be0c5bfef0>
+
+    def test_narrow_command_bar_keeps_confirmation_visible(qtbot: QtBot) -> None:
+        window = QMainWindow()
+        qtbot.addWidget(window)
+        bar = ModelingCommandBar(window)
+        window.addToolBar(bar)
+        bar.configure("feature.hole_pattern")
+        window.resize(683, 384)
+        window.show()
+        qtbot.wait(50)
+>       assert window.width() <= 683
+E       assert 1266 <= 683
+E        +  where 1266 = <built-in method width of PySide6.QtWidgets.QMainWindow object at 0x70be0c66c740>()
+E        +    where <built-in method width of PySide6.QtWidgets.QMainWindow object at 0x70be0c66c740> = <PySide6.QtWidgets.QMainWindow(0x3192ad10) at 0x70be0c66c740>.width
+
+tests/ui/test_modeling_toolbar.py:24: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_modeling_toolbar.py::test_narrow_command_bar_keeps_confirmation_visible
+1 failed, 9 deselected in 29.19s

@@ -1,0 +1,70 @@
+........................................................................ [  3%]
+........................................................................ [  7%]
+........................................................................ [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 27%]
+........................................................................ [ 31%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................................................................ [ 43%]
+........................................................................ [ 47%]
+........................................................................ [ 51%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 67%]
+...........................................................F............ [ 71%]
+...............................F........................................ [ 75%]
+........................................................................ [ 79%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 90%]
+........................................................................ [ 94%]
+........................................................................ [ 98%]
+.....................                                                    [100%]
+=================================== FAILURES ===================================
+_______________ test_baseline_fixture_matches_current_doc_hashes _______________
+
+    def test_baseline_fixture_matches_current_doc_hashes() -> None:
+        repo = Path(__file__).resolve().parent.parent
+        fixture = repo / "tests" / "fixtures" / "baseline_doc_sha256.json"
+        payload = json.loads(fixture.read_text(encoding="utf-8"))
+    
+        for rel_path in EXPECTED_DOCS:
+            doc = repo / rel_path
+            assert doc.exists(), f"baseline doc missing on disk: {rel_path}"
+            current = _sha256_of(doc)
+            stored = payload[rel_path]
+>           assert current == stored, (
+                f"{rel_path} SHA256 drift: current={current} stored={stored}. "
+                f"Re-run scripts/gen_baseline_hashes.py only when the doc update is intentional."
+            )
+E           AssertionError: docs/UI设计初稿.md SHA256 drift: current=8feef80f3022d2c7f5c0fc79521abacb07f54517e647d9bec732998efa9e0a1c stored=f54b91ffbeb0e6e952cddd215c6ad147a9d4d0de1e90653e845fa168b7184c5d. Re-run scripts/gen_baseline_hashes.py only when the doc update is intentional.
+E           assert '8feef80f3022...2998efa9e0a1c' == 'f54b91ffbeb0...fa168b7184c5d'
+E             
+E             - f54b91ffbeb0e6e952cddd215c6ad147a9d4d0de1e90653e845fa168b7184c5d
+E             + 8feef80f3022d2c7f5c0fc79521abacb07f54517e647d9bec732998efa9e0a1c
+
+tests/test_baseline_hashes.py:43: AssertionError
+_________________ test_tree_boundaries_docs_baseline_unchanged _________________
+
+    def test_tree_boundaries_docs_baseline_unchanged() -> None:
+        baseline = json.loads(
+            (REPO / "tests" / "fixtures" / "baseline_doc_sha256.json").read_text(encoding="utf-8")
+        )
+        digests = hash_tracked_docs(REPO)
+        for rel, expected in baseline.items():
+>           assert digests[rel] == expected, f"baseline document changed: {rel}"
+E           AssertionError: baseline document changed: docs/UI设计初稿.md
+E           assert '8feef80f3022...2998efa9e0a1c' == 'f54b91ffbeb0...fa168b7184c5d'
+E             
+E             - f54b91ffbeb0e6e952cddd215c6ad147a9d4d0de1e90653e845fa168b7184c5d
+E             + 8feef80f3022d2c7f5c0fc79521abacb07f54517e647d9bec732998efa9e0a1c
+
+tests/test_scope_audit.py:617: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_baseline_hashes.py::test_baseline_fixture_matches_current_doc_hashes
+FAILED tests/test_scope_audit.py::test_tree_boundaries_docs_baseline_unchanged
+2 failed, 1819 passed in 502.63s (0:08:22)

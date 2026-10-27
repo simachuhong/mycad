@@ -60,6 +60,20 @@ def test_dirty_flag_set_and_mark_clean() -> None:
     assert doc.is_dirty is False
 
 
+def test_document_identity_is_unique_and_revision_tracks_content_changes() -> None:
+    first = Document(demo_registry())
+    second = Document(demo_registry())
+    assert first.document_id != second.document_id
+    assert first.revision == 0
+
+    first.set_metadata("part_no", "A-1")
+    assert first.revision == 1
+    first.add_named_group(NamedGroup(name="top-faces"))
+    assert first.revision == 2
+    first.remove_named_group("top-faces")
+    assert first.revision == 3
+
+
 def test_constructor_unknown_metadata_key_rejected() -> None:
     with pytest.raises(ValidationError):
         Document(demo_registry(), metadata={"bogus": "x"})
@@ -145,7 +159,7 @@ def test_replace_command_params_legal_amendment() -> None:
     revised = doc.replace_command_params(
         0, {"radius": 3.0, "height": 2.0}, actor="alice", reason="wider"
     )
-    assert amended == [{"ordinal": 0, "command_id": "feature.cylinder"}]
+    assert amended == [{"ordinal": 0, "command_id": "feature.cylinder", "command_version": 1}]
     assert len(revised.amendments) == 1
     entry = revised.amendments[0]
     assert entry.from_params == {"radius": 1.0, "height": 2.0}
@@ -159,6 +173,7 @@ def test_replace_command_params_legal_amendment() -> None:
     assert revised.params == {"radius": 3.0, "height": 2.0}
     assert doc.commands == (revised,)
     assert doc.is_dirty is True
+    assert doc.revision == 1
 
 
 def test_replace_command_params_invalid_leaves_document_untouched() -> None:
@@ -172,6 +187,7 @@ def test_replace_command_params_invalid_leaves_document_untouched() -> None:
     assert doc.commands[0].params == {"radius": 1.0, "height": 2.0}
     assert amended == []
     assert doc.is_dirty is False
+    assert doc.revision == 0
 
 
 def test_replace_command_params_ordinal_out_of_range() -> None:

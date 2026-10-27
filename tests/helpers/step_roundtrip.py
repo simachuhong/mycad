@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import cast
 
 import build123d
-from build123d import Compound
+from build123d import Compound, GeomType
 
 # import_step's stub signature is partially unknown under basedpyright
 # strict; the cast narrows it to the exact call shape used here. This is
@@ -29,3 +29,12 @@ def read_step(path: Path) -> tuple[int, float]:
     compound = _read_step(path)
     solids = compound.solids()
     return len(solids), sum(solid.volume for solid in solids)
+
+
+def planar_openings(path: Path) -> tuple[int, ...]:
+    """Return inner boundary counts of exported planar faces."""
+    return tuple(
+        len(face.inner_wires())
+        for face in _read_step(path).faces()
+        if face.geom_type == GeomType.PLANE
+    )

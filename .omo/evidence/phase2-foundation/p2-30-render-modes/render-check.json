@@ -1,0 +1,359 @@
+{
+  "qt_platform": "xcb",
+  "qt_scale_factor": 1.0,
+  "cases": [
+    "flat",
+    "curved",
+    "holed",
+    "filleted",
+    "thin"
+  ],
+  "modes": [
+    "shaded",
+    "shaded-edges",
+    "engineering-wireframe",
+    "mesh-diagnostic"
+  ],
+  "captures": [
+    {
+      "case": "flat",
+      "mode": "shaded",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "flat/shaded.png"
+    },
+    {
+      "case": "flat",
+      "mode": "shaded-edges",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "flat/shaded-edges.png"
+    },
+    {
+      "case": "flat",
+      "mode": "engineering-wireframe",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "flat/engineering-wireframe.png"
+    },
+    {
+      "case": "flat",
+      "mode": "mesh-diagnostic",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 3,
+      "screenshot": "flat/mesh-diagnostic.png"
+    },
+    {
+      "case": "curved",
+      "mode": "shaded",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 2,
+      "mesh_triangle_count": 188,
+      "scene_item_count": 2,
+      "screenshot": "curved/shaded.png"
+    },
+    {
+      "case": "curved",
+      "mode": "shaded-edges",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 2,
+      "mesh_triangle_count": 188,
+      "scene_item_count": 2,
+      "screenshot": "curved/shaded-edges.png"
+    },
+    {
+      "case": "curved",
+      "mode": "engineering-wireframe",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 2,
+      "mesh_triangle_count": 188,
+      "scene_item_count": 2,
+      "screenshot": "curved/engineering-wireframe.png"
+    },
+    {
+      "case": "curved",
+      "mode": "mesh-diagnostic",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 2,
+      "mesh_triangle_count": 188,
+      "scene_item_count": 3,
+      "screenshot": "curved/mesh-diagnostic.png"
+    },
+    {
+      "case": "holed",
+      "mode": "shaded",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 1168,
+      "scene_item_count": 2,
+      "screenshot": "holed/shaded.png"
+    },
+    {
+      "case": "holed",
+      "mode": "shaded-edges",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 1168,
+      "scene_item_count": 2,
+      "screenshot": "holed/shaded-edges.png"
+    },
+    {
+      "case": "holed",
+      "mode": "engineering-wireframe",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 1168,
+      "scene_item_count": 2,
+      "screenshot": "holed/engineering-wireframe.png"
+    },
+    {
+      "case": "holed",
+      "mode": "mesh-diagnostic",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 1168,
+      "scene_item_count": 3,
+      "screenshot": "holed/mesh-diagnostic.png"
+    },
+    {
+      "case": "filleted",
+      "mode": "shaded",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 20,
+      "mesh_triangle_count": 140,
+      "scene_item_count": 2,
+      "screenshot": "filleted/shaded.png"
+    },
+    {
+      "case": "filleted",
+      "mode": "shaded-edges",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 20,
+      "mesh_triangle_count": 140,
+      "scene_item_count": 2,
+      "screenshot": "filleted/shaded-edges.png"
+    },
+    {
+      "case": "filleted",
+      "mode": "engineering-wireframe",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 20,
+      "mesh_triangle_count": 140,
+      "scene_item_count": 2,
+      "screenshot": "filleted/engineering-wireframe.png"
+    },
+    {
+      "case": "filleted",
+      "mode": "mesh-diagnostic",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 20,
+      "mesh_triangle_count": 140,
+      "scene_item_count": 3,
+      "screenshot": "filleted/mesh-diagnostic.png"
+    },
+    {
+      "case": "thin",
+      "mode": "shaded",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "thin/shaded.png"
+    },
+    {
+      "case": "thin",
+      "mode": "shaded-edges",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "thin/shaded-edges.png"
+    },
+    {
+      "case": "thin",
+      "mode": "engineering-wireframe",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 2,
+      "screenshot": "thin/engineering-wireframe.png"
+    },
+    {
+      "case": "thin",
+      "mode": "mesh-diagnostic",
+      "logical_window_size": [
+        1920,
+        1080
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "boundary_edge_count": 12,
+      "mesh_triangle_count": 12,
+      "scene_item_count": 3,
+      "screenshot": "thin/mesh-diagnostic.png"
+    }
+  ]
+}

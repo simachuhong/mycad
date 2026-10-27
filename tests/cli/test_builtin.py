@@ -34,6 +34,38 @@ def test_new_then_modeling_line_succeeds(
     assert "new document" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("suffix", [".my3d", ".my2d", ".MY3D"])
+def test_native_archive_suffix_roundtrip(session: CliSession, tmp_path: Path, suffix: str) -> None:
+    archive = tmp_path / f"native{suffix}"
+    assert session.execute_line("new") == 0
+    assert session.execute_line(BOX_LINE) == 0
+    assert session.execute_line(f"save {archive}") == 0
+    assert archive.is_file()
+    assert session.execute_line("new") == 0
+    assert session.execute_line(f"open {archive}") == 0
+    script = tmp_path / "check.txt"
+    script.write_text(f"open {archive}\nsave {archive}\n", encoding="utf-8")
+    assert session.validate_file(script) == 0
+
+
+def test_intersect_alias_executes_and_undo_restores_previous_model(
+    session: CliSession, services: AppServices
+) -> None:
+    assert session.execute_line("new") == 0
+    assert session.execute_line("box size_x=10 size_y=10 size_z=10") == 0
+    assert (
+        session.execute_line(
+            "intersect tool.type=box tool.size_x=5 tool.size_y=5 tool.size_z=5 "
+            "tool.center=[2.5,0,0]"
+        )
+        == 0
+    )
+    assert services.kernel.mass_properties().volume == pytest.approx(125.0, abs=1e-6)
+
+    assert session.execute_line("undo") == 0
+    assert services.kernel.mass_properties().volume == pytest.approx(1000.0, abs=1e-6)
+
+
 def test_meta_roundtrip_and_echo(session: CliSession, capsys: pytest.CaptureFixture[str]) -> None:
     session.execute_line("new")
     assert session.execute_line("meta part_no=ABC-123") == 0
@@ -110,7 +142,7 @@ def test_open_wrong_extension_never_touches_the_format_resolver(
     session = CliSession(services)
     assert session.execute_line("open /tmp/whatever.step") == 2
     assert resolve_calls == []
-    assert capsys.readouterr().err.strip() == "open only supports .mc.json archives"
+    assert capsys.readouterr().err.strip() == "open only supports .mc.json, .my2d, .my3d archives"
 
 
 def test_open_missing_file_is_a_usage_error(

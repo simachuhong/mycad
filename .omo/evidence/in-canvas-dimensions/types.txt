@@ -1,0 +1,9 @@
+/media/sima/Data/projects/MyCAD/tests/ui/test_canvas_dimensions.py
+  /media/sima/Data/projects/MyCAD/tests/ui/test_canvas_dimensions.py:371:49 - error: Argument type is partially unknown
+    Argument corresponds to parameter "slot" in function "connect"
+    Argument type is "(s: Unknown, c: Unknown) -> None" (reportUnknownArgumentType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_canvas_dimensions.py:371:56 - error: Type of parameter "s" is unknown (reportUnknownLambdaType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_canvas_dimensions.py:371:59 - error: Type of parameter "c" is unknown (reportUnknownLambdaType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_canvas_dimensions.py:371:79 - error: Argument type is unknown
+    Argument corresponds to parameter "object" in function "append" (reportUnknownArgumentType)
+4 errors, 0 warnings, 0 notes

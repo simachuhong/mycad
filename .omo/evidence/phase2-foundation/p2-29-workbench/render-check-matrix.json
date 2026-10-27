@@ -1,0 +1,396 @@
+{
+  "tested_combinations": [
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1920x1080",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ]
+      ],
+      "viewport_shares": [
+        0.6856,
+        0.6856,
+        0.6856,
+        0.4723,
+        0.6856
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ]
+      ],
+      "viewport_shares": [
+        0.57,
+        0.57,
+        0.57,
+        0.3111,
+        0.57
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 1.25,
+      "physical_target": "1920x1080",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ]
+      ],
+      "viewport_shares": [
+        0.6136,
+        0.6136,
+        0.6136,
+        0.3694,
+        0.6136
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 1.25,
+      "physical_target": "1366x768",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ]
+      ],
+      "viewport_shares": [
+        0.4755,
+        0.4755,
+        0.4755,
+        0.2305,
+        0.4755
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 1.5,
+      "physical_target": "1920x1080",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ]
+      ],
+      "viewport_shares": [
+        0.5441,
+        0.5441,
+        0.5441,
+        0.2781,
+        0.5441
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 1.5,
+      "physical_target": "1366x768",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1367,
+          768
+        ],
+        [
+          1367,
+          768
+        ],
+        [
+          1367,
+          768
+        ],
+        [
+          1367,
+          768
+        ],
+        [
+          1367,
+          768
+        ]
+      ],
+      "viewport_shares": [
+        0.5673,
+        0.5673,
+        0.5673,
+        0.2648,
+        0.5673
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 2.0,
+      "physical_target": "1920x1080",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          1920,
+          1080
+        ]
+      ],
+      "viewport_shares": [
+        0.5868,
+        0.5868,
+        0.5868,
+        0.2934,
+        0.5868
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "scale_factor": 2.0,
+      "physical_target": "1366x768",
+      "qt_platform": "xcb",
+      "capture_count": 5,
+      "states": [
+        "empty",
+        "current-3d",
+        "selected-feature",
+        "plan-confirmation",
+        "error-recovery"
+      ],
+      "image_sizes": [
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ],
+        [
+          1366,
+          768
+        ]
+      ],
+      "viewport_shares": [
+        0.4473,
+        0.4473,
+        0.4473,
+        0.2206,
+        0.4473
+      ],
+      "bottom_panel_visibility": [
+        false,
+        false,
+        false,
+        true,
+        false
+      ]
+    }
+  ]
+}

@@ -22,6 +22,7 @@ from mycad.core.exceptions import (
     UnknownFormatError,
 )
 from mycad.formats import (
+    DXF_PROVIDER,
     STEP_PROVIDER,
     STL_PROVIDER,
     FormatProvider,
@@ -76,7 +77,7 @@ def flange_kernel() -> BuildKernel:
 
 
 def _registry() -> FormatProviderRegistry:
-    return FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER])
+    return FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER, DXF_PROVIDER])
 
 
 def test_flange_step_roundtrip(flange_kernel: BuildKernel, tmp_path: Path) -> None:

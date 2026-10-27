@@ -1,0 +1,22 @@
+........................................................................ [ 46%]
+................................................................F....... [ 92%]
+............                                                             [100%]
+=================================== FAILURES ===================================
+_______________ test_toolbar_carries_the_high_frequency_actions ________________
+
+qapp = <PySide6.QtWidgets.QApplication(0x1137da30) at 0x7bfd7546c280>
+
+    def test_toolbar_carries_the_high_frequency_actions(qapp: QApplication) -> None:
+        win = MainWindow()
+        actions = [action for action in win.main_toolbar.actions() if not action.isSeparator()]
+>       assert tuple(action.text() for action in actions) == TOOLBAR_TEXTS
+E       AssertionError: assert ('二维绘图', '三维视...存', '撤销', ...) == ('新建', '打开', ..., '适应窗口', ...)
+E         
+E         At index 0 diff: '二维绘图' != '新建'
+E         Left contains 2 more items, first extra item: '孔'
+E         Use -v to get more diff
+
+tests/ui/test_menus_toolbar.py:196: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_menus_toolbar.py::test_toolbar_carries_the_high_frequency_actions
+1 failed, 155 passed in 135.42s (0:02:15)

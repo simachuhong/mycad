@@ -1,0 +1,8 @@
+PASS 1920x1080 @ 1: DPR 1.0, 8 command layouts, preview/reselection/cancel
+PASS 1366x768 @ 1: DPR 1.0, 8 command layouts, preview/reselection/cancel
+PASS 1920x1080 @ 1.25: DPR 1.25, 8 command layouts, preview/reselection/cancel
+PASS 1366x768 @ 1.25: DPR 1.25, 8 command layouts, preview/reselection/cancel
+PASS 1920x1080 @ 1.5: DPR 1.5, 8 command layouts, preview/reselection/cancel
+PASS 1366x768 @ 1.5: DPR 1.5, 8 command layouts, preview/reselection/cancel
+PASS 1920x1080 @ 2: DPR 2.0, 8 command layouts, preview/reselection/cancel
+PASS 1366x768 @ 2: DPR 2.0, 8 command layouts, preview/reselection/cancel

@@ -1,0 +1,5 @@
+PASS two ends trimmed by actual clicks
+PASS native base-point drag/drop move and atomic preview
+PASS native copy placement and undo/redo
+PASS native spline finish, selection, solver control-point drag
+PASS committed via Bus and remained visible in next draft

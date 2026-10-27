@@ -16,6 +16,7 @@ the CLI tab reports it in the pane instead of closing the host window).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import override
 
 from PySide6.QtGui import QKeyEvent
@@ -28,8 +29,18 @@ from PySide6.QtWidgets import (
 
 from mycad.app import AppServices
 from mycad.cli.session import QUIT_SENTINEL, LoadedDocument, execute_line
+from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
 
 PROMPT = ">>> "
+
+
+@dataclass(frozen=True, slots=True)
+class _CliExecutionValue:
+    """Immutable CLI result data plus the document handle to bind on success."""
+
+    return_code: int
+    messages: tuple[str, ...]
+    loaded: LoadedDocument | None
 
 
 class CliTab(QWidget):
@@ -40,10 +51,14 @@ class CliTab(QWidget):
         *,
         services: AppServices,
         on_replace_doc: Callable[[LoadedDocument | None], None],
+        execution_unit: SerializedExecutionUnit | None = None,
+        command_guard: Callable[[str], str | None] | None = None,
     ) -> None:
         super().__init__()
         self._services = services
         self._on_replace_doc_cb = on_replace_doc
+        self._execution_unit = execution_unit
+        self._command_guard = command_guard
         self.current: LoadedDocument | None = None
 
         self.output = QPlainTextEdit(self)
@@ -52,6 +67,8 @@ class CliTab(QWidget):
         self.input = QLineEdit(self)
         self.input.setObjectName("cliInput")
         self.input.returnPressed.connect(self._dispatch)
+        if execution_unit is not None:
+            execution_unit.busy_changed.connect(self._on_execution_busy_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -73,7 +90,77 @@ class CliTab(QWidget):
     def _dispatch(self) -> None:
         line = self.input.text()
         self.input.clear()
-        self.dispatch_line(line)
+        if self._execution_unit is None:
+            self.dispatch_line(line)
+        else:
+            self.submit_line(line)
+
+    def submit_line(self, line: str) -> bool:
+        """Run a GUI-submitted CLI line on the serialized CAD worker."""
+        if self._command_guard is not None:
+            reason = self._command_guard(line)
+            if reason is not None:
+                self.append_line(reason)
+                return False
+        unit = self._execution_unit
+        if unit is None:
+            self.dispatch_line(line)
+            return True
+        if unit.is_busy:
+            self.append_line("正在执行上一条命令，请稍候")
+            return False
+        self.append_line(f"{PROMPT}{line}")
+        if line.strip() in ("quit", "exit"):
+            self.append_line(repr(QUIT_SENTINEL) + " (hint: use File > Close to exit the app)")
+            return True
+
+        current = self.current
+        services = self._services
+        session_id = unit.session_id
+
+        def execute() -> _CliExecutionValue:
+            replaced: list[LoadedDocument | None] = []
+            return_code, messages = execute_line(
+                line,
+                loaded=current,
+                services=services,
+                on_replace_doc=replaced.append,
+            )
+            loaded = replaced[-1] if replaced else current
+            # Pay the cold-tessellation cost on the worker so the queued UI
+            # refresh can consume the immutable cached mesh without stalling.
+            if loaded is not None:
+                services.kernel.viewport_data()
+            return _CliExecutionValue(return_code, tuple(messages), loaded)
+
+        def finish(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self.append_line(result.error)
+                return
+            value = result.value
+            if not isinstance(value, _CliExecutionValue):
+                self.append_line("命令执行失败：返回结果无效")
+                return
+            if value.loaded is not self.current:
+                self.current = value.loaded
+                if value.loaded is not None:
+                    self._on_replace_doc_cb(value.loaded)
+            for message in value.messages:
+                self.append_line(message)
+
+        if not unit.submit(
+            execute,
+            operation="cli-line",
+            session_id=session_id,
+            on_complete=finish,
+        ):
+            self.append_line("文档已切换，命令未提交")
+            return False
+        self.append_line("执行中…")
+        return True
+
+    def _on_execution_busy_changed(self, busy: bool) -> None:
+        self.input.setEnabled(not busy)
 
     def dispatch_line(self, line: str) -> tuple[int, list[str]]:
         """Run one line through the same dispatch path the headless CLI uses.
@@ -81,6 +168,11 @@ class CliTab(QWidget):
         The rc is the session exit-code contract, or ``QUIT_SENTINEL`` for
         ``quit``/``exit`` — surfaced in the pane, never closing the window.
         """
+        if self._command_guard is not None:
+            reason = self._command_guard(line)
+            if reason is not None:
+                self.append_line(reason)
+                return 1, [reason]
         self.append_line(f"{PROMPT}{line}")
         if line.strip() in ("quit", "exit"):
             self.append_line(repr(QUIT_SENTINEL) + " (hint: use File > Close to exit the app)")

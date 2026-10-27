@@ -48,11 +48,13 @@ Examples (each has a parse -> to_cli -> parse round-trip test)::
     extrude profile.type=circle profile.radius=30 distance=10
     box size_x=10 size_y=10 size_z=10 center=[1,2,3]
     cut tool.type=box tool.size_x=5 tool.size_y=5 tool.size_z=5 tool.center=[0,0,-5]
+    intersect tool.type=box tool.size_x=5 tool.size_y=5 tool.size_z=5 tool.center=[0,0,0]
 
 Their canonical ``to_cli`` forms add every default explicitly, e.g. the
 first line emits ``cylinder radius=40 height=8 center=[0,0,0] mode=new``.
-The verb ``cut`` maps ONLY to ``modify.boolean_cut``; feature-command
-subtraction is always the ``mode=cut`` key-value form.
+The verb ``cut`` maps ONLY to ``modify.boolean_cut`` and ``intersect`` maps
+to the inline-tool intersection command; feature-command subtraction is
+always the ``mode=cut`` key-value form.
 
 Error layers (mutually exclusive exception types):
   1. lexical/batch structure (unclosed quote, bare ``=``, untokenizable
@@ -250,17 +252,24 @@ class ParamDoc:
 
 
 def _variant_objects(
-    schema: Mapping[str, object], defs: Mapping[str, object]
+    schema: Mapping[str, object],
+    defs: Mapping[str, object],
+    *,
+    seen: frozenset[int] = frozenset(),
 ) -> list[Mapping[str, object]]:
     """Object branches of a ``oneOf`` schema, or the schema itself."""
-    one_of = schema.get("oneOf")
+    resolved = _deref(schema, defs)
+    if resolved is None or id(schema) in seen or id(resolved) in seen:
+        return []
+    active = seen | {id(schema), id(resolved)}
+    one_of = resolved.get("oneOf")
     if not isinstance(one_of, list):
-        return [schema]
+        return [resolved]
     branches: list[Mapping[str, object]] = []
     for branch in cast("list[object]", one_of):
         mapped = _as_mapping(branch)
         if mapped is not None:
-            branches.append(mapped)
+            branches.extend(_variant_objects(mapped, defs, seen=active))
     return branches
 
 
@@ -406,7 +415,32 @@ def _materialize(
 ) -> object:
     """Convert digit-keyed dicts to lists where the schema declares arrays."""
     resolved = _deref(schema, defs)
-    if resolved is None or "oneOf" in resolved:
+    if resolved is None:
+        return value
+    one_of = resolved.get("oneOf")
+    if isinstance(one_of, list):
+        branches = cast("list[object]", one_of)
+        matches: list[object] = []
+        for branch in branches:
+            candidate = _materialize(branch, value, defs, path)
+            branch_schema = _as_mapping(branch)
+            if branch_schema is not None and schema_matches(branch_schema, candidate, defs):
+                matches.append(candidate)
+        if len(matches) == 1:
+            return matches[0]
+
+        node = _as_dict(value)
+        if node is not None:
+            shape_matches: list[object] = []
+            for branch in branches:
+                branch_resolved = _deref(branch, defs)
+                if branch_resolved is None:
+                    continue
+                properties = _as_mapping(branch_resolved.get("properties"))
+                if properties is not None and node.keys() <= properties.keys():
+                    shape_matches.append(branch)
+            if len(shape_matches) == 1:
+                return _materialize(shape_matches[0], value, defs, path)
         return value
     properties = _as_mapping(resolved.get("properties"))
     node = _as_dict(value)

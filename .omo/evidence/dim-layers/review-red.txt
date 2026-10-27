@@ -1,0 +1,263 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_________ test_dimension_edit_after_later_annotation_layer_assignment __________
+
+self = Sketch(sketch_id='01bceb3d7e514ac4812dc036f204721c', frame=WorkPlaneFrame(origin_mm=(0.0, 0.0, 0.0), u_axis=(1.0, 0.0,...1, 94, 117), linetype='CONTINUOUS', lineweight_mm=0.18, visible=True, locked=False, frozen=False))), support_face=None)
+
+    def __post_init__(self) -> None:
+        _validate_identity(self.sketch_id, "sketch_id")
+        if not isinstance(cast("object", self.frame), WorkPlaneFrame):
+            raise ValueError("sketch frame must be a WorkPlaneFrame")
+        if not isinstance(cast("object", self.layers), SketchLayerTable):
+            raise ValueError("sketch layers must use the neutral layer-table DTO")
+        if self.support_face is not None and not isinstance(
+            cast("object", self.support_face), SketchSupportFace
+        ):
+            raise ValueError("sketch support face must use the neutral planar-face DTO")
+        entities = tuple(self.entities)
+        if any(
+            not isinstance(
+                cast("object", entity),
+                (
+                    LineEntity,
+                    PolylineEntity,
+                    CircleEntity,
+                    ArcEntity,
+                    RectangleEntity,
+                    SplineEntity,
+                ),
+            )
+            for entity in entities
+        ):
+            raise ValueError("sketch entities must use a supported geometry type")
+        identities = tuple(entity.entity_id for entity in entities)
+        if len(identities) != len(set(identities)):
+            raise ValueError("entity identities must be unique within a sketch")
+        layer_names = {layer.name.casefold() for layer in self.layers.layers}
+        missing_layers = tuple(
+            sorted(
+                {
+                    entity.layer_name
+                    for entity in entities
+                    if entity.layer_name.casefold() not in layer_names
+                },
+                key=str.casefold,
+            )
+        )
+        if missing_layers:
+            raise ValueError(f"sketch geometry references missing layer(s) {missing_layers}")
+        object.__setattr__(self, "entities", entities)
+        constraints = tuple(self.constraints)
+        if any(
+            not isinstance(cast("object", constraint), SketchConstraint)
+            for constraint in constraints
+        ):
+            raise ValueError("sketch constraints must use the neutral constraint DTO")
+        constraint_ids = tuple(constraint.constraint_id for constraint in constraints)
+        if len(constraint_ids) != len(set(constraint_ids)):
+            raise ValueError("constraint identities must be unique within a sketch")
+        layers = self.layers
+        for constraint in constraints:
+            if constraint.layer_name is None:
+                continue
+            try:
+>               layers.get(constraint.layer_name)
+
+src/mycad/core/sketch.py:782: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = SketchLayerTable(layers=(SketchLayer(name='0', color_rgb=(40, 46, 52), linetype='CONTINUOUS', lineweight_mm=0.25, visi...='DIM', color_rgb=(21, 94, 117), linetype='CONTINUOUS', lineweight_mm=0.18, visible=True, locked=False, frozen=False)))
+name = 'notes'
+
+    def get(self, name: str) -> SketchLayer:
+        """Return a layer by case-insensitive drawing name."""
+        normalized = _layer_name(name).casefold()
+        for layer in self.layers:
+            if layer.name.casefold() == normalized:
+                return layer
+>       raise KeyError(name)
+E       KeyError: 'notes'
+
+src/mycad/core/sketch_layers.py:212: KeyError
+
+The above exception was the direct cause of the following exception:
+
+    def test_dimension_edit_after_later_annotation_layer_assignment() -> None:
+        services = build_app(discoverers=())
+        loaded = new_document(services)
+        sketch = annotated()
+        loaded.bus.execute("sketch.create", sketch.to_mapping(version=3), confirmed_by="local")
+        loaded.bus.execute("drawing.layers.set", {"layers": sketch.layers.to_mapping(), "dimension_layer": "DIM"}, confirmed_by="local")
+        table = sketch.layers.add(SketchLayer("notes"))
+        loaded.bus.execute("drawing.layers.set", {"layers": table.to_mapping(), "dimension_layer": "notes", "assignments": [{"sketch_id": sketch.sketch_id, "constraint_ids": [sketch.constraints[0].constraint_id], "layer_name": "notes"}]}, confirmed_by="local")
+        current = services.kernel.sketches[0]
+        revised = replace(current.constraints[0], value=40)
+        preview = services.kernel.preview_sketch_constraint_update(current, revised)
+        assert preview.status == "success", preview.message
+>       loaded.bus.execute("sketch.constraint.update", preview.command_params(current, revised), confirmed_by="local")
+
+tests/geom/test_drawing_layers.py:131: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/bus.py:303: in execute
+    result = self._execute_one(
+src/mycad/core/bus.py:363: in _execute_one
+    result = handler.handle(normalized, ctx)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/mycad/core/handlers.py:81: in handle
+    ctx.kernel.apply(self.command_id, params)
+src/mycad/geom/kernel.py:315: in apply
+    self._apply_operation(command_id, checked)
+src/mycad/geom/kernel.py:345: in _apply_operation
+    self._apply_sketch_constraint(checked, command_id)
+src/mycad/geom/kernel.py:591: in _apply_sketch_constraint
+    candidate = self._regenerate_with_sketches(sketches)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/mycad/geom/kernel.py:622: in _regenerate_with_sketches
+    candidate._apply_operation(command_id, params)
+src/mycad/geom/kernel.py:339: in _apply_operation
+    self._set_drawing_layers(checked)
+src/mycad/geom/kernel.py:698: in _set_drawing_layers
+    identity: replace(sketch, layers=table) for identity, sketch in self._sketches.items()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/dataclasses.py:1581: in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:9: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = Sketch(sketch_id='01bceb3d7e514ac4812dc036f204721c', frame=WorkPlaneFrame(origin_mm=(0.0, 0.0, 0.0), u_axis=(1.0, 0.0,...1, 94, 117), linetype='CONTINUOUS', lineweight_mm=0.18, visible=True, locked=False, frozen=False))), support_face=None)
+
+    def __post_init__(self) -> None:
+        _validate_identity(self.sketch_id, "sketch_id")
+        if not isinstance(cast("object", self.frame), WorkPlaneFrame):
+            raise ValueError("sketch frame must be a WorkPlaneFrame")
+        if not isinstance(cast("object", self.layers), SketchLayerTable):
+            raise ValueError("sketch layers must use the neutral layer-table DTO")
+        if self.support_face is not None and not isinstance(
+            cast("object", self.support_face), SketchSupportFace
+        ):
+            raise ValueError("sketch support face must use the neutral planar-face DTO")
+        entities = tuple(self.entities)
+        if any(
+            not isinstance(
+                cast("object", entity),
+                (
+                    LineEntity,
+                    PolylineEntity,
+                    CircleEntity,
+                    ArcEntity,
+                    RectangleEntity,
+                    SplineEntity,
+                ),
+            )
+            for entity in entities
+        ):
+            raise ValueError("sketch entities must use a supported geometry type")
+        identities = tuple(entity.entity_id for entity in entities)
+        if len(identities) != len(set(identities)):
+            raise ValueError("entity identities must be unique within a sketch")
+        layer_names = {layer.name.casefold() for layer in self.layers.layers}
+        missing_layers = tuple(
+            sorted(
+                {
+                    entity.layer_name
+                    for entity in entities
+                    if entity.layer_name.casefold() not in layer_names
+                },
+                key=str.casefold,
+            )
+        )
+        if missing_layers:
+            raise ValueError(f"sketch geometry references missing layer(s) {missing_layers}")
+        object.__setattr__(self, "entities", entities)
+        constraints = tuple(self.constraints)
+        if any(
+            not isinstance(cast("object", constraint), SketchConstraint)
+            for constraint in constraints
+        ):
+            raise ValueError("sketch constraints must use the neutral constraint DTO")
+        constraint_ids = tuple(constraint.constraint_id for constraint in constraints)
+        if len(constraint_ids) != len(set(constraint_ids)):
+            raise ValueError("constraint identities must be unique within a sketch")
+        layers = self.layers
+        for constraint in constraints:
+            if constraint.layer_name is None:
+                continue
+            try:
+                layers.get(constraint.layer_name)
+            except KeyError as exc:
+                if constraint.layer_name.casefold() != "dim":
+>                   raise ValueError("dimension references a missing annotation layer") from exc
+E                   ValueError: dimension references a missing annotation layer
+
+src/mycad/core/sketch.py:785: ValueError
+______________ test_modeless_manager_tracks_toolbar_current_layer ______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x704ed60e1130>
+
+    def test_modeless_manager_tracks_toolbar_current_layer(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        editor.request_layer_update(editor.layer_table.add(SketchLayer("X")), "DIM")
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.layer_combo.setCurrentText("X")
+>       assert manager.current_layer == "X"
+E       AssertionError: assert '0' == 'X'
+E         
+E         - X
+E         + 0
+
+tests/ui/test_dim_layers.py:156: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_______ test_interleaved_global_and_draft_history_keeps_layer_references _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x704ed61304a0>
+
+    def test_interleaved_global_and_draft_history_keeps_layer_references(qtbot: QtBot) -> None:
+        services = build_app(discoverers=())
+        loaded = new_document(services, document_type="drawing2d")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.show()
+        window.bind_document(loaded)
+        window.act_view_2d.trigger()
+        editor = window.active_sketch_dialog()
+        assert editor is not None
+        unit = window.execution_unit
+        assert unit is not None
+    
+        def settled() -> None:
+            qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    
+        editor.request_layer_update(editor.layer_table.add(SketchLayer("X")), "DIM")
+        settled()
+        editor.layer_combo.setCurrentText("X")
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0), layer_name="X")
+        editor.canvas.replace_draft_entities((line,))
+        editor.canvas.replace_draft_entities(())
+        editor.layer_combo.setCurrentText("0")
+        editor.request_layer_update(editor.layer_table.remove("X"), "DIM")
+        settled()
+        window.request_undo()
+        settled()
+        assert len(loaded.document.commands) == 1
+        window.request_undo()
+        settled()
+>       assert tuple(editor.canvas.entities) == (line,)
+E       AssertionError: assert () == (LineEntity(e...er_name='X'),)
+E         
+E         Right contains one more item: LineEntity(entity_id='524e6e7ee93a4cba8ebcaf2f845fe904', start_mm=(0.0, 0.0), end_mm=(30.0, 0.0), construction=False, layer_name='X')
+E         Use -v to get more diff
+
+tests/ui/test_dim_layers.py:193: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_layers.py::test_dimension_edit_after_later_annotation_layer_assignment
+FAILED tests/ui/test_dim_layers.py::test_modeless_manager_tracks_toolbar_current_layer
+FAILED tests/ui/test_dim_layers.py::test_interleaved_global_and_draft_history_keeps_layer_references
+3 failed in 14.46s

@@ -61,6 +61,7 @@ def test_cylinder_spec_field_by_field_equality() -> None:
         "label_zh",
         "params_schema",
         "cli",
+        "min_archive_version",
         "undo_compensation",
     ]
 

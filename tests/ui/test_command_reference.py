@@ -36,10 +36,15 @@ def test_rows_expose_verb_command_id_and_params(services: AppServices) -> None:
         "hole-pattern",
         "fillet",
         "cut",
+        "intersect",
     }
     assert by_verb["cylinder"].command_id == "feature.cylinder"
     assert by_verb["hole-pattern"].command_id == "feature.hole_pattern"
     assert by_verb["cut"].command_id == "modify.boolean_cut"
+    assert by_verb["intersect"].command_id == "modify.boolean_intersect"
+    assert by_verb["body-boolean"].command_id == "modify.boolean_bodies"
+    assert by_verb["body-transform"].command_id == "modify.body_transform"
+    assert by_verb["body-pattern"].command_id == "modify.body_pattern"
     assert by_verb["cylinder"].label_zh == "圆柱体"
     assert "radius*" in by_verb["cylinder"].params
     assert "height*" in by_verb["cylinder"].params

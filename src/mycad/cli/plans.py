@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 from mycad.commands.validation import validate_params
 from mycad.core.document import AFFECTED_OBJECTS, METADATA_KEYS, AffectedObject, PlannedCommand
+from mycad.core.document_kinds import NATIVE_ARCHIVE_SUFFIXES
 from mycad.core.exceptions import ValidationError
 
 if TYPE_CHECKING:
@@ -85,10 +86,10 @@ def _step(value: object, index: int, registry: CommandRegistry) -> PlannedComman
     command_id = data["id"]
     if not isinstance(command_id, str):
         raise ValidationError(f"{where}.id: expected string")
-    spec = registry.get(command_id)
     version = data["version"]
-    if isinstance(version, bool) or version != spec.version:
-        raise ValidationError(f"{where}.version: expected {spec.version}, got {version!r}")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValidationError(f"{where}.version: expected integer, got {version!r}")
+    spec = registry.get(command_id, version)
     params = _object(data["params"], f"{where}.params")
     try:
         validated = validate_params(spec, params, defs=registry.schema_defs)
@@ -117,8 +118,8 @@ def _outputs(value: object, base_dir: Path) -> Outputs:
             raise ValidationError(f"outputs.{key}: expected non-empty string")
         paths[key] = base_dir / item
     archive = paths.get("archive")
-    if archive is not None and not archive.name.endswith(".mc.json"):
-        raise ValidationError("outputs.archive: must end with .mc.json")
+    if archive is not None and not archive.name.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
+        raise ValidationError("outputs.archive: must end with .mc.json, .my2d or .my3d")
     return Outputs(step=paths.get("step"), stl=paths.get("stl"), archive=archive)
 
 

@@ -17,7 +17,7 @@ deliberately excludes Chinese labels for the English CLI).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
@@ -29,7 +29,16 @@ from PySide6.QtWidgets import (
 
 from mycad.commands.registry import CommandRegistry
 from mycad.commands.spec import CommandSpec
+from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, DocumentType
 from mycad.core.exceptions import UnknownCommandError
+from mycad.ui.cad_icons import (
+    CATEGORY_ICONS,
+    command_icon_name,
+    current_icon_theme,
+    refresh_tree_icons,
+    set_tree_icon,
+)
+from mycad.ui.theme import ThemeName
 
 #: Footer text from UI draft §5.3, verbatim.
 PLUGIN_HINT_TEXT = "插件命令自动出现"
@@ -47,6 +56,8 @@ class CommandPalette(QWidget):
     def __init__(self, registry: CommandRegistry, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._registry = registry
+        self._document_type: DocumentType = "part"
+        self._icon_theme: ThemeName = current_icon_theme()
 
         layout = QVBoxLayout(self)
         self.search_box = QLineEdit()
@@ -56,6 +67,7 @@ class CommandPalette(QWidget):
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(("命令",))
+        self.tree.setIconSize(QSize(20, 20))
         layout.addWidget(self.tree)
 
         self.hint = QLabel(PLUGIN_HINT_TEXT)
@@ -74,17 +86,44 @@ class CommandPalette(QWidget):
         """Rebuild the tree from the registry, grouped by id first segment."""
         self.tree.clear()
         for category, specs in self._registry.list_by_category().items():
-            group = QTreeWidgetItem((category,))
+            group = QTreeWidgetItem(
+                (
+                    {
+                        "drawing": "图纸",
+                        "feature": "创建特征",
+                        "modify": "修改",
+                        "sketch": "草图",
+                    }.get(category, category),
+                )
+            )
+            group.setToolTip(0, category)
+            set_tree_icon(group, CATEGORY_ICONS.get(category, "plugin"), self._icon_theme)
             for spec in specs:
+                if self._document_type == "drawing2d" and spec.id not in DRAWING2D_COMMAND_IDS:
+                    continue
                 child = QTreeWidgetItem((self._leaf_label(spec),))
                 child.setData(0, COMMAND_ID_ROLE, spec.id)
+                child.setToolTip(0, f"{spec.label_zh} · {spec.id}")
+                set_tree_icon(child, command_icon_name(spec.id), self._icon_theme)
                 group.addChild(child)
             self.tree.addTopLevelItem(group)
+            group.setExpanded(True)
 
     @staticmethod
     def _leaf_label(spec: CommandSpec) -> str:
-        """Readable leaf: the zh label with the raw id in parentheses."""
-        return f"{spec.label_zh}（{spec.id}）"
+        """Keep technical IDs in tooltips and the search index."""
+        return spec.label_zh
+
+    def set_icon_theme(self, theme: ThemeName) -> None:
+        self._icon_theme = theme
+        refresh_tree_icons(self.tree, theme)
+
+    def set_document_type(self, document_type: DocumentType) -> None:
+        """Show only commands valid for the currently bound document kind."""
+        if document_type == self._document_type:
+            return
+        self._document_type = document_type
+        self.refresh()
 
     def refresh(self) -> None:
         """Re-read the registry (a plugin registered since construction

@@ -1,0 +1,27 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_drawing_from_dim_requires_thawing_frozen_zero_layer ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x727f03779c70>
+
+    def test_drawing_from_dim_requires_thawing_frozen_zero_layer(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        editor.set_document_layers(
+            editor.layer_table.replace(replace(editor.layer_table.get("0"), frozen=True)), "DIM"
+        )
+        editor.tool_buttons["圆"].click()
+>       assert editor.canvas.tool == "选择元素"
+E       AssertionError: assert '圆' == '选择元素'
+E         
+E         - 选择元素
+E         + 圆
+
+tests/ui/test_dim_layers.py:320: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_dim_layers.py::test_drawing_from_dim_requires_thawing_frozen_zero_layer
+1 failed in 12.19s

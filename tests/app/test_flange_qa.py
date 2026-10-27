@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Flange QA happy path (T7c): all eight built-in ids in one document.
+"""Flange QA happy path: the P0 flange feature chain in one document.
 
 Sequence relies on mode "new" replacing the whole solid (verified
 against ``_b123_ops._combine``): box → extrude → revolve → cylinder

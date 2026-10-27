@@ -1,0 +1,53 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_console_open_keeps_inline_dimension_escape ________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75e0c8c68bf0>
+
+    def test_console_open_keeps_inline_dimension_escape(qtbot: QtBot) -> None:
+        from uuid import uuid4
+    
+        from PySide6.QtWidgets import QApplication
+    
+        from mycad.core.sketch import LineEntity
+        from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+    
+        window = drawing_window(qtbot)
+        draft, tabs = window.active_sketch_dialog(), window.bottom_tabs
+        assert draft is not None and tabs is not None
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        constraint = SketchConstraint(
+            uuid4().hex, "length", (SketchGeometryReference(line.entity_id, "geometry"),),
+            value=30, unit="mm", axis="horizontal", position_mm=(15, -10),
+        )
+        draft.canvas.entities = [line]
+        draft.canvas.constraints = [constraint]
+        draft.canvas.changed.emit()
+        for floating in (False, True):
+            window.bottom_dock.setFloating(floating)
+            for entry in ("tab", "cli-menu", "ai-menu", "information-menu", "plan-menu"):
+                tabs.setCurrentWidget(window.information_tab)
+                draft.dimensions.edit(draft.dimension_sources()[0], constraint)
+                qtbot.waitUntil(draft.dimensions.value_editor.hasFocus)
+                if entry == "tab":
+                    QTest.mouseClick(
+                        tabs.tabBar(), Qt.MouseButton.LeftButton,
+                        pos=tabs.tabBar().tabRect(1).center(),
+                    )
+                elif entry == "cli-menu":
+                    window.act_show_cli.trigger()
+                elif entry == "ai-menu":
+                    window.act_show_ai.trigger()
+                elif entry == "information-menu":
+                    window.act_show_information.trigger()
+                else:
+                    window.act_view_plans.trigger()
+>               qtbot.waitUntil(draft.dimensions.value_editor.hasFocus, timeout=500)
+E               pytestqt.exceptions.TimeoutError: waitUntil timed out in 500 milliseconds
+
+tests/ui/test_workspace_console.py:142: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_workspace_console.py::test_console_open_keeps_inline_dimension_escape
+1 failed in 10.47s

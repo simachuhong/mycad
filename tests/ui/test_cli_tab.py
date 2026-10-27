@@ -136,13 +136,14 @@ def test_tab_replaces_window_document(
     assert window.cli_tab is not None
     window.cli_tab.input.setText("new")
     window.cli_tab.input.returnPressed.emit()
+    qtbot.waitUntil(lambda: window.loaded_document() is not None)
     loaded = window.loaded_document()
     assert loaded is not None
     # GUI Tab 自持的文档指针与窗口绑定必须来自同一次替换。
     assert window.cli_tab.current is loaded
 
 
-def test_bottom_tabs_cli_and_chat(
+def test_bottom_tabs_cli_and_plan(
     services: AppServices,
     qtbot: QtBot,
 ) -> None:
@@ -150,9 +151,9 @@ def test_bottom_tabs_cli_and_chat(
     qtbot.addWidget(window)
     tabs = window.bottom_tabs
     assert tabs is not None
-    assert tabs.count() == 2
-    assert tabs.tabText(0) == "CLI"
-    assert tabs.tabText(1) == "Chat"
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["信息", "CLI", "AI 对话", "计划"]
+    assert tabs.widget(1) is window.cli_tab
+    assert tabs.widget(3) is window.plan_cards
 
 
 def test_quit_sentinel_surfaced_without_close(

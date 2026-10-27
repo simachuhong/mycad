@@ -18,6 +18,15 @@ _revolve = PlannedCommand("feature.revolve", 1, {}, "Revolve a profile.", "revol
 _hole = PlannedCommand("feature.hole", 1, {}, "Cut a hole.", "hole")
 _hole_pattern = PlannedCommand("feature.hole_pattern", 1, {}, "Pattern holes.", "hole_pattern")
 _fillet = PlannedCommand("modify.fillet", 1, {}, "Fillet edges.", "edge")
+_chamfer = PlannedCommand("modify.chamfer", 1, {}, "Chamfer edges.", "chamfer_edge")
 _boolean_cut = PlannedCommand("modify.boolean_cut", 1, {}, "Boolean cut.", "tool_body")
+_boolean_intersect = PlannedCommand(
+    "modify.boolean_intersect", 1, {}, "Boolean intersection.", "intersection_tool_body"
+)
+_body_boolean = PlannedCommand("modify.boolean_bodies", 1, {}, "Body Boolean.", "body_pair")
+_body_transform = PlannedCommand(
+    "modify.body_transform", 1, {}, "Body transform.", "body_transform"
+)
+_body_pattern = PlannedCommand("modify.body_pattern", 1, {}, "Body pattern.", "body_pattern")
 
 PlannedCommand("feature.box", 1, {}, "", "bogus")  # pyright: ignore[reportArgumentType]

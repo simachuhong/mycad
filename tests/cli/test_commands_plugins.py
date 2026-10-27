@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``commands`` and ``plugins`` subcommands: the fixed eight-builtin listing
+"""``commands`` and ``plugins`` subcommands: the released built-in listing
 (discovery isolated) and the loaded/skipped plugin report (exit 0 always)."""
 
 from __future__ import annotations
@@ -60,19 +60,23 @@ def _no_plugins(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
     return ()
 
 
-def test_commands_lists_exactly_eight(
+def test_commands_lists_all_released_builtins(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 8
+    assert len(lines) == 17
     rows = [line.split("\t") for line in lines]
     assert all(len(row) == 3 for row in rows)
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)
-    assert verbs[0] == "box"
-    assert verbs[-1] == "revolve"
+    assert verbs.count("") == 3
+    assert [row[1] for row in rows if not row[0]] == [
+        "drawing.layers.set",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+    ]
     assert {row[1] for row in rows} == {spec.id for spec in BUILTIN_COMMAND_SPECS}
 
 
@@ -85,9 +89,14 @@ def test_commands_json_shape(
     payload = json.loads(raw)
     assert set(payload) == {"commands"}
     commands = payload["commands"]
-    assert len(commands) == 8
+    assert len(commands) == 17
     verbs = [entry["verb"] for entry in commands]
     assert verbs == sorted(verbs)
+    assert [entry["id"] for entry in commands if not entry["verb"]] == [
+        "drawing.layers.set",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+    ]
     for entry in commands:
         assert set(entry) == JSON_KEYS
     assert "\\\\u" not in raw  # ensure_ascii=False: label_zh stays readable
@@ -110,7 +119,7 @@ def test_commands_lists_plugin_contributions(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
     assert main(["commands"]) == 0
     rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
-    assert len(rows) == 9
+    assert len(rows) == 18
     assert "demo.ping" in {row[1] for row in rows}
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)

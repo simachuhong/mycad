@@ -1,0 +1,10 @@
+{
+  "tests_passed": 133,
+  "ruff": "passed",
+  "format_files": 8,
+  "typecheck_errors": 0,
+  "review_important_fixed": 1,
+  "review_deferred": 0,
+  "ai_backend": "not_connected",
+  "live_app_restarted": false
+}

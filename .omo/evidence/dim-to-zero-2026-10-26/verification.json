@@ -1,0 +1,15 @@
+{
+  "timestamp_utc": "2026-10-25T16:31:43.235187+00:00",
+  "event": "dim_to_zero_tool_transition",
+  "behavior": "Successful switch to line/polyline/circle/arc/rectangle/polygon/spline resets current DIM to 0. Other layers, selection and modification commands keep their layer. Existing dimensions remain on DIM. Frozen 0 blocks the switch with a thaw prompt; failed pending-geometry tool changes keep their layer.",
+  "validation": {
+    "red": "7 drawing transitions failed before implementation; frozen-zero guard also failed before implementation",
+    "regression": "100 passed; test_hover_shows_candidate_without_selecting_or_mutating failed during the combined run and independently passed on recheck without code changes",
+    "new_transition_cases": "all 10 passed within regression run",
+    "ruff": "passed",
+    "format": "passed",
+    "basedpyright": "0 errors, 0 warnings, 0 notes",
+    "diff_check": "passed"
+  },
+  "scope": "Only sketch_editor.py tool transition and test_dim_layers.py regression additions; existing dirty checkout preserved."
+}

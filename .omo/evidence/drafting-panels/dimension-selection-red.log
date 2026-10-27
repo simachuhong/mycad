@@ -1,0 +1,24 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_canvas_dimension_edit_selects_matching_navigation_node __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7a0adeb37800>
+
+    def test_canvas_dimension_edit_selects_matching_navigation_node(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        dimension = editor.canvas.constraints[0]
+        editor.dimensions.edit(editor.dimension_sources()[0], dimension)
+>       assert leaf(editor, dimension.constraint_id).isSelected()
+E       AssertionError: assert False
+E        +  where False = <built-in method isSelected of PySide6.QtWidgets.QTreeWidgetItem object at 0x7a0ade9e2e00>()
+E        +    where <built-in method isSelected of PySide6.QtWidgets.QTreeWidgetItem object at 0x7a0ade9e2e00> = <PySide6.QtWidgets.QTreeWidgetItem object at 0x7a0ade9e2e00>.isSelected
+E        +      where <PySide6.QtWidgets.QTreeWidgetItem object at 0x7a0ade9e2e00> = leaf(<mycad.ui.sketch_editor.SketchEditorDialog(0x24374130) at 0x7a0ade9b6680>, 'bf28faf2991046579680fab73de06f20')
+E        +        where 'bf28faf2991046579680fab73de06f20' = SketchConstraint(constraint_id='bf28faf2991046579680fab73de06f20', kind='length', references=(SketchGeometryReference(...2, scale=1.0, position_mm=(15.0, -10.0), text_position_mm=None, axis='horizontal', layer_name=None, anchor_mode='auto').constraint_id
+
+tests/ui/test_drafting_panels.py:350: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_canvas_dimension_edit_selects_matching_navigation_node
+1 failed, 15 deselected in 9.67s

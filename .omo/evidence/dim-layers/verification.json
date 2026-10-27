@@ -1,0 +1,58 @@
+{
+  "task": "DIM default annotation layer and shared drawing layer state",
+  "timestamp_utc": "2026-10-25T15:54:03.599959+00:00",
+  "status": "Implemented and verified with full validation plus scoped corrections; user visual acceptance pending",
+  "features": [
+    "New dimensions default to DIM with configurable target/current-layer option",
+    "Independent annotation layer styling and visibility",
+    "Document-wide nonmodal on/off, freeze/thaw, lock/unlock controls",
+    "Frozen geometry and annotations excluded from display regeneration, extents, selection and snaps",
+    "Off geometry and dimensions retained in extents; thaw preserves off state",
+    "Current layer freeze and used-layer deletion guards",
+    "Bus-backed persistence, mixed draft/document undo-redo, legacy dimension migration",
+    "Native DXF dimension layer membership and independent off/frozen/locked flags"
+  ],
+  "validation": {
+    "full_pytest": {
+      "passed": 1854,
+      "failed_initially": 9,
+      "seconds": 668.44,
+      "failure_reason": "Pinned builtin command inventory/category expectations omitted drawing.layers.set",
+      "all_initial_failures_resolved_by_scoped_rechecks": true
+    },
+    "catalog_and_ui_corrections": {
+      "passed": 27,
+      "failed_initially": 1,
+      "remaining_failure": "Plugin group expectation omitted 图纸; corrected and separately passed"
+    },
+    "plugin_category_correction": {
+      "passed": 1
+    },
+    "cli_corrections": {
+      "passed": 10
+    },
+    "final_layer_ui": {
+      "passed": 11
+    },
+    "canvas_ui_regression": {
+      "passed": 34
+    },
+    "solver_exchange_regression": {
+      "passed": 124
+    },
+    "core_geometry_ui_dxf_scope": {
+      "passed": 19
+    },
+    "full_ruff": "One unused test import fixed; scoped rechecks passed",
+    "full_format": "344 files already formatted; subsequent changed paths passed",
+    "full_strict_types": "0 errors, 0 warnings, 0 notes; subsequent changed paths passed",
+    "diff_check": "passed"
+  },
+  "screenshots": [
+    "workbench.png",
+    "layer-manager.png",
+    "geometry-off-dim-visible.png"
+  ],
+  "runtime": "Existing running MyCAD process was not restarted during this implementation; relaunch required to load changed Python modules",
+  "git": "Existing dirty checkout preserved; no commit, merge or push performed"
+}

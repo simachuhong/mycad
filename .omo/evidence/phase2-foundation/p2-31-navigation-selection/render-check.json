@@ -1,0 +1,222 @@
+{
+  "qt_platform": "xcb",
+  "screen_geometry": [
+    1920,
+    1080
+  ],
+  "document_revision_unchanged_by_selection": true,
+  "command_history_unchanged_by_selection": true,
+  "right_panel_selection_text": "视口选择：面 · 实体 65d38bdf · 拓扑 8b12ffc8",
+  "viewport_screenshot": "face-click-viewport.png",
+  "viewport_center_rgb": [
+    210,
+    171,
+    118,
+    255
+  ],
+  "captures": [
+    {
+      "state": "standard-top-orthographic-axes-grid",
+      "orientation_action": "top",
+      "projection": "orthographic",
+      "selection_filter": "body",
+      "selection": null,
+      "preselection": null,
+      "coordinate_axes_visible": true,
+      "xy_grid_visible": true,
+      "document_revision": 1,
+      "command_count": 1,
+      "viewport_size": [
+        1436,
+        990
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "screenshot": "standard-top-orthographic-axes-grid.png",
+      "viewport_screenshot": "viewport-standard-top-orthographic-axes-grid.png",
+      "desktop_center_rgb": [
+        174,
+        181,
+        193,
+        255
+      ],
+      "viewport_center_rgb": [
+        174,
+        181,
+        193,
+        255
+      ],
+      "desktop_viewport_center_matches_framebuffer": true
+    },
+    {
+      "state": "standard-top-perspective-axes-grid",
+      "orientation_action": "top",
+      "projection": "perspective",
+      "selection_filter": "body",
+      "selection": null,
+      "preselection": null,
+      "coordinate_axes_visible": true,
+      "xy_grid_visible": true,
+      "document_revision": 1,
+      "command_count": 1,
+      "viewport_size": [
+        1436,
+        990
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "screenshot": "standard-top-perspective-axes-grid.png",
+      "viewport_screenshot": "viewport-standard-top-perspective-axes-grid.png",
+      "desktop_center_rgb": [
+        174,
+        181,
+        193,
+        255
+      ],
+      "viewport_center_rgb": [
+        174,
+        181,
+        193,
+        255
+      ],
+      "desktop_viewport_center_matches_framebuffer": true
+    },
+    {
+      "state": "face-hover-preselection",
+      "orientation_action": "top",
+      "projection": "orthographic",
+      "selection_filter": "face",
+      "selection": null,
+      "preselection": {
+        "kind": "face",
+        "topology_ids": [
+          "TopologyId(value=UUID('8b12ffc8-86a7-4714-a061-40a9e3e9e70e'), generation=2)"
+        ]
+      },
+      "coordinate_axes_visible": true,
+      "xy_grid_visible": true,
+      "document_revision": 1,
+      "command_count": 1,
+      "viewport_size": [
+        1436,
+        990
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "screenshot": "face-hover-preselection.png",
+      "viewport_screenshot": "viewport-face-hover-preselection.png",
+      "desktop_center_rgb": [
+        120,
+        156,
+        210,
+        255
+      ],
+      "viewport_center_rgb": [
+        120,
+        156,
+        210,
+        255
+      ],
+      "desktop_viewport_center_matches_framebuffer": true
+    },
+    {
+      "state": "face-click-selection",
+      "orientation_action": "top",
+      "projection": "orthographic",
+      "selection_filter": "face",
+      "selection": {
+        "kind": "face",
+        "body_ids": [
+          "BodyId(value=UUID('65d38bdf-d619-4bbb-828e-673f469cc4c7'), generation=2)"
+        ],
+        "topology_ids": [
+          "TopologyId(value=UUID('8b12ffc8-86a7-4714-a061-40a9e3e9e70e'), generation=2)"
+        ],
+        "geometry_revision": 2
+      },
+      "preselection": null,
+      "coordinate_axes_visible": true,
+      "xy_grid_visible": true,
+      "document_revision": 1,
+      "command_count": 1,
+      "viewport_size": [
+        1436,
+        990
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "screenshot": "face-click-selection.png",
+      "viewport_screenshot": "viewport-face-click-selection.png",
+      "desktop_center_rgb": [
+        210,
+        171,
+        118,
+        255
+      ],
+      "viewport_center_rgb": [
+        210,
+        171,
+        118,
+        255
+      ],
+      "desktop_viewport_center_matches_framebuffer": true
+    },
+    {
+      "state": "isometric-face-selection",
+      "orientation_action": "isometric",
+      "projection": "orthographic",
+      "selection_filter": "face",
+      "selection": {
+        "kind": "face",
+        "body_ids": [
+          "BodyId(value=UUID('65d38bdf-d619-4bbb-828e-673f469cc4c7'), generation=2)"
+        ],
+        "topology_ids": [
+          "TopologyId(value=UUID('8b12ffc8-86a7-4714-a061-40a9e3e9e70e'), generation=2)"
+        ],
+        "geometry_revision": 2
+      },
+      "preselection": null,
+      "coordinate_axes_visible": true,
+      "xy_grid_visible": true,
+      "document_revision": 1,
+      "command_count": 1,
+      "viewport_size": [
+        1436,
+        990
+      ],
+      "image_size": [
+        1920,
+        1080
+      ],
+      "device_pixel_ratio": 1.0,
+      "screenshot": "isometric-face-selection.png",
+      "viewport_screenshot": "viewport-isometric-face-selection.png",
+      "desktop_center_rgb": [
+        210,
+        171,
+        118,
+        255
+      ],
+      "viewport_center_rgb": [
+        210,
+        171,
+        118,
+        255
+      ],
+      "desktop_viewport_center_matches_framebuffer": true
+    }
+  ]
+}

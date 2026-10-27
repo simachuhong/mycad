@@ -8,7 +8,8 @@ summary, a Chinese UI label (phase-0 data only), a JSON-Schema (fixed
 subset) parameter schema and the CLI verb aliases.
 
 Field order is part of the public contract: ``undo_compensation`` is the
-last field and carries its default, and it accepts exactly one value —
+last field and carries its default, preceded by ``min_archive_version``;
+undo compensation accepts exactly one value —
 ``"history_replay"`` — per the 技术路线 §7 undo-compensation baseline
 (per-command inverse operations are explicitly out of scope for Phase 0).
 """
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from mycad.core.exceptions import ValidationError
 
@@ -47,6 +48,7 @@ class CommandSpec:
     label_zh: str
     params_schema: Mapping[str, object]
     cli: CliSyntax
+    min_archive_version: int = 1
     undo_compensation: UndoCompensation = "history_replay"
 
     def __post_init__(self) -> None:
@@ -56,6 +58,13 @@ class CommandSpec:
                 f"(got {self.undo_compensation!r}); per-command inverse "
                 "operations are not part of Phase 0"
             )
+        minimum_version = cast("object", self.min_archive_version)
+        if (
+            isinstance(minimum_version, bool)
+            or not isinstance(minimum_version, int)
+            or minimum_version < 1
+        ):
+            raise ValidationError("min_archive_version must be an integer >= 1")
 
 
 __all__ = ["CliSyntax", "CommandSpec", "UndoCompensation"]

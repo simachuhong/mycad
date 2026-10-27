@@ -1,0 +1,19 @@
+F401 [*] `PySide6.QtWidgets.QDialog` imported but unused
+  --> tests/ui/test_sketch_editor.py:13:42
+   |
+11 | from PySide6.QtCore import QPoint, Qt
+12 | from PySide6.QtTest import QTest
+13 | from PySide6.QtWidgets import QCheckBox, QDialog
+   |                                          ^^^^^^^
+14 | from pytestqt.qtbot import QtBot
+   |
+help: Remove unused import: `PySide6.QtWidgets.QDialog`
+   |
+12 | from PySide6.QtTest import QTest
+   - from PySide6.QtWidgets import QCheckBox, QDialog
+13 + from PySide6.QtWidgets import QCheckBox
+14 | from pytestqt.qtbot import QtBot
+   |
+
+Found 1 error.
+[*] 1 fixable with the `--fix` option.

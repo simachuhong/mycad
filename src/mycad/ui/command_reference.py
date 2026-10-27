@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from mycad.commands.grammar import describe_params
 from mycad.commands.registry import CommandRegistry
+from mycad.ui.cad_icons import set_button_icon
 
 __all__ = ["CommandReferenceDialog", "CommandRow", "collect_rows"]
 
@@ -107,6 +108,7 @@ class CommandReferenceDialog(QDialog):
         layout.addWidget(QLabel(_HINT, self))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        set_button_icon(buttons.button(QDialogButtonBox.StandardButton.Close), "cancel")
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)

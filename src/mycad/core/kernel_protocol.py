@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
+from mycad.core.measurements import MeasurementRequest, MeasurementResult
+
 
 @runtime_checkable
 class Kernel(Protocol):
@@ -22,4 +24,8 @@ class Kernel(Protocol):
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
         """Apply one command by id with its validated parameters."""
+        ...
+
+    def measure(self, request: MeasurementRequest) -> MeasurementResult:
+        """Measure the current result using exact geometry queries."""
         ...

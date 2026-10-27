@@ -8,14 +8,18 @@ See the LICENSE file in the project root for the full license text.
 THIRD-PARTY ATTRIBUTIONS
 ================================================================================
 
-The list below covers the complete runtime dependency closure of the `mycad`
-distribution, as enumerated by:
+The list below covers the default headless runtime closure and the optional
+`desktop` and `sketch-constraints` extras of the `mycad` distribution. The
+attribution list is the union measured by:
 
-    uv tree --package mycad --no-dev
+    uv export --locked --no-dev --all-extras --format requirements.txt
 
 Development-only tooling (ruff, basedpyright, pytest, pytest-cov, hatchling,
-editables) is declared in a PEP 735 dependency group, is not part of the
-runtime closure, and is therefore not listed here.
+editables) is declared in a PEP 735 dependency group, is not part of either
+runtime closure, and is therefore not listed here. The default dependency
+closure excludes PySide6, pyqtgraph, PyOpenGL, Pillow, and PlaneGCS. Install
+`mycad[desktop]` for the GUI, and `mycad[sketch-constraints]` for the optional
+sketch constraint backend.
 
 Each license identifier below was taken from the installed distribution's
 own metadata (the `License` / `License-Expression` field, or the
@@ -49,7 +53,7 @@ and is therefore attributed on two lines:
       satisfy the LGPL obligations for those native libraries.
 
 --------------------------------------------------------------------------------
-Runtime dependency closure (54 distributions)
+Runtime dependency attribution (57 distributions in the all-platform union)
 --------------------------------------------------------------------------------
 
   anytree                        Apache-2.0
@@ -87,6 +91,14 @@ Runtime dependency closure (54 distributions)
       text); the distribution METADATA carries no License field.
   parso                          MIT
   pexpect                        ISC
+  pillow                         MIT-CMU (optional `desktop` extra)
+      Evidence: pillow-12.3.0.dist-info/METADATA License-Expression;
+      used by ezdxf's drawing frontend for the DXF output preview.
+  planegcs                       LGPL-2.1-or-later (optional `sketch-constraints` extra)
+      Evidence: planegcs-0.9.6.dist-info/licenses/LICENSE and the distribution
+      metadata `License: LGPL-2.1-or-later`. This native extension is kept as a
+      separately installed and dynamically loaded module; see ADR-010 for the
+      source-build and redistribution gates.
   prompt-toolkit                 BSD-3-Clause
   psutil                         BSD-3-Clause
   ptyprocess                     ISC
@@ -152,7 +164,9 @@ transitive dependencies of build123d. No MyCAD module imports them; the
 
 Platform variation: `pexpect` is installed only on non-Windows systems,
 while `colorama` appears on Windows instead (`sys_platform == 'win32'`
-markers in the lockfile). Both are attributed above; the per-platform
-closure count stays 54 either way. The phase-1 additions (pyopengl,
-pyqtgraph, the pyside6 wheel family, shiboken6) carry no platform
-markers anywhere in uv.lock, so 54 holds on all three T1 platforms.
+markers in the lockfile). The exported list covers the union of those
+platform branches. Optional desktop distributions (pillow, pyopengl, pyqtgraph, and
+the pyside6 wheel family with shiboken6) are included only when the `desktop`
+extra is selected. `planegcs` is included only when `sketch-constraints` is
+selected and the platform machine is x86-64. aarch64 installs retain drawing
+without attempting an unverified native source build.

@@ -23,8 +23,9 @@ from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QObject, Signal
 
-from mycad.commands.validation import validate_params
+from mycad.commands.validation import normalize_params, validate_params
 from mycad.core.document import AFFECTED_OBJECTS, AffectedObject, PlannedCommand
+from mycad.core.exceptions import ValidationError
 from mycad.core.plan import Plan
 
 if TYPE_CHECKING:
@@ -58,6 +59,12 @@ class PlanDraftController(QObject):
     def plan(self) -> Plan:
         """Return the draft plan (never ``None``; empty steps when idle)."""
         return self._plan
+
+    @property
+    def registry(self) -> CommandRegistry:
+        """Registry used to validate draft values and build typed forms."""
+
+        return self._registry
 
     def steps(self) -> list[PlannedCommand]:
         """Return the plan's steps (the plan's own mutable list)."""
@@ -123,8 +130,10 @@ class PlanDraftController(QObject):
         broadcast via ``params_changed(step_index, validated)``, and the
         new step is returned.
         """
+        if self._plan.status != "draft":
+            raise ValidationError("confirmed plan content is frozen; create a new draft to edit")
         spec = self._registry.get(step.id, step.version)
-        validated = validate_params(spec, params, defs=self._registry.schema_defs)
+        validated = normalize_params(validate_params(spec, params, defs=self._registry.schema_defs))
         index = self._plan.steps.index(step)
         new_step = replace(step, params=validated)
         self._plan.steps[index] = new_step

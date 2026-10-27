@@ -148,7 +148,11 @@ def _placed_primitive(spec: _PrimitiveParams) -> Part:
 def normalize_result(result: Part | Compound | Wire) -> Part | None:
     solids = result.solids()
     if not solids:
-        return None
+        if result.is_null or not (result.faces() or result.edges() or result.vertices()):
+            return None
+        if isinstance(result, Part):
+            return result
+        return Part(children=[result])
     if isinstance(result, Part):
         return result
     return Part(solids)

@@ -1,0 +1,197 @@
+...............................F........................................ [  3%]
+........................................................................ [  7%]
+.FFF.................................................................... [ 11%]
+........................................................................ [ 15%]
+........................................................................ [ 19%]
+........................................................................ [ 23%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 42%]
+........................................................................ [ 46%]
+........................................................................ [ 50%]
+........................................................................ [ 54%]
+........................................................................ [ 57%]
+........................................................................ [ 61%]
+........................................................................ [ 65%]
+........................................................................ [ 69%]
+........................................................................ [ 73%]
+.....................FFFF...F........................................... [ 77%]
+........................................................................ [ 81%]
+........................................................................ [ 85%]
+........................................................................ [ 88%]
+........................................................................ [ 92%]
+........................................................................ [ 96%]
+...............................................................          [100%]
+=================================== FAILURES ===================================
+___________ test_build_app_registers_p0_and_released_p2_builtin_ids ____________
+
+    def test_build_app_registers_p0_and_released_p2_builtin_ids() -> None:
+        services = build_app(discoverers=[])
+>       assert sorted(_registered_ids(services)) == BUILTIN_IDS
+E       AssertionError: assert ['drawing.lay...pattern', ...] == ['feature.box...revolve', ...]
+E         
+E         At index 0 diff: 'drawing.layers.set' != 'feature.box'
+E         Left contains one more item: 'sketch.create'
+E         Use -v to get more diff
+
+tests/app/test_composition.py:45: AssertionError
+__________________ test_commands_lists_all_released_builtins ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7a9bc114ec00>
+capsys = <_pytest.capture.CaptureFixture object at 0x7a9bc114fc80>
+
+    def test_commands_lists_all_released_builtins(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+>       assert len(lines) == 16
+E       AssertionError: assert 17 == 16
+E        +  where 17 = len(['\tdrawing.layers.set\tSet shared drawing layers and dimension defaults', '\tsketch.constraint.add\tConstrain a sketc...elected solid body', 'body-transform\tmodify.body_transform\tMove, rotate, mirror, or copy a selected solid body', ...])
+
+tests/cli/test_commands_plugins.py:69: AssertionError
+___________________________ test_commands_json_shape ___________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7a9bc114cc80>
+capsys = <_pytest.capture.CaptureFixture object at 0x7a9bc114cf50>
+
+    def test_commands_json_shape(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands", "--json"]) == 0
+        raw = capsys.readouterr().out
+        payload = json.loads(raw)
+        assert set(payload) == {"commands"}
+        commands = payload["commands"]
+>       assert len(commands) == 16
+E       AssertionError: assert 17 == 16
+E        +  where 17 = len([{'verb': '', 'id': 'drawing.layers.set', 'summary_en': 'Set shared drawing layers and dimension defaults', 'label_zh'...'modify.body_transform', 'summary_en': 'Move, rotate, mirror, or copy a selected solid body', 'label_zh': '实体变换'}, ...])
+
+tests/cli/test_commands_plugins.py:91: AssertionError
+___________________ test_commands_lists_plugin_contributions ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7a9bc138bc80>
+capsys = <_pytest.capture.CaptureFixture object at 0x7a9bc13888c0>
+
+    def test_commands_lists_plugin_contributions(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A plugin-contributed command is visible to ``commands``, not just to the REPL.
+    
+        Driven through ``main`` on purpose: the subcommand must build the app
+        with real discovery enabled, which a direct ``CliSession`` call cannot
+        prove.
+        """
+    
+        def _one_plugin(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
+            return (_demo_plugin(),)
+    
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
+        assert main(["commands"]) == 0
+        rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+>       assert len(rows) == 17
+E       AssertionError: assert 18 == 17
+E        +  where 18 = len([['', 'drawing.layers.set', 'Set shared drawing layers and dimension defaults'], ['', 'sketch.constraint.add', 'Constr... solid body'], ['body-transform', 'modify.body_transform', 'Move, rotate, mirror, or copy a selected solid body'], ...])
+
+tests/cli/test_commands_plugins.py:120: AssertionError
+__________________ test_all_released_builtins_appear_grouped ___________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x25982830) at 0x7a9bbd505840>
+
+    def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
+>       assert palette.tree.topLevelItemCount() == 3
+E       assert 4 == 3
+E        +  where 4 = <built-in method topLevelItemCount of PySide6.QtWidgets.QTreeWidget object at 0x7a9bbf7e6640>()
+E        +    where <built-in method topLevelItemCount of PySide6.QtWidgets.QTreeWidget object at 0x7a9bbf7e6640> = <PySide6.QtWidgets.QTreeWidget(0x23897030) at 0x7a9bbf7e6640>.topLevelItemCount
+E        +      where <PySide6.QtWidgets.QTreeWidget(0x23897030) at 0x7a9bbf7e6640> = <mycad.ui.command_palette.CommandPalette(0x25982830) at 0x7a9bbd505840>.tree
+
+tests/ui/test_command_palette.py:87: AssertionError
+_________ test_independent_drawing_palette_only_shows_drawing_commands _________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x223c3210) at 0x7a9bbd4c9b40>
+
+    def test_independent_drawing_palette_only_shows_drawing_commands(
+        palette: CommandPalette,
+    ) -> None:
+        palette.set_document_type("drawing2d")
+>       assert set(_all_leaf_ids(palette)) == {
+            "sketch.create",
+            "sketch.constraint.add",
+            "sketch.constraint.update",
+        }
+E       AssertionError: assert {'drawing.lay...ketch.create'} == {'sketch.cons...ketch.create'}
+E         
+E         Extra items in the left set:
+E         'drawing.layers.set'
+E         Use -v to get more diff
+
+tests/ui/test_command_palette.py:98: AssertionError
+_______________________ test_leaf_labels_are_zh_with_id ________________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x21d31980) at 0x7a9bbef35240>
+
+    def test_leaf_labels_are_zh_with_id(palette: CommandPalette) -> None:
+        root = palette.tree.topLevelItem(0)
+        assert root is not None
+        box = root.child(0)
+        assert box is not None
+>       assert box.text(0) == "长方体"
+E       AssertionError: assert '更新图纸图层' == '长方体'
+E         
+E         - 长方体
+E         + 更新图纸图层
+
+tests/ui/test_command_palette.py:112: AssertionError
+_____________________ test_search_matches_id_and_zh_label ______________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x248ebc70) at 0x7a9bbf37bd00>
+qapp = <PySide6.QtWidgets.QApplication(0x206bfd80) at 0x7a9bbf36fcc0>
+
+    def test_search_matches_id_and_zh_label(
+        palette: CommandPalette,
+        qapp: object,
+    ) -> None:
+        assert palette.apply_filter("hole") == 2
+        visible = [id_ for id_ in _all_leaf_ids(palette) if not _leaf_is_hidden(palette, id_)]
+        assert set(visible) == {"feature.hole", "feature.hole_pattern"}
+        # The zh query hits the same pair through label_zh (register.search
+        # excludes zh by design — the palette is the reason it must work).
+        assert palette.apply_filter("孔") == 2
+>       assert palette.apply_filter("") == len(RELEASED_BUILTIN_IDS)
+E       AssertionError: assert 17 == 16
+E        +  where 17 = apply_filter('')
+E        +    where apply_filter = <mycad.ui.command_palette.CommandPalette(0x248ebc70) at 0x7a9bbf37bd00>.apply_filter
+E        +  and   16 = len(frozenset({'feature.box', 'feature.cylinder', 'feature.extrude', 'feature.hole', 'feature.hole_pattern', 'feature.revolve', ...}))
+
+tests/ui/test_command_palette.py:127: AssertionError
+__________________ test_plugin_command_appears_via_discovery ___________________
+
+qapp = <PySide6.QtWidgets.QApplication(0x206bfd80) at 0x7a9bbf36fcc0>
+
+    def test_plugin_command_appears_via_discovery(qapp: object) -> None:
+        services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
+        palette = CommandPalette(services.registry)
+        assert "demo.widget" in _all_leaf_ids(palette)
+>       assert _group_titles(palette) == {"demo", "创建特征", "修改", "草图"}
+E       AssertionError: assert {'demo', 'dra... '创建特征', '草图'} == {'demo', '修改', '创建特征', '草图'}
+E         
+E         Extra items in the left set:
+E         'drawing'
+E         Use -v to get more diff
+
+tests/ui/test_command_palette.py:229: AssertionError
+=========================== short test summary info ============================
+FAILED tests/app/test_composition.py::test_build_app_registers_p0_and_released_p2_builtin_ids
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_all_released_builtins
+FAILED tests/cli/test_commands_plugins.py::test_commands_json_shape - Asserti...
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_plugin_contributions
+FAILED tests/ui/test_command_palette.py::test_all_released_builtins_appear_grouped
+FAILED tests/ui/test_command_palette.py::test_independent_drawing_palette_only_shows_drawing_commands
+FAILED tests/ui/test_command_palette.py::test_leaf_labels_are_zh_with_id - As...
+FAILED tests/ui/test_command_palette.py::test_search_matches_id_and_zh_label
+FAILED tests/ui/test_command_palette.py::test_plugin_command_appears_via_discovery
+9 failed, 1854 passed in 668.44s (0:11:08)

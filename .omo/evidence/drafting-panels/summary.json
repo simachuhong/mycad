@@ -1,0 +1,44 @@
+{
+  "date": "2026-10-26",
+  "scope": "Left graphical navigation, right native dockable/floating parameter panel",
+  "files": [
+    "src/mycad/ui/sketch_editor.py",
+    "src/mycad/ui/sketch_navigation.py",
+    "src/mycad/ui/dimension_tools.py",
+    "tests/ui/test_drafting_panels.py",
+    "tests/ui/test_polygon_grid.py",
+    "README.md"
+  ],
+  "verification": {
+    "ruff": "pass",
+    "format": "356 files pass; changed tests subsequently pass",
+    "basedpyright": "0 errors/0 warnings/0 notes; changed tests subsequently pass",
+    "initial_scoped": "115 passed",
+    "review_green": "19 passed",
+    "full_pytest": {
+      "passed": 1945,
+      "failed": 1,
+      "resolved": "Old F7 test attempted focus on field now hidden in Modify tab; reproduced, corrected visible-page setup, expanded docked/floating cases. No production-code changes after full run."
+    },
+    "final_scoped": {
+      "passed": 28,
+      "failed": 0
+    },
+    "diff_check": "pass"
+  },
+  "review": {
+    "critical": 0,
+    "important_found": 2,
+    "important_fixed": 2,
+    "minor": 0
+  },
+  "screenshot": "/media/sima/Data/projects/MyCAD/.omo/evidence/drafting-panels/workspace.png",
+  "current_user_gui": "preserved; no restart",
+  "hashes": {
+    "src/mycad/ui/sketch_editor.py": "c2168b37b423005613b2c3799e9e81cb1bbcffd463a66f1fcc4123ce9dbe5cfa",
+    "src/mycad/ui/sketch_navigation.py": "b29f747f44f945a13b4715e5355a22439cdb8d26cbfb4bf180eb371461cfe33f",
+    "src/mycad/ui/dimension_tools.py": "142347d12b6a03302d0b4869e002c57d1495b15625e296cdf9cddea99cfd9e55",
+    "tests/ui/test_drafting_panels.py": "a1b6cc835ed9e0955cc7f455b554c7fad1d0a81a933d914ee82d70a81fa8b3b7",
+    "tests/ui/test_polygon_grid.py": "ffa68158fb5487ace8e6821dc94fc8ebae2bc7e4f8cc6674016d245035955fe8"
+  }
+}

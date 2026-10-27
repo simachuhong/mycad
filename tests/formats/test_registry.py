@@ -12,7 +12,7 @@ import pytest
 from mycad.core.exceptions import ProviderConflictError, UnknownFormatError
 from mycad.core.ports import ExportableKernel, FormatPort
 from mycad.formats.base import FormatProvider
-from mycad.formats.providers import STEP_PROVIDER, STL_PROVIDER
+from mycad.formats.providers import DXF_PROVIDER, STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
 from mycad.geom.kernel import BuildKernel
 
@@ -42,7 +42,7 @@ def _fake_provider(
 
 
 def _registry() -> FormatProviderRegistry:
-    return FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER])
+    return FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER, DXF_PROVIDER])
 
 
 def test_get_by_extension_resolves_registered_providers() -> None:
@@ -50,6 +50,7 @@ def test_get_by_extension_resolves_registered_providers() -> None:
     assert registry.get_by_extension(".step") is STEP_PROVIDER
     assert registry.get_by_extension(".stl") is STL_PROVIDER
     assert registry.get_by_extension("STEP") is STEP_PROVIDER
+    assert registry.get_by_extension(".dxf") is DXF_PROVIDER
     with pytest.raises(UnknownFormatError):
         registry.get_by_extension(".stp")
 

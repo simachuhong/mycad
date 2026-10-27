@@ -1,0 +1,28 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_escape_during_held_box_drag_does_not_fall_through_to_orbit ________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7cb7ac315be0>
+
+    def test_escape_during_held_box_drag_does_not_fall_through_to_orbit(qtbot: QtBot) -> None:
+        view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+        qtbot.addWidget(view)
+        view.resize(800, 600)
+        before = (view.opts["elevation"], view.opts["azimuth"])
+        QTest.mousePress(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, QPoint(100, 100))
+        QTest.keyClick(view, Qt.Key.Key_Escape)
+        view.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(200, 200), QPointF(200, 200),
+            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        view.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(220, 220), QPointF(220, 220),
+            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=QPoint(200, 200))
+>       assert (view.opts["elevation"], view.opts["azimuth"]) == before
+E       assert (50.0, 25.0) == (30, 45)
+E         
+E         At index 0 diff: 50.0 != 30
+E         Use -v to get more diff
+
+tests/ui/test_navigation_contract.py:97: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_navigation_contract.py::test_escape_during_held_box_drag_does_not_fall_through_to_orbit
+1 failed, 6 deselected in 24.49s

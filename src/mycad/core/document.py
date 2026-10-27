@@ -10,10 +10,13 @@ in T6b (see the placeholder at the end of this file).
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
+from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, DocumentType
 from mycad.core.exceptions import UnknownCommandError
 
 
@@ -52,7 +55,12 @@ AffectedObject = Literal[
     "hole",
     "hole_pattern",
     "edge",
+    "chamfer_edge",
     "tool_body",
+    "intersection_tool_body",
+    "body_pair",
+    "body_transform",
+    "body_pattern",
 ]
 
 # Appendix B.2 fixed mapping (command id -> affected_object), single source.
@@ -64,7 +72,12 @@ AFFECTED_OBJECTS: Mapping[str, str] = {
     "feature.hole": "hole",
     "feature.hole_pattern": "hole_pattern",
     "modify.fillet": "edge",
+    "modify.chamfer": "chamfer_edge",
     "modify.boolean_cut": "tool_body",
+    "modify.boolean_intersect": "intersection_tool_body",
+    "modify.boolean_bodies": "body_pair",
+    "modify.body_transform": "body_transform",
+    "modify.body_pattern": "body_pattern",
 }
 
 
@@ -72,7 +85,7 @@ AFFECTED_OBJECTS: Mapping[str, str] = {
 class PlannedCommand:
     """One planned step; ``summary_en`` is copied from the registry spec.
 
-    Dual gate: the ``AffectedObject`` Literal locks the eight values
+    Dual gate: the ``AffectedObject`` Literal locks the released values
     statically (basedpyright), while ``__post_init__`` locks the command id
     at runtime via the AFFECTED_OBJECTS table.
     """
@@ -125,11 +138,29 @@ class Document:
         metadata: Mapping[str, str] | None = None,
         commands: Iterable[ExecutedCommand] | None = None,
         named_groups: Mapping[str, NamedGroup] | None = None,
+        archive_version: int = 1,
+        document_type: DocumentType = "part",
     ) -> None:
         from mycad.core.exceptions import ValidationError
         from mycad.core.signals import SignalBus
 
         self._registry = registry
+        self._document_id = uuid.uuid4().hex
+        self._revision = 0
+        version_value = cast("object", archive_version)
+        if (
+            isinstance(version_value, bool)
+            or not isinstance(version_value, int)
+            or version_value < 1
+        ):
+            raise ValidationError("archive_version must be an integer >= 1")
+        self._archive_version = version_value
+        document_type_value = cast("object", document_type)
+        if document_type_value not in ("part", "drawing2d"):
+            raise ValidationError("document_type must be 'part' or 'drawing2d'")
+        if document_type_value == "drawing2d" and version_value < 3:
+            raise ValidationError("drawing2d documents require archive_version 3 or later")
+        self._document_type: DocumentType = document_type
         if metadata is None:
             self._metadata: dict[str, str] = dict(DEFAULT_METADATA)
         else:
@@ -137,12 +168,46 @@ class Document:
                 if key not in METADATA_KEYS:
                     raise ValidationError(f"unknown metadata key {key!r}")
             self._metadata = dict(metadata)
-        self._commands: list[ExecutedCommand] = list(commands) if commands is not None else []
+        self._commands: list[ExecutedCommand] = (
+            deepcopy(list(commands)) if commands is not None else []
+        )
+        if self._document_type == "drawing2d":
+            for command in self._commands:
+                if command.id not in DRAWING2D_COMMAND_IDS:
+                    raise ValidationError(
+                        f"drawing2d document cannot contain command {command.id!r}"
+                    )
         self._named_groups: dict[str, NamedGroup] = (
             dict(named_groups) if named_groups is not None else {}
         )
+        if self._document_type == "drawing2d" and self._named_groups:
+            raise ValidationError("drawing2d documents cannot contain 3D named groups")
         self._dirty = False
         self.events = SignalBus()
+
+    @property
+    def document_id(self) -> str:
+        """Runtime identity for this in-memory document instance."""
+        return self._document_id
+
+    @property
+    def revision(self) -> int:
+        """Monotonic revision of committed document content changes."""
+        return self._revision
+
+    @property
+    def archive_version(self) -> int:
+        """Minimum archive schema required by this document's command history."""
+        return self._archive_version
+
+    @property
+    def document_type(self) -> DocumentType:
+        """Persisted semantic kind; only archive migrations may establish it."""
+        return self._document_type
+
+    def _advance_revision(self) -> None:
+        """Record one committed content change; Bus owns command-history calls."""
+        self._revision += 1
 
     @property
     def metadata(self) -> dict[str, str]:
@@ -162,6 +227,7 @@ class Document:
             raise ValidationError(f"metadata value for {key!r} must be a string")
         self._metadata[key] = value
         self._dirty = True
+        self._advance_revision()
         self.events.emit("metadata_changed", {"key": key, "value": value})
 
     @property
@@ -184,6 +250,8 @@ class Document:
 
         from mycad.core.exceptions import ValidationError
 
+        if self._document_type == "drawing2d":
+            raise ValidationError("drawing2d documents cannot contain 3D named groups")
         name = group.name
         if not isinstance(cast("object", name), str) or not name:
             raise ValidationError(f"named group name must be a non-empty string, got {name!r}")
@@ -191,6 +259,7 @@ class Document:
             raise ValidationError(f"named group {name!r} already exists")
         self._named_groups[name] = group
         self._dirty = True
+        self._advance_revision()
         self.events.emit("named_group_added", {"name": name})
 
     def remove_named_group(self, name: str) -> None:
@@ -199,6 +268,7 @@ class Document:
             raise KeyError(name)
         del self._named_groups[name]
         self._dirty = True
+        self._advance_revision()
         self.events.emit("named_group_removed", {"name": name})
 
     def metadata_snapshot(self) -> dict[str, str]:
@@ -212,20 +282,45 @@ class Document:
 
     @property
     def commands(self) -> tuple[ExecutedCommand, ...]:
-        """The ordered command history (immutable view)."""
-        return tuple(self._commands)
+        """Detached history snapshot, including nested params and audit data.
+
+        Frozen command DTOs still contain mutable JSON dictionaries/lists.
+        Callers may inspect or edit their copy, but only Bus-side operations
+        can change the stored history and trigger geometry/dirty updates.
+        """
+        return deepcopy(tuple(self._commands))
 
     def replace_command_params(
-        self, ordinal: int, params: Mapping[str, object], actor: str, reason: str
+        self,
+        ordinal: int,
+        params: Mapping[str, object],
+        actor: str,
+        reason: str,
     ) -> ExecutedCommand:
         """Edit one history entry's params (#10 sole entry point; no geometry here).
 
         Re-validates against the registry spec (failure leaves the document
         untouched), swaps the slot in via a defensive deep copy, appends a
-        CommandAmendment preserving the original audit fields, emits
-        ``command_amended`` and returns the revised command.
+        CommandAmendment preserving the original audit fields, advances the
+        document revision, emits ``command_amended`` and returns the revised
+        command. Bus-side replay uses the private deferred helper so a failed
+        transaction can restore its snapshot without committing a revision.
         """
-        from copy import deepcopy
+        return self._replace_command_params(
+            ordinal, params, actor, reason, notify=True, advance_revision=True
+        )
+
+    def _replace_command_params(
+        self,
+        ordinal: int,
+        params: Mapping[str, object],
+        actor: str,
+        reason: str,
+        *,
+        notify: bool,
+        advance_revision: bool,
+    ) -> ExecutedCommand:
+        """Replace history inside an optional Bus transaction boundary."""
         from dataclasses import replace
         from datetime import UTC, datetime
 
@@ -235,18 +330,18 @@ class Document:
         if not 0 <= ordinal < len(self._commands):
             raise InvalidHistoryError(f"ordinal {ordinal} not in history")
         cmd = self._commands[ordinal]
-        spec = self._registry.get(cmd.id)
+        spec = self._registry.get(cmd.id, cmd.version)
         validate_params(spec, params, defs=self._registry.schema_defs)
-        snapshot = deepcopy(self._commands)
+        snapshot = list(self._commands)
         new_cmd = replace(
             cmd,
-            params=dict(params),
+            params=deepcopy(dict(params)),
             amendments=cmd.amendments
             + (
                 CommandAmendment(
                     at=datetime.now(UTC).isoformat(),
                     actor=actor,
-                    from_params=dict(cmd.params),
+                    from_params=deepcopy(cmd.params),
                     reason=reason,
                 ),
             ),
@@ -254,12 +349,44 @@ class Document:
         snapshot[ordinal] = new_cmd
         self._commands = snapshot
         self._dirty = True
-        self.events.emit("command_amended", {"ordinal": ordinal, "command_id": cmd.id})
-        return new_cmd
+        if advance_revision:
+            self._advance_revision()
+        if notify:
+            self.events.emit(
+                "command_amended",
+                {"ordinal": ordinal, "command_id": cmd.id, "command_version": cmd.version},
+            )
+        return deepcopy(new_cmd)
+
+    def _snapshot_state(
+        self,
+    ) -> tuple[list[ExecutedCommand], dict[str, str], dict[str, NamedGroup], bool, int]:
+        """Capture all mutable document state for a Bus transaction."""
+        return (
+            deepcopy(self._commands),
+            dict(self._metadata),
+            deepcopy(self._named_groups),
+            self._dirty,
+            self._archive_version,
+        )
+
+    def _restore_state(
+        self,
+        snapshot: tuple[list[ExecutedCommand], dict[str, str], dict[str, NamedGroup], bool, int],
+    ) -> None:
+        """Restore a complete Bus transaction snapshot without emitting events."""
+        commands, metadata, named_groups, dirty, archive_version = snapshot
+        self._commands = deepcopy(commands)
+        self._metadata = dict(metadata)
+        self._named_groups = deepcopy(named_groups)
+        self._dirty = dirty
+        self._archive_version = archive_version
 
     def _append_command(self, command: ExecutedCommand) -> None:
         """Bus-side append (T6c): the single write path into the history list."""
-        self._commands.append(command)
+        spec = self._registry.get(command.id, command.version)
+        self._commands.append(deepcopy(command))
+        self._archive_version = max(self._archive_version, spec.min_archive_version)
         self._dirty = True
 
     def _pop_commands(self, n: int) -> list[ExecutedCommand]:
@@ -273,5 +400,5 @@ class Document:
 
     def _restore_commands(self, snapshot: list[ExecutedCommand]) -> None:
         """Bus-side restore: replace the whole history (T6c batch rollback)."""
-        self._commands = list(snapshot)
+        self._commands = deepcopy(snapshot)
         self._dirty = True

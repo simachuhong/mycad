@@ -1,0 +1,144 @@
+.FFFF..................................................                  [100%]
+=================================== FAILURES ===================================
+____ test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7fa2ab285e80>, mode = 'auto'
+start = 0, end = 40
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+        assert not editor.dimensions.inline_box.isVisible()
+>       assert editor.canvas.hasFocus()
+E       assert False
+E        +  where False = <built-in method hasFocus of SketchCanvas object at 0x7fa2ab480e40>()
+E        +    where <built-in method hasFocus of SketchCanvas object at 0x7fa2ab480e40> = <mycad.ui.sketch_editor.SketchCanvas(0x18f70ba0) at 0x7fa2ab480e40>.hasFocus
+E        +      where <mycad.ui.sketch_editor.SketchCanvas(0x18f70ba0) at 0x7fa2ab480e40> = <mycad.ui.sketch_editor.SketchEditorDialog(0x18e1f0e0) at 0x7fa2ab470100>.canvas
+
+tests/ui/test_driving_dimensions.py:79: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7fa2ab2875c0>, mode = 'start'
+start = 0, end = 40
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+        assert not editor.dimensions.inline_box.isVisible()
+>       assert editor.canvas.hasFocus()
+E       assert False
+E        +  where False = <built-in method hasFocus of SketchCanvas object at 0x7fa2ab2a8380>()
+E        +    where <built-in method hasFocus of SketchCanvas object at 0x7fa2ab2a8380> = <mycad.ui.sketch_editor.SketchCanvas(0x192e0710) at 0x7fa2ab2a8380>.hasFocus
+E        +      where <mycad.ui.sketch_editor.SketchCanvas(0x192e0710) at 0x7fa2ab2a8380> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1916c4b0) at 0x7fa2e4666680>.canvas
+
+tests/ui/test_driving_dimensions.py:79: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7fa2ab2882f0>, mode = 'end'
+start = -10, end = 30
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+        assert not editor.dimensions.inline_box.isVisible()
+>       assert editor.canvas.hasFocus()
+E       assert False
+E        +  where False = <built-in method hasFocus of SketchCanvas object at 0x7fa2ab2506c0>()
+E        +    where <built-in method hasFocus of SketchCanvas object at 0x7fa2ab2506c0> = <mycad.ui.sketch_editor.SketchCanvas(0x195b9f40) at 0x7fa2ab2506c0>.hasFocus
+E        +      where <mycad.ui.sketch_editor.SketchCanvas(0x195b9f40) at 0x7fa2ab2506c0> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1947a7c0) at 0x7fa2ab55b940>.canvas
+
+tests/ui/test_driving_dimensions.py:79: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+_ test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7fa2ab289940>, mode = 'symmetric'
+start = -5, end = 35
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+        assert not editor.dimensions.inline_box.isVisible()
+>       assert editor.canvas.hasFocus()
+E       assert False
+E        +  where False = <built-in method hasFocus of SketchCanvas object at 0x7fa2ab21fb40>()
+E        +    where <built-in method hasFocus of SketchCanvas object at 0x7fa2ab21fb40> = <mycad.ui.sketch_editor.SketchCanvas(0x19898aa0) at 0x7fa2ab21fb40>.hasFocus
+E        +      where <mycad.ui.sketch_editor.SketchCanvas(0x19898aa0) at 0x7fa2ab21fb40> = <mycad.ui.sketch_editor.SketchEditorDialog(0x19753460) at 0x7fa2ab21c500>.canvas
+
+tests/ui/test_driving_dimensions.py:79: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35]
+4 failed, 51 passed in 25.48s

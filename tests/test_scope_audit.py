@@ -87,10 +87,9 @@ UI_ALLOWED_PREFIX = "src/mycad/ui/"
 #: both are transitive dependencies of the pinned build123d backend, so
 #: banning them would mean dropping the backend. The enforceable rule is
 #: that no MyCAD module imports them, which ``FORBIDDEN_IMPORT_ROOTS``
-#: covers. ``pyside6``/``shiboken6`` are deliberately absent for the
-#: same class of reason: phase 1 requires them in the closure, a
-#: path-qualified allowance is impossible in a set of plain names, and
-#: their imports stay confined to ``src/mycad/ui/`` via ``UI_ROOTS``.
+#: covers. The desktop stack is forbidden in the base runtime closure and
+#: must be present only through the explicit `desktop` extra. Its imports
+#: remain confined to src/mycad/ui/ via UI_ROOTS and the import audit.
 FORBIDDEN_DISTRIBUTIONS: frozenset[str] = frozenset(
     {
         "pyside2",
@@ -107,9 +106,18 @@ FORBIDDEN_DISTRIBUTIONS: frozenset[str] = frozenset(
         "pythonocc-core",
         "packaging",
         "restrictedpython",
+        "pyside6",
+        "pyside6-addons",
+        "pyside6-essentials",
+        "pyside6-pdf",
+        "pyside6-webengine",
+        "shiboken6",
+        "pyqtgraph",
+        "pyopengl",
     }
 )
 REQUIRED_DISTRIBUTIONS: frozenset[str] = frozenset({"build123d", "cadquery-ocp-novtk"})
+DESKTOP_DISTRIBUTIONS: frozenset[str] = frozenset({"pyside6", "pyqtgraph", "pyopengl", "shiboken6"})
 
 #: Commercial formats walled off by ADR-005, plus DWG. Matched as whole
 #: words (case-insensitively) rather than as bare substrings: "sat"
@@ -137,11 +145,10 @@ COMMERCIAL_FORMATS: frozenset[str] = frozenset(
     }
 )
 
-#: Stage-1+ concepts the plan forbids implementing in phase 0. Only
-#: distinctive identifiers are listed: a negative "do not build X" rule
-#: cannot be checked exhaustively, but a tripwire on the names such code
-#: would inevitably use is far better than no assertion at all. Matched
-#: case-insensitively as whole words. Each entry cites its Must-NOT item.
+#: Concepts still outside the currently released task scope. Update this
+#: list when a later phase explicitly authorizes one of these capabilities.
+#: Only distinctive identifiers are listed: a negative "do not build X" rule
+#: cannot be checked exhaustively. Matched case-insensitively as whole words.
 OUT_OF_SCOPE_CONCEPTS: tuple[tuple[str, str], ...] = (
     ("inverse_undo", "per-command inverse undo"),
     ("undo_inverse", "per-command inverse undo"),
@@ -149,9 +156,6 @@ OUT_OF_SCOPE_CONCEPTS: tuple[tuple[str, str], ...] = (
     ("snapshot_cache", "BREP snapshot cache"),
     ("elementmap", "ElementMap / topological naming"),
     ("element_map", "ElementMap / topological naming"),
-    ("constraintsolver", "sketch constraint solver"),
-    ("constraint_solver", "sketch constraint solver"),
-    ("solve_constraints", "sketch constraint solver"),
     ("igesprovider", "out-of-scope format provider"),
     ("gltfprovider", "out-of-scope format provider"),
     ("dxfprovider", "out-of-scope format provider"),
@@ -186,7 +190,31 @@ OUT_OF_SCOPE_IDENTIFIERS: tuple[str, ...] = (
 STEP_READ_WHITELIST = "tests/helpers/step_roundtrip.py"
 STEP_READ_APIS: tuple[str, ...] = ("import" + "_step",)
 
-UV_TREE_COMMAND: tuple[str, ...] = ("uv", "tree", "--package", "mycad", "--no-dev")
+# These command IDs are explicitly released under ADR-003 §9. Other sketch,
+# view, and datum namespaces remain reserved until their task releases them.
+RELEASED_COMMAND_IDS: frozenset[str] = frozenset(
+    {
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+        "modify.chamfer",
+        "modify.boolean_intersect",
+        "modify.boolean_bodies",
+        "modify.body_transform",
+        "modify.body_pattern",
+    }
+)
+
+UV_EXPORT_COMMAND: tuple[str, ...] = (
+    "uv",
+    "export",
+    "--locked",
+    "--no-dev",
+    "--format",
+    "requirements.txt",
+)
+UV_EXPORT_DESKTOP_COMMAND: tuple[str, ...] = (*UV_EXPORT_COMMAND, "--extra", "desktop")
+UV_EXPORT_ALL_COMMAND: tuple[str, ...] = (*UV_EXPORT_COMMAND, "--all-extras")
 
 
 def _python_files(root: Path) -> list[Path]:
@@ -281,9 +309,26 @@ def scan_out_of_scope(root: Path, repo: Path) -> list[str]:
         rel = path.relative_to(repo).as_posix()
         text = path.read_text(encoding="utf-8")
         lowered = text.lower()
+        tree = ast.parse(text, filename=str(path))
         for namespace in ("view.", "sketch.", "datum."):
-            # Either quote style: 'view.orbit' hid from a '"view.' needle.
-            if f'"{namespace}' in text or f"'{namespace}" in text:
+            released_prefixes = tuple(
+                f"{command_id}:"
+                for command_id in RELEASED_COMMAND_IDS
+                if command_id.startswith(namespace)
+            )
+            released_ids = tuple(
+                command_id
+                for command_id in RELEASED_COMMAND_IDS
+                if command_id.startswith(namespace)
+            )
+            if any(
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.startswith(namespace)
+                and node.value not in released_ids
+                and not node.value.startswith(released_prefixes)
+                for node in ast.walk(tree)
+            ):
                 violations.append(f"{rel}: reserved command namespace {namespace}")
         for identifier in OUT_OF_SCOPE_IDENTIFIERS:
             if identifier in text:
@@ -307,13 +352,18 @@ def test_no_out_of_scope_code() -> None:
 
 def test_no_out_of_scope_code_reverse_self_proof(tmp_path: Path) -> None:
     (tmp_path / "leak.py").write_text(
-        "ID = 'view.orbit'\nPATH = \"part.sldprt\"\nERR = ImportSourceMissingError\n",
+        "ID = 'view.orbit'\n"
+        'NEXT = "sketch.solve"\n'
+        "RELEASED = 'sketch.create'\n"
+        'PATH = "part.sldprt"\n'
+        "ERR = ImportSourceMissingError\n",
         encoding="utf-8",
     )
     found = scan_out_of_scope(tmp_path, tmp_path)
     assert any("reserved command namespace" in v for v in found)
     assert any("commercial format sldprt" in v for v in found)
     assert any("stage-1 identifier" in v for v in found)
+    assert sum("reserved command namespace sketch." in v for v in found) == 1
 
 
 def _format_mentioned(fmt: str, text: str, lowered: str, stem: str) -> bool:
@@ -359,11 +409,12 @@ def test_surface_normal_components_are_not_the_nx_format(tmp_path: Path) -> None
 
 def test_out_of_scope_concept_detector_reverse_self_proof(tmp_path: Path) -> None:
     (tmp_path / "leak.py").write_text(
-        "class ElementMap:\n    pass\n\n\ndef solve_constraints():\n    pass\n", encoding="utf-8"
+        "class ElementMap:\n    pass\n\n\ndef snapshot_cache():\n    pass\n",
+        encoding="utf-8",
     )
     found = scan_out_of_scope(tmp_path, tmp_path)
     assert any("ElementMap / topological naming" in v for v in found)
-    assert any("sketch constraint solver" in v for v in found)
+    assert any("BREP snapshot cache" in v for v in found)
 
 
 def test_step_read_whitelist_branch_is_live(tmp_path: Path) -> None:
@@ -461,11 +512,21 @@ def parse_closure(text: str) -> set[str]:
     return names
 
 
+def parse_exported_requirements(text: str) -> set[str]:
+    """Distribution names from uv's flattened requirements export."""
+    names: set[str] = set()
+    for line in text.splitlines():
+        if not line or line[0].isspace() or line.startswith(("#", "-")):
+            continue
+        name = line.split("==", 1)[0].split("[", 1)[0]
+        names.add(name.lower().replace("_", "-").replace(".", "-"))
+    return names
+
+
 def test_runtime_closure_clean() -> None:
-    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
-    # cp1252 and mojibakes the tree glyphs into the parsed closure.
+    # Decode uv's flattened export as UTF-8 consistently across platforms.
     result = subprocess.run(
-        UV_TREE_COMMAND,
+        UV_EXPORT_COMMAND,
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -475,7 +536,7 @@ def test_runtime_closure_clean() -> None:
     # Not a skip: a skip here would retire the whole closure assertion the
     # moment uv went missing from a runner, and nothing would say so.
     assert result.returncode == 0, f"uv tree failed: {result.stderr.strip()[:200]}"
-    closure = parse_closure(result.stdout)
+    closure = parse_exported_requirements(result.stdout)
     assert FORBIDDEN_DISTRIBUTIONS & closure == set()
     assert closure >= REQUIRED_DISTRIBUTIONS
 
@@ -485,6 +546,35 @@ def test_runtime_closure_reverse_self_proof() -> None:
     closure = parse_closure(tampered)
     assert "vtk" in closure
     assert FORBIDDEN_DISTRIBUTIONS & closure != set()
+
+
+def test_desktop_extra_contains_the_optional_ui_stack() -> None:
+    result = subprocess.run(
+        UV_EXPORT_DESKTOP_COMMAND,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 0, f"uv desktop tree failed: {result.stderr.strip()[:200]}"
+    closure = parse_exported_requirements(result.stdout)
+    assert closure >= REQUIRED_DISTRIBUTIONS | DESKTOP_DISTRIBUTIONS
+
+
+def test_default_export_excludes_the_desktop_stack() -> None:
+    result = subprocess.run(
+        UV_EXPORT_COMMAND,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 0, f"uv base export failed: {result.stderr.strip()[:200]}"
+    closure = parse_exported_requirements(result.stdout)
+    assert closure >= REQUIRED_DISTRIBUTIONS
+    assert DESKTOP_DISTRIBUTIONS.isdisjoint(closure)
 
 
 # -- group 4: tree boundaries ------------------------------------------------

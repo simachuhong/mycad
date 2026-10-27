@@ -1,0 +1,193 @@
+FFFFFFF..                                                                [100%]
+=================================== FAILURES ===================================
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u76f4\u7ebf] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368e8c5eb0>, tool = '直线'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u591a\u6bb5\u7ebf] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368d060470>, tool = '多段线'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u5706] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368d063380>, tool = '圆'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u5706\u5f27] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368ceb9790>, tool = '圆弧'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u77e9\u5f62] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368cebb950>, tool = '矩形'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u591a\u8fb9\u5f62] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368cf0c6e0>, tool = '多边形'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u6837\u6761\u66f2\u7ebf] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e368ceb8110>, tool = '样条曲线'
+
+    @pytest.mark.parametrize("tool", ["直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"])
+    def test_drawing_after_dimension_returns_current_dim_layer_to_zero(qtbot: QtBot, tool: str) -> None:
+        editor = drawing(qtbot)
+        editor.layer_combo.setCurrentText("DIM")
+        place(editor)
+        dimensions = tuple(editor.canvas.constraints)
+        editor.layer_manager_button.click()
+        manager = editor.active_layer_manager
+        assert manager is not None
+        editor.tool_buttons[tool].click()
+        assert editor.canvas.tool == tool
+>       assert editor.layer_combo.currentText() == "0"
+E       AssertionError: assert 'DIM' == '0'
+E         
+E         - 0
+E         + DIM
+
+tests/ui/test_dim_layers.py:276: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u76f4\u7ebf]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u591a\u6bb5\u7ebf]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u5706]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u5706\u5f27]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u77e9\u5f62]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u591a\u8fb9\u5f62]
+FAILED tests/ui/test_dim_layers.py::test_drawing_after_dimension_returns_current_dim_layer_to_zero[\u6837\u6761\u66f2\u7ebf]
+7 failed, 2 passed, 11 deselected in 13.24s

@@ -14,8 +14,9 @@ has no category field (``feature.extrude`` -> ``"feature"``,
 ``modify.fillet`` -> ``"modify"``, plugin ``demo.ping`` -> ``"demo"``).
 
 Version policy: registering the same (id, version) twice raises
-``CommandConflictError``; different versions coexist with the latest as the
-default (API-level only — Phase 0 registers exactly version 1).
+``CommandConflictError``; different versions coexist. New execution and
+interactive lookup default to the latest version, while history and plans
+pass their stored version for exact schema and handler resolution.
 """
 
 from __future__ import annotations
@@ -68,21 +69,26 @@ class CommandRegistry:
             )
         return spec
 
+    def versions(self, command_id: str) -> tuple[int, ...]:
+        """Return every registered version of ``command_id`` in ascending order."""
+        versions = tuple(sorted(v for cid, v in self._specs if cid == command_id))
+        if not versions:
+            raise UnknownCommandError(f"unknown command id {command_id!r}", identifier=command_id)
+        return versions
+
+    def all_specs(self) -> tuple[CommandSpec, ...]:
+        """Return every registered spec ordered by id and then version."""
+        return tuple(self._specs[key] for key in sorted(self._specs))
+
     def resolve_verb(self, verb: str) -> CommandSpec | None:
         """Resolve a CLI verb to a spec via each spec's ``cli.verb_aliases``.
 
-        Returns ``None`` when no registered command claims ``verb``. When the
-        latest versions of several distinct command ids claim the same verb
-        the ambiguity is a registration conflict and raises
-        ``CommandConflictError``.
+        Only each command id's latest spec contributes aliases. Returns
+        ``None`` when none claims ``verb``. When latest versions of several
+        distinct command ids claim the same verb the ambiguity is a
+        registration conflict and raises ``CommandConflictError``.
         """
-        by_id: dict[str, CommandSpec] = {}
-        for spec in self._specs.values():
-            if verb not in spec.cli.verb_aliases:
-                continue
-            current = by_id.get(spec.id)
-            if current is None or spec.version > current.version:
-                by_id[spec.id] = spec
+        by_id = {spec.id: spec for spec in self._latest_specs() if verb in spec.cli.verb_aliases}
         if not by_id:
             return None
         if len(by_id) > 1:

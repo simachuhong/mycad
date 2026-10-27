@@ -1,0 +1,294 @@
+{
+  "date_utc": "2026-10-22T15:00:12.201200+00:00",
+  "scope": "UI design prototype only; not product or actual GPU acceptance",
+  "interactive": {
+    "errors": [],
+    "warnings": [],
+    "actionsVisible": true,
+    "applyBox": {
+      "x": 1321.5,
+      "y": 777,
+      "width": 119.5,
+      "height": 33.5
+    },
+    "rightBox": {
+      "x": 1178,
+      "y": 170.5,
+      "width": 278,
+      "height": 650
+    },
+    "responsive": [
+      {
+        "width": 1920,
+        "view": "model",
+        "scrollWidth": 1920
+      },
+      {
+        "width": 1920,
+        "view": "drawing",
+        "scrollWidth": 1920
+      },
+      {
+        "width": 1920,
+        "view": "sketch",
+        "scrollWidth": 1920
+      },
+      {
+        "width": 1920,
+        "view": "settings",
+        "scrollWidth": 1920
+      },
+      {
+        "width": 1366,
+        "view": "model",
+        "scrollWidth": 1366
+      },
+      {
+        "width": 1366,
+        "view": "drawing",
+        "scrollWidth": 1366
+      },
+      {
+        "width": 1366,
+        "view": "sketch",
+        "scrollWidth": 1366
+      },
+      {
+        "width": 1366,
+        "view": "settings",
+        "scrollWidth": 1366
+      },
+      {
+        "width": 1024,
+        "view": "model",
+        "scrollWidth": 1024
+      },
+      {
+        "width": 1024,
+        "view": "drawing",
+        "scrollWidth": 1024
+      },
+      {
+        "width": 1024,
+        "view": "sketch",
+        "scrollWidth": 1024
+      },
+      {
+        "width": 1024,
+        "view": "settings",
+        "scrollWidth": 1024
+      },
+      {
+        "width": 736,
+        "view": "model",
+        "scrollWidth": 736
+      },
+      {
+        "width": 736,
+        "view": "drawing",
+        "scrollWidth": 736
+      },
+      {
+        "width": 736,
+        "view": "sketch",
+        "scrollWidth": 736
+      },
+      {
+        "width": 736,
+        "view": "settings",
+        "scrollWidth": 736
+      },
+      {
+        "width": 375,
+        "view": "model",
+        "scrollWidth": 375
+      },
+      {
+        "width": 375,
+        "view": "drawing",
+        "scrollWidth": 375
+      },
+      {
+        "width": 375,
+        "view": "sketch",
+        "scrollWidth": 375
+      },
+      {
+        "width": 375,
+        "view": "settings",
+        "scrollWidth": 375
+      },
+      {
+        "width": 320,
+        "view": "model",
+        "scrollWidth": 320
+      },
+      {
+        "width": 320,
+        "view": "drawing",
+        "scrollWidth": 320
+      },
+      {
+        "width": 320,
+        "view": "sketch",
+        "scrollWidth": 320
+      },
+      {
+        "width": 320,
+        "view": "settings",
+        "scrollWidth": 320
+      }
+    ]
+  },
+  "offline": {
+    "errors": [],
+    "network": [],
+    "checks": [
+      {
+        "width": 1920,
+        "height": 1080,
+        "state": "model",
+        "appHeight": 1043,
+        "applyVisible": true,
+        "overflow": false
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "state": "ai",
+        "appHeight": 1043.796875,
+        "applyVisible": true
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "state": "model",
+        "appHeight": 893,
+        "applyVisible": true,
+        "overflow": false
+      },
+      {
+        "width": 1440,
+        "height": 900,
+        "state": "ai",
+        "appHeight": 893.796875,
+        "applyVisible": true
+      },
+      {
+        "width": 1366,
+        "height": 768,
+        "state": "model",
+        "appHeight": 743,
+        "applyVisible": true,
+        "overflow": false
+      },
+      {
+        "width": 1366,
+        "height": 768,
+        "state": "ai",
+        "appHeight": 763.796875,
+        "applyVisible": true
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "state": "model",
+        "appHeight": 743,
+        "applyVisible": true,
+        "overflow": false
+      },
+      {
+        "width": 1024,
+        "height": 900,
+        "state": "ai",
+        "appHeight": 763.796875,
+        "applyVisible": true
+      }
+    ],
+    "contrast": [
+      {
+        "name": "primary",
+        "fg": "#243247",
+        "bg": "#FFFFFF",
+        "ratio": 12.95
+      },
+      {
+        "name": "secondary",
+        "fg": "#586B80",
+        "bg": "#F7F9FB",
+        "ratio": 5.2
+      },
+      {
+        "name": "action",
+        "fg": "#255BCE",
+        "bg": "#EAF1FF",
+        "ratio": 5.34
+      },
+      {
+        "name": "success",
+        "fg": "#17735A",
+        "bg": "#EAF6F0",
+        "ratio": 5.21
+      },
+      {
+        "name": "warning",
+        "fg": "#9D5A06",
+        "bg": "#FFF4DD",
+        "ratio": 4.93
+      },
+      {
+        "name": "error",
+        "fg": "#B13C42",
+        "bg": "#FFF0EF",
+        "ratio": 5.28
+      }
+    ],
+    "browser": "154.0.8037.57"
+  },
+  "artifacts": {
+    "01-drawing.png": {
+      "bytes": 130645,
+      "sha256": "26b3d55e1eb21920bb9a2ddcbfd4ae7955655cfa3645a2ea89d0e0b56214b32f"
+    },
+    "02-sketch.png": {
+      "bytes": 123680,
+      "sha256": "44fc06eec424a1e5f0286bf2fb47af9c7e64cec81986dacf3878d34eabc22d5c"
+    },
+    "03-model.png": {
+      "bytes": 304915,
+      "sha256": "e755fcb42150d94bff7c444ad7e3723e166934d8968b1194e08e7157bccc76a2"
+    },
+    "04-providers.png": {
+      "bytes": 107961,
+      "sha256": "48b627ed8809d22ce77e4589b70082a63b0f6b3c89b756f8c262884ba758ceae"
+    },
+    "05-models.png": {
+      "bytes": 108268,
+      "sha256": "faf26282bde4f2af957686cba354efe4dcba178526cd2cd602ef5cde42eedcf0"
+    },
+    "06-task-defaults.png": {
+      "bytes": 103339,
+      "sha256": "d76352b9e92ae9eec8e394add353521edfd5042aa5262c632169c4e71883ea7e"
+    },
+    "07-ai-plan.png": {
+      "bytes": 251377,
+      "sha256": "a2377c303d09c698b8e99a8b8ee418f91119dcefc512a732fe970b6ebb2c7e7e"
+    },
+    "08-sketch-conflict.png": {
+      "bytes": 125006,
+      "sha256": "341167d05ccdf94a72782b8b8b46bb2450955869190957c5bd4680fa49b41e14"
+    },
+    "09-provider-error.png": {
+      "bytes": 116190,
+      "sha256": "9db226ab487bee3e74b74e8740eac45e77c782c789a98c81f3d8f00a35b002af"
+    },
+    "preview.html": {
+      "bytes": 457748,
+      "sha256": "baef3b2fb0d104e07d35d51105852b512efc6e398f3f3ed0bf70f18576f71c82"
+    },
+    "workbench.html": {
+      "bytes": 59962,
+      "sha256": "6533d533531e25999f3ba812c5fa173a562f78622365e04bdba982ae1d3174e8"
+    }
+  }
+}

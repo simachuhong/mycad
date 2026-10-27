@@ -75,6 +75,8 @@ def test_different_versions_coexist_latest_is_default() -> None:
     assert registry.get("feature.cylinder") is v2
     assert registry.get("feature.cylinder", version=1) is v1
     assert registry.get("feature.cylinder", version=2) is v2
+    assert registry.versions("feature.cylinder") == (1, 2)
+    assert registry.all_specs() == (v1, v2)
 
 
 def test_get_missing_version_raises() -> None:
@@ -120,6 +122,24 @@ def test_resolve_verb_conflict_between_commands() -> None:
     registry.register(_bare_spec("modify.b", verb="shared"))
     with pytest.raises(CommandConflictError, match="shared"):
         registry.resolve_verb("shared")
+
+
+def test_resolve_verb_only_uses_latest_spec_aliases() -> None:
+    registry = CommandRegistry()
+    v1 = _bare_spec("feature.cylinder", verb="old-cylinder")
+    v2 = CommandSpec(
+        id=v1.id,
+        version=2,
+        summary_en="cylinder v2",
+        label_zh="圆柱 v2",
+        params_schema=v1.params_schema,
+        cli=CliSyntax(("cylinder",)),
+    )
+    registry.register(v1)
+    registry.register(v2)
+
+    assert registry.resolve_verb("old-cylinder") is None
+    assert registry.resolve_verb("cylinder") is v2
 
 
 # ---------------------------------------------------------------------------

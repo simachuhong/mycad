@@ -17,6 +17,7 @@ from mycad.core.handlers import (
     CommandHandler,
     HandlerContext,
 )
+from mycad.core.measurements import MeasurementRequest, MeasurementResult
 
 
 class FakeKernel:
@@ -29,6 +30,9 @@ class FakeKernel:
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
         self.calls.append((command_id, dict(params)))
+
+    def measure(self, request: MeasurementRequest) -> MeasurementResult:
+        raise NotImplementedError(request)
 
 
 def test_builtin_handler_satisfies_command_handler_protocol() -> None:

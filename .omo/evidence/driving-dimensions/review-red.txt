@@ -1,0 +1,185 @@
+FFFFFF                                                                   [100%]
+=================================== FAILURES ===================================
+___ test_new_dimension_drives_inline_by_default_and_cancels_without_history ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75474147bc50>
+
+    def test_new_dimension_drives_inline_by_default_and_cancels_without_history(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        assert editor.dimensions.driving_check.isChecked()
+        place(editor)
+        assert not editor.canvas.constraints
+        assert editor.dimensions.inline_box.isVisible()
+>       assert editor.dimensions.anchor_combo.isVisible()
+E       assert False
+E        +  where False = <built-in method isVisible of PySide6.QtWidgets.QComboBox object at 0x7547414b3a80>()
+E        +    where <built-in method isVisible of PySide6.QtWidgets.QComboBox object at 0x7547414b3a80> = <PySide6.QtWidgets.QComboBox(0x1da5f650, name="dimensionAnchorMode") at 0x7547414b3a80>.isVisible
+E        +      where <PySide6.QtWidgets.QComboBox(0x1da5f650, name="dimensionAnchorMode") at 0x7547414b3a80> = <mycad.ui.dimension_tools.DimensionTools(0x1d9fb540) at 0x7547414abf00>.anchor_combo
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x1d9fb540) at 0x7547414abf00> = <mycad.ui.sketch_editor.SketchEditorDialog(0x19413f20) at 0x75474148a480>.dimensions
+
+tests/ui/test_driving_dimensions.py:50: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____ test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75473fce4140>, mode = 'auto'
+start = 0, end = 40
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+>       assert not editor.dimensions.inline_box.isVisible()
+E       assert not True
+E        +  where True = <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fb4f800>()
+E        +    where <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fb4f800> = <PySide6.QtWidgets.QWidget(0x1df2dc10, name="dimensionInlineEditor") at 0x75473fb4f800>.isVisible
+E        +      where <PySide6.QtWidgets.QWidget(0x1df2dc10, name="dimensionInlineEditor") at 0x75473fb4f800> = <mycad.ui.dimension_tools.DimensionTools(0x1dec3cc0) at 0x75473fce3280>.inline_box
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x1dec3cc0) at 0x75473fce3280> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1dcbd600) at 0x75474149ee80>.dimensions
+
+tests/ui/test_driving_dimensions.py:78: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75473fce48c0>, mode = 'start'
+start = 0, end = 40
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+>       assert not editor.dimensions.inline_box.isVisible()
+E       assert not True
+E        +  where True = <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fb03e40>()
+E        +    where <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fb03e40> = <PySide6.QtWidgets.QWidget(0x1e21b7f0, name="dimensionInlineEditor") at 0x75473fb03e40>.isVisible
+E        +      where <PySide6.QtWidgets.QWidget(0x1e21b7f0, name="dimensionInlineEditor") at 0x75473fb03e40> = <mycad.ui.dimension_tools.DimensionTools(0x1e1b1ca0) at 0x7547414b1440>.inline_box
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x1e1b1ca0) at 0x7547414b1440> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1dfb4c70) at 0x75473fb55a80>.dimensions
+
+tests/ui/test_driving_dimensions.py:78: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75473fce7bc0>, mode = 'end'
+start = -10, end = 30
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+>       assert not editor.dimensions.inline_box.isVisible()
+E       assert not True
+E        +  where True = <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fba6140>()
+E        +    where <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fba6140> = <PySide6.QtWidgets.QWidget(0x1e4fd630, name="dimensionInlineEditor") at 0x75473fba6140>.isVisible
+E        +      where <PySide6.QtWidgets.QWidget(0x1e4fd630, name="dimensionInlineEditor") at 0x75473fba6140> = <mycad.ui.dimension_tools.DimensionTools(0x1e079920) at 0x754741524c80>.inline_box
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x1e079920) at 0x754741524c80> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1e297bd0) at 0x75473fb93c00>.dimensions
+
+tests/ui/test_driving_dimensions.py:78: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75473fb2cf50>, mode = 'symmetric'
+start = -5, end = 35
+
+    @pytest.mark.parametrize(
+        "mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)]
+    )
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(
+        qtbot: QtBot, mode: str, start: int, end: int
+    ) -> None:
+        editor = drawing(qtbot)
+        editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        QTest.keyClick(editor.dimensions.value_editor, Qt.Key.Key_Return)
+        assert len(editor.canvas.constraints) == 1
+        dimension = editor.canvas.constraints[0]
+        assert dimension.driving
+        assert dimension.anchor_mode == mode
+        assert dimension.layer_name == "DIM"
+>       assert not editor.dimensions.inline_box.isVisible()
+E       assert not True
+E        +  where True = <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fbd5580>()
+E        +    where <built-in method isVisible of PySide6.QtWidgets.QWidget object at 0x75473fbd5580> = <PySide6.QtWidgets.QWidget(0x1e7e5aa0, name="dimensionInlineEditor") at 0x75473fbd5580>.isVisible
+E        +      where <PySide6.QtWidgets.QWidget(0x1e7e5aa0, name="dimensionInlineEditor") at 0x75473fbd5580> = <mycad.ui.dimension_tools.DimensionTools(0x1e778150) at 0x754741506640>.inline_box
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x1e778150) at 0x754741506640> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1e572280) at 0x75473fbb8fc0>.dimensions
+
+tests/ui/test_driving_dimensions.py:78: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_preview_dimensions_follow_solved_geometry_and_cancel_restores_measurements _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75473fb79a30>
+
+    def test_preview_dimensions_follow_solved_geometry_and_cancel_restores_measurements(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        line = editor.canvas.entities[0]
+        reference = SketchConstraint(uuid4().hex, "length", (SketchGeometryReference(line.entity_id, "geometry"),), 30, "mm", driving=False, layer_name="DIM", position_mm=(15, 10))
+        editor.canvas.constraints = [reference]
+        place(editor)
+        editor.dimensions.value_editor.setValue(40)
+        preview_line = editor.canvas.dimension_entities()[line.entity_id]
+        assert isinstance(preview_line, LineEntity)
+>       assert preview_line.end_mm == pytest.approx((40, 0))
+E       assert (30.0, 0.0) == approx((40 ± ... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 10.0
+E         Max relative difference: 0.3333333333333333
+E         Index | Obtained | Expected    
+E         0     | 30.0     | 40 ± 4.0e-05
+
+tests/ui/test_driving_dimensions.py:225: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_driving_dimensions.py::test_new_dimension_drives_inline_by_default_and_cancels_without_history
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35]
+FAILED tests/ui/test_driving_dimensions.py::test_preview_dimensions_follow_solved_geometry_and_cancel_restores_measurements
+6 failed, 4 deselected in 10.09s

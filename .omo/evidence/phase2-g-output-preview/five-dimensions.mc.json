@@ -1,0 +1,242 @@
+{
+  "format": "mycad.document",
+  "version": 3,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "00000000-0000-0000-0000-000000000064",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000001",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              0.0
+            ],
+            "end_mm": [
+              60.0,
+              0.0
+            ]
+          },
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000002",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              0.0
+            ],
+            "end_mm": [
+              0.0,
+              40.0
+            ]
+          },
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000003",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              40.0
+            ],
+            "end_mm": [
+              60.0,
+              40.0
+            ]
+          },
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000004",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              60.0,
+              40.0
+            ],
+            "end_mm": [
+              60.0,
+              0.0
+            ]
+          },
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000005",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              95.0,
+              20.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "00000000-0000-0000-0000-000000000006",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              140.0,
+              20.0
+            ],
+            "radius_mm": 8.0
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "00000000-0000-0000-0000-00000000000b",
+            "kind": "length",
+            "references": [
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000003",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 60
+          },
+          {
+            "constraint_id": "00000000-0000-0000-0000-00000000000c",
+            "kind": "distance",
+            "references": [
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000002",
+                "kind": "start"
+              },
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000002",
+                "kind": "end"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 40
+          },
+          {
+            "constraint_id": "00000000-0000-0000-0000-00000000000d",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000001",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000002",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "deg",
+            "value": 90
+          },
+          {
+            "constraint_id": "00000000-0000-0000-0000-00000000000e",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000005",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 10
+          },
+          {
+            "constraint_id": "00000000-0000-0000-0000-00000000000f",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "00000000-0000-0000-0000-000000000006",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 16
+          }
+        ]
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-10-25T07:29:00.386483+00:00",
+      "confirmed_by": "self-check"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "document_type": "drawing2d"
+}

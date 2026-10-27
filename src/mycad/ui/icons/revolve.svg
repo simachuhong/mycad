@@ -1,0 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 MyCAD contributors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+<g fill="none" stroke="#33465B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<path d="M9 2v20" stroke-dasharray="2 2"/><path d="M10 5h5v4h3v8h-8z" fill="#CCE1F5" stroke="#2563A6"/><path d="M15 19c-5 3-12 0-12-5 0-3 2-5 4-6M3 8h4v4" stroke="#2563A6"/><path d="M10 5c-4 0-5 2-5 4m13 0c3 1 4 3 3 6"/>
+</g></svg>

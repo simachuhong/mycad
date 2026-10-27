@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from mycad.core.kernel_protocol import Kernel
+from mycad.core.measurements import MeasurementRequest, MeasurementResult
 
 
 class FakeKernel:
@@ -26,6 +27,15 @@ class FakeKernel:
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
         self.calls.append((command_id, dict(params)))
+
+    def measure(self, request: MeasurementRequest) -> MeasurementResult:
+        return MeasurementResult(
+            value=None,
+            unit="mm³",
+            revision=request.revision,
+            description="fake measurement",
+            error="geometry is unavailable in FakeKernel",
+        )
 
 
 def test_fake_kernel_satisfies_kernel_protocol() -> None:

@@ -9,9 +9,10 @@ instead of at todo 9 (plan text, acceptance criteria).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtGui import QOffscreenSurface, QOpenGLContext
 from PySide6.QtWidgets import QApplication, QDockWidget, QStatusBar
+from pytestqt.qtbot import QtBot
 
 from mycad.ui.main_window import MainWindow
 
@@ -28,8 +29,9 @@ def _zone_object_names(window: MainWindow) -> set[str]:
     }
 
 
-def test_shell_builds_the_five_zones(qapp: QApplication) -> None:  # noqa: ARG001
+def test_shell_builds_the_five_zones(qapp: QApplication, qtbot: QtBot) -> None:  # noqa: ARG001
     window = MainWindow()
+    qtbot.addWidget(window)
     window.show()
     # Object names are the identity contract the rest of phase-1 binds to;
     # locked as literals (not module constants) so a rename inside
@@ -63,8 +65,10 @@ def test_offscreen_gl_context_creation(qapp: QApplication) -> None:  # noqa: ARG
     assert context.makeCurrent(surface), "context could not bind the offscreen surface"
 
 
-def test_qtimer_single_shot_exits_the_loop_cleanly(qapp: QApplication) -> None:  # noqa: ARG001
+def test_qtimer_single_shot_exits_the_loop_cleanly(qapp: QApplication, qtbot: QtBot) -> None:  # noqa: ARG001
     window = MainWindow()
+    qtbot.addWidget(window)
     window.show()
-    QTimer.singleShot(50, qapp.quit)
-    assert qapp.exec() == 0
+    event_loop = QEventLoop(qapp)
+    QTimer.singleShot(50, event_loop.quit)
+    assert event_loop.exec() == 0

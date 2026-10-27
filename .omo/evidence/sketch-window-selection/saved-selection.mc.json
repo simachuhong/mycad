@@ -1,0 +1,124 @@
+{
+  "format": "mycad.document",
+  "version": 3,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "63f925282ad244e88a1f175019fd4360",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "d30aca9da5d6449b8421509b84cfe74c",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -12.0,
+              -5.0
+            ],
+            "radius_mm": 8.0
+          },
+          {
+            "entity_id": "2de73cc32bad4504b268b027cd1dd59b",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "rectangle",
+            "first_corner_mm": [
+              10.0,
+              -14.0
+            ],
+            "opposite_corner_mm": [
+              25.0,
+              3.0
+            ]
+          },
+          {
+            "entity_id": "1e15aef308664031ad817f912684f3b2",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -38.0,
+              12.0
+            ],
+            "end_mm": [
+              38.0,
+              12.0
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-10-25T15:09:56.440171+00:00",
+      "confirmed_by": "local"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "document_type": "drawing2d"
+}

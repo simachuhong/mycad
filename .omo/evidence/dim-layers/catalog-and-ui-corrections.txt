@@ -1,0 +1,21 @@
+.......F....................                                             [100%]
+=================================== FAILURES ===================================
+__________________ test_plugin_command_appears_via_discovery ___________________
+
+qapp = <PySide6.QtWidgets.QApplication(0xd7930e0) at 0x7ed57a57a5c0>
+
+    def test_plugin_command_appears_via_discovery(qapp: object) -> None:
+        services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
+        palette = CommandPalette(services.registry)
+        assert "demo.widget" in _all_leaf_ids(palette)
+>       assert _group_titles(palette) == {"demo", "创建特征", "修改", "草图"}
+E       AssertionError: assert {'demo', '修改'...', '图纸', '草图'} == {'demo', '修改', '创建特征', '草图'}
+E         
+E         Extra items in the left set:
+E         '图纸'
+E         Use -v to get more diff
+
+tests/ui/test_command_palette.py:236: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_command_palette.py::test_plugin_command_appears_via_discovery
+1 failed, 27 passed in 36.35s

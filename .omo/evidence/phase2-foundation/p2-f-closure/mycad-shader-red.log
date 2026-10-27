@@ -1,0 +1,14 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_workbench_shader_does_not_share_compiled_state_between_contexts _____
+
+    def test_workbench_shader_does_not_share_compiled_state_between_contexts() -> None:
+        first = build_workbench_shader()
+        second = build_workbench_shader()
+>       assert first is not second
+E       assert <pyqtgraph.opengl.shaders.ShaderProgram object at 0x7d992ec4e930> is not <pyqtgraph.opengl.shaders.ShaderProgram object at 0x7d992ec4e930>
+
+tests/ui/test_viewport.py:47: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_viewport.py::test_workbench_shader_does_not_share_compiled_state_between_contexts
+1 failed, 36 deselected in 24.88s

@@ -1,0 +1,80 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_two_dimensional_console_is_a_collapsed_tab_strip _____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x72830a210d40>
+
+    def test_two_dimensional_console_is_a_collapsed_tab_strip(qtbot: QtBot) -> None:
+        window = drawing_window(qtbot)
+        tabs = window.bottom_tabs
+        assert tabs is not None
+>       assert [tabs.tabText(i) for i in range(tabs.count())] == ["信息", "CLI", "AI 对话", "计划"]
+E       AssertionError: assert ['CLI', '计划'] == ['信息', 'CLI', 'AI 对话', '计划']
+E         
+E         At index 0 diff: 'CLI' != '信息'
+E         Right contains 2 more items, first extra item: 'AI 对话'
+E         Use -v to get more diff
+
+tests/ui/test_workspace_console.py:25: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+_____________ test_drawing_messages_are_logged_without_cursor_spam _____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7282f4db8c50>
+
+    def test_drawing_messages_are_logged_without_cursor_spam(qtbot: QtBot) -> None:
+        window = drawing_window(qtbot)
+        draft = window.active_sketch_dialog()
+        assert draft is not None
+        draft.status_label.setText("请选择尺寸固定端")
+>       assert window.status_command.text() == "请选择尺寸固定端"
+E       AssertionError: assert '二维绘图：主工作区内编辑；完成草图提交，取消草稿不写入。' == '请选择尺寸固定端'
+E         
+E         - 请选择尺寸固定端
+E         + 二维绘图：主工作区内编辑；完成草图提交，取消草稿不写入。
+
+tests/ui/test_workspace_console.py:48: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+______________ test_cli_and_ai_drafts_survive_workspace_switches _______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x72830a26fc80>
+
+    def test_cli_and_ai_drafts_survive_workspace_switches(qtbot: QtBot) -> None:
+        window = drawing_window(qtbot)
+        cli, tabs = window.cli_tab, window.bottom_tabs
+        assert cli is not None and tabs is not None
+        cli.input.setText("history")
+>       window.ai_chat.input.setPlainText("把这条边设为 40 mm")
+        ^^^^^^^^^^^^^^
+E       AttributeError: 'MainWindow' object has no attribute 'ai_chat'
+
+tests/ui/test_workspace_console.py:63: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+___________ test_cli_cannot_replace_document_with_unsubmitted_sketch ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7282f0079070>
+
+    def test_cli_cannot_replace_document_with_unsubmitted_sketch(qtbot: QtBot) -> None:
+        window = drawing_window(qtbot)
+        draft, cli = window.active_sketch_dialog(), window.cli_tab
+        assert draft is not None and cli is not None
+        draft.canvas.add_coordinate_point((0, 0))
+        draft.canvas.add_coordinate_point((20, 0))
+        draft.canvas.end_line_chain()
+        original = cli.current
+>       assert not cli.submit_line("new")
+E       AssertionError: assert not True
+E        +  where True = submit_line('new')
+E        +    where submit_line = <mycad.ui.cli_tab.CliTab(0x3533b000) at 0x7282f00b6800>.submit_line
+
+tests/ui/test_workspace_console.py:87: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_workspace_console.py::test_two_dimensional_console_is_a_collapsed_tab_strip
+FAILED tests/ui/test_workspace_console.py::test_drawing_messages_are_logged_without_cursor_spam
+FAILED tests/ui/test_workspace_console.py::test_cli_and_ai_drafts_survive_workspace_switches
+FAILED tests/ui/test_workspace_console.py::test_cli_cannot_replace_document_with_unsubmitted_sketch
+4 failed in 13.00s

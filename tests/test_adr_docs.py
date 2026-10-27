@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Scripted acceptance for the six phase-0 ADRs (T4).
+"""Scripted acceptance for the numbered architecture decision records.
 
 Pathlib + regex only, no third-party deps. Asserts:
-- docs/adr/ holds exactly six files named ADR-001..006 with an ASCII slug.
+    - docs/adr/ holds exactly eleven files named ADR-001..011 with an ASCII slug.
 - Every ADR carries the five MADR-lite section headers
   (Status / Context / Decision / Consequences / References).
 - Per-ADR mandated keyword hits, located by filename prefix.
-- The literal deviation heading appears exactly twice across all six files,
+- The literal deviation heading appears exactly twice across all ADR files,
   once in ADR-001 and once in ADR-006 (located by filename, not content).
 - No blocklisted premature-implementation phrase appears anywhere under
   docs/adr/ (exact phrases, so legitimate "not implemented in phase 0"
@@ -24,12 +24,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ADR_DIR = REPO_ROOT / "docs" / "adr"
 
-# File name contract: ADR-00N-<slug>.md, N in 1..6, lowercase ASCII slug.
-FILENAME_RE = re.compile(r"^ADR-(?P<number>00[1-6])-[a-z][a-z0-9-]*\.md$")
+# File name contract: ADR-00N-<slug>.md, N in 1..11, lowercase ASCII slug.
+FILENAME_RE = re.compile(r"^ADR-(?P<number>0(?:0[1-9]|1[01]))-[a-z][a-z0-9-]*\.md$")
 
 # MADR-lite section headers. Status is a fixed field line; the rest are
 # level-2 headings that must each appear verbatim.
-STATUS_RE = re.compile(r"^Status: Accepted 2026-09-17$", re.MULTILINE)
+STATUS_RE = re.compile(r"^Status: Accepted \d{4}-\d{2}-\d{2}$", re.MULTILINE)
 SECTION_HEADING_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Context", re.compile(r"^## Context$", re.MULTILINE)),
     ("Decision", re.compile(r"^## Decision$", re.MULTILINE)),
@@ -51,6 +51,7 @@ REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
         "EntryPoint.module",
         "missing-manifest",
         "incompatible-api",
+        "sketch.create@1",
     ),
     "ADR-004": ("confirm_execute", "plan_id", "A19"),
     "ADR-005": (
@@ -63,6 +64,23 @@ REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
         "ProviderConflictError",
     ),
     "ADR-006": ("glibc", "2.31", "LoongArch", "manylinux_2_31"),
+    "ADR-007": ("SerializedExecutionUnit", "ExecutionResult", "200 ms"),
+    "ADR-008": ("timestamp_utc", "confirmed_by", "os.replace", "power-loss durability"),
+    "ADR-009": ("schema version", "sketch_id", "entity_id", "provenance", "pure"),
+    "ADR-010": (
+        "planegcs==0.9.6",
+        "sketch.constraint.add@1",
+        "degrees of freedom",
+        "LGPL-2.1-or-later",
+        "aarch64",
+    ),
+    "ADR-011": (
+        "document_type",
+        "drawing2d",
+        "sketch.create@1",
+        "sketch.constraint.add@1",
+        "v1 and v2",
+    ),
 }
 
 # Tokens that must NOT appear in the ADR located by filename prefix.
@@ -101,7 +119,7 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_adr_dir_holds_exactly_six_numbered_files() -> None:
+def test_adr_dir_holds_exactly_eleven_numbered_files() -> None:
     files = _adr_files()
     assert files, "docs/adr/ does not exist or holds no files"
     numbers: list[str] = []
@@ -109,8 +127,20 @@ def test_adr_dir_holds_exactly_six_numbered_files() -> None:
         match = FILENAME_RE.match(path.name)
         assert match is not None, f"unexpected file name in docs/adr/: {path.name}"
         numbers.append(match.group("number"))
-    assert len(files) == 6, f"expected exactly 6 ADR files, found {len(files)}"
-    assert sorted(numbers) == ["001", "002", "003", "004", "005", "006"]
+    assert len(files) == 11, f"expected exactly 11 ADR files, found {len(files)}"
+    assert sorted(numbers) == [
+        "001",
+        "002",
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008",
+        "009",
+        "010",
+        "011",
+    ]
 
 
 @pytest.mark.parametrize("prefix", sorted(REQUIRED_TOKENS))

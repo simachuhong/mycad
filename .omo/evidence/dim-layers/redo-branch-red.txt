@@ -1,0 +1,35 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_new_global_layer_edit_discards_abandoned_draft_redo ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x771dd9432d20>
+
+    def test_new_global_layer_edit_discards_abandoned_draft_redo(qtbot: QtBot) -> None:
+        services = build_app(discoverers=())
+        loaded = new_document(services, document_type="drawing2d")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        window.act_view_2d.trigger()
+        editor = window.active_sketch_dialog()
+        assert editor is not None
+        unit = window.execution_unit
+        assert unit is not None
+        editor.request_layer_update(editor.layer_table.add(SketchLayer("X")), "DIM")
+        qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+        editor.canvas.replace_draft_entities((LineEntity(uuid4().hex, (0, 0), (30, 0), layer_name="X"),))
+        window.request_undo()
+        assert editor.canvas.can_redo
+        editor.request_layer_update(editor.layer_table.remove("X"), "DIM")
+        qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+>       assert not editor.canvas.can_redo
+E       assert not True
+E        +  where True = <mycad.ui.sketch_editor.SketchCanvas(0x29fb9fc0) at 0x771dd7508380>.can_redo
+E        +    where <mycad.ui.sketch_editor.SketchCanvas(0x29fb9fc0) at 0x771dd7508380> = <mycad.ui.sketch_editor.SketchEditorDialog(0x2958ef30) at 0x771dd755a580>.canvas
+
+tests/ui/test_dim_layers.py:255: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_dim_layers.py::test_new_global_layer_edit_discards_abandoned_draft_redo
+1 failed in 23.81s

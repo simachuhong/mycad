@@ -43,18 +43,18 @@ PROVIDER_CONFLICT: str = REASONS[4]
 #: getattr bridge (repo pattern, cf. bus.py): direct import of the private
 #: assembler trips reportPrivateUsage; pyright-ignore comments are banned.
 _handler_map = cast(
-    "Callable[[CommandRegistry, PluginManager], dict[str, CommandHandler]]",
+    "Callable[[CommandRegistry, PluginManager], dict[tuple[str, int], CommandHandler]]",
     getattr(app_module, "_handler_map"),  # noqa: B009
 )
 build_app = app_module.build_app
 new_document = app_module.new_document
 
 
-def _spec(command_id: str) -> CommandSpec:
+def _spec(command_id: str, version: int = 1) -> CommandSpec:
     """Self-made spec: unique id, zero-parameter schema, last-segment verb."""
     return CommandSpec(
         id=command_id,
-        version=1,
+        version=version,
         summary_en=f"Fake command {command_id}",
         label_zh="伪命令",
         params_schema={
@@ -225,8 +225,8 @@ def test_handler_map_falls_back_to_builtin_for_none_factory() -> None:
     registry.register(spec)
     manager = PluginManager((_plugin("fb", commands=(_contribution("demo.fallback"),)),))
     handlers = _handler_map(registry, manager)
-    assert isinstance(handlers["demo.fallback"], BuiltinModelingHandler)
-    assert handlers["demo.fallback"].command_id == "demo.fallback"
+    assert isinstance(handlers[("demo.fallback", 1)], BuiltinModelingHandler)
+    assert handlers[("demo.fallback", 1)].command_id == "demo.fallback"
 
 
 def test_handler_map_prefers_plugin_factory() -> None:
@@ -241,18 +241,45 @@ def test_handler_map_prefers_plugin_factory() -> None:
     contribution = CommandContribution(spec=_spec("demo.factory"), handler_factory=factory)
     manager = PluginManager((_plugin("fac", commands=(contribution,)),))
     handlers = _handler_map(registry, manager)
-    assert handlers["demo.factory"] is handler
+    assert handlers[("demo.factory", 1)] is handler
 
 
 def test_handler_map_covers_all_builtin_commands() -> None:
-    """With no plugins the map holds exactly one builtin handler per command."""
+    """With no plugins the map holds every registered builtin command version."""
     registry = CommandRegistry()
     for spec in BUILTIN_COMMAND_SPECS:
         registry.register(spec)
     handlers = _handler_map(registry, PluginManager())
-    assert set(handlers) == {spec.id for spec in BUILTIN_COMMAND_SPECS}
-    assert len(handlers) == 8
+    assert set(handlers) == {(spec.id, spec.version) for spec in BUILTIN_COMMAND_SPECS}
+    assert len(handlers) == len(BUILTIN_COMMAND_SPECS)
     assert all(isinstance(h, BuiltinModelingHandler) for h in handlers.values())
+
+
+def test_handler_map_keeps_plugin_handlers_separate_by_version() -> None:
+    v1 = _spec("demo.versioned", 1)
+    v2 = _spec("demo.versioned", 2)
+    registry = CommandRegistry()
+    registry.register(v1)
+    registry.register(v2)
+    handlers_created: list[_FakeHandler] = []
+
+    def factory() -> _FakeHandler:
+        handler = _FakeHandler("demo.versioned")
+        handlers_created.append(handler)
+        return handler
+
+    plugin = _plugin(
+        "versions",
+        commands=(
+            CommandContribution(v1, factory),
+            CommandContribution(v2, factory),
+        ),
+    )
+    handlers = _handler_map(registry, PluginManager((plugin,)))
+
+    assert handlers[("demo.versioned", 1)] is handlers_created[0]
+    assert handlers[("demo.versioned", 2)] is handlers_created[1]
+    assert handlers_created[0] is not handlers_created[1]
 
 
 def test_build_app_none_uses_default_discoverer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +293,9 @@ def test_build_app_none_uses_default_discoverer(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _fake_discover)
     services = build_app(None)
     assert calls == ["discover"]
-    assert sum(len(group) for group in services.registry.list_by_category().values()) == 8
+    assert sum(len(group) for group in services.registry.list_by_category().values()) == len(
+        {spec.id for spec in BUILTIN_COMMAND_SPECS}
+    )
 
 
 def test_build_app_empty_list_runs_no_discoverer(monkeypatch: pytest.MonkeyPatch) -> None:

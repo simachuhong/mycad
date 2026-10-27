@@ -70,6 +70,24 @@ def test_extrude_negative_distance_extrudes_along_minus_z() -> None:
     assert props.bbox.zmax == pytest.approx(0.0, abs=1e-9)
 
 
+def test_symmetric_extrude_uses_total_depth_and_centers_primitive_profile() -> None:
+    kernel = BuildKernel()
+    kernel.apply(
+        "feature.extrude",
+        {
+            "profile": {"type": "circle", "radius": 10.0},
+            "distance": 6.0,
+            "extent_mode": "symmetric",
+        },
+    )
+
+    props = kernel.mass_properties()
+    assert props.volume == pytest.approx(math.pi * 10**2 * 6, abs=VOLUME_TOLERANCE_MM3)
+    assert props.bbox is not None
+    assert props.bbox.zmin == pytest.approx(-3.0, abs=1e-9)
+    assert props.bbox.zmax == pytest.approx(3.0, abs=1e-9)
+
+
 # --- feature.revolve ---------------------------------------------------------
 
 
@@ -237,6 +255,45 @@ def test_fillet_rejects_unknown_parameter_key() -> None:
         kernel.apply("modify.fillet", params)
 
 
+# --- modify.chamfer ----------------------------------------------------------
+
+
+_CHAMFER_TOP_EDGES = {
+    "edges": [{"parent_faces": [{"surface": "plane", "axis": "+Z"}]}],
+    "distance": 1.0,
+}
+
+
+def test_chamfer_top_edges_has_analytic_equal_setback_volume() -> None:
+    kernel = BuildKernel()
+    _box10(kernel)
+
+    kernel.apply("modify.chamfer", dict(_CHAMFER_TOP_EDGES))
+
+    removed_corner_prisms = (
+        4.0 / 3.0 * 1.0**3 + 2.0 * (10.0 - 2.0) * 1.0**2 + (10.0 - 2.0) ** 2 * 1.0
+    )
+    assert _volume(kernel) == pytest.approx(1000.0 - (100.0 - removed_corner_prisms), abs=1e-6)
+    assert kernel.mass_properties().solid_count == 1
+
+
+def test_chamfer_rejects_distance_beyond_adjacent_faces() -> None:
+    kernel = BuildKernel()
+    _box10(kernel)
+    with pytest.raises(GeometryBuildError, match="chamfer"):
+        kernel.apply(
+            "modify.chamfer",
+            {"edges": _CHAMFER_TOP_EDGES["edges"], "distance": 999.0},
+        )
+
+
+def test_chamfer_rejects_empty_edge_selectors() -> None:
+    kernel = BuildKernel()
+    _box10(kernel)
+    with pytest.raises(ValidationError, match="edges"):
+        kernel.apply("modify.chamfer", {"edges": [], "distance": 1.0})
+
+
 # --- modify.boolean_cut -------------------------------------------------------
 
 
@@ -298,6 +355,67 @@ def test_boolean_cut_rejects_missing_tool() -> None:
     kernel = BuildKernel()
     with pytest.raises(ValidationError, match="tool"):
         kernel.apply("modify.boolean_cut", {})
+
+
+# --- modify.boolean_intersect -----------------------------------------------
+
+
+def test_boolean_intersect_box_tool_from_box_is_analytic() -> None:
+    kernel = BuildKernel()
+    kernel.apply("feature.box", {"size_x": 20.0, "size_y": 20.0, "size_z": 10.0})
+    kernel.apply(
+        "modify.boolean_intersect",
+        {
+            "tool": {
+                "type": "box",
+                "size_x": 10.0,
+                "size_y": 10.0,
+                "size_z": 20.0,
+                "center": [5.0, 0.0, 0.0],
+            }
+        },
+    )
+    assert _volume(kernel) == pytest.approx(1000.0, abs=VOLUME_TOLERANCE_MM3)
+
+
+def test_boolean_intersect_cylinder_tool_from_box_is_analytic() -> None:
+    kernel = BuildKernel()
+    kernel.apply("feature.box", {"size_x": 20.0, "size_y": 20.0, "size_z": 10.0})
+    kernel.apply(
+        "modify.boolean_intersect",
+        {"tool": {"type": "cylinder", "radius": 5.0, "height": 30.0}},
+    )
+    assert _volume(kernel) == pytest.approx(math.pi * 5.0**2 * 10.0, abs=VOLUME_TOLERANCE_MM3)
+
+
+def test_boolean_intersect_rejects_empty_result_without_changing_kernel() -> None:
+    kernel = BuildKernel()
+    kernel.apply("feature.box", {"size_x": 10.0, "size_y": 10.0, "size_z": 10.0})
+    with pytest.raises(GeometryBuildError):
+        kernel.apply(
+            "modify.boolean_intersect",
+            {
+                "tool": {
+                    "type": "box",
+                    "size_x": 5.0,
+                    "size_y": 5.0,
+                    "size_z": 5.0,
+                    "center": [20.0, 0.0, 0.0],
+                }
+            },
+        )
+    assert _volume(kernel) == pytest.approx(1000.0, abs=VOLUME_TOLERANCE_MM3)
+
+
+def test_boolean_intersect_rejects_empty_kernel_and_missing_tool() -> None:
+    kernel = BuildKernel()
+    with pytest.raises(GeometryBuildError):
+        kernel.apply(
+            "modify.boolean_intersect",
+            {"tool": {"type": "box", "size_x": 2.0, "size_y": 2.0, "size_z": 2.0}},
+        )
+    with pytest.raises(ValidationError, match="tool"):
+        kernel.apply("modify.boolean_intersect", {})
 
 
 # --- feature.hole -------------------------------------------------------------
@@ -368,7 +486,7 @@ def test_hole_unsupported_position_kind_is_rejected() -> None:
     _box20(kernel)
     params = _hole_params("+Z", 4.0, {"kind": "through_all"})
     params["position"] = {"kind": "corner"}
-    with pytest.raises(ValidationError, match="center"):
+    with pytest.raises(ValidationError, match="面心"):
         kernel.apply("feature.hole", params)
 
 

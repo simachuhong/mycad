@@ -1,0 +1,693 @@
+<style>
+#mycad-workbench {
+  --mc-bg:#f2f5f8; --mc-panel:#ffffff; --mc-quiet:#f7f9fb; --mc-line:#dce3eb;
+  --mc-ink:#243247; --mc-sub:#586b80; --mc-blue:#255bce; --mc-blue-soft:#eaf1ff;
+  --mc-green:#17735a; --mc-green-soft:#eaf6f0; --mc-amber:#9d5a06; --mc-amber-soft:#fff4dd;
+  --mc-red:#b13c42; --mc-red-soft:#fff0ef; --mc-canvas:#eff3f7; --mc-row:34px;
+  font-family:"Noto Sans CJK SC","Microsoft YaHei","Segoe UI",sans-serif;
+  font-size:13px; line-height:1.5; color:var(--mc-ink); background:var(--mc-panel);
+  width:100%; color-scheme:light; text-align:left; position:relative; isolation:isolate;
+}
+#mycad-workbench * { box-sizing:border-box; }
+#mycad-workbench [hidden] { display:none !important; }
+#mycad-workbench button, #mycad-workbench input, #mycad-workbench select {
+  font:inherit; color:inherit;
+}
+#mycad-workbench button { display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  border:1px solid transparent; background:transparent; border-radius:5px; padding:6px 10px;
+  min-height:32px; white-space:nowrap; }
+#mycad-workbench button:hover { background:var(--mc-blue-soft); color:var(--mc-blue); }
+#mycad-workbench button:disabled { color:#8b96a5; background:#f3f5f7; }
+#mycad-workbench button:focus-visible, #mycad-workbench input:focus-visible,
+#mycad-workbench select:focus-visible { outline:2px solid var(--mc-blue); outline-offset:2px; }
+#mycad-workbench button.mc-primary { background:var(--mc-blue); color:white; border-color:var(--mc-blue); }
+#mycad-workbench button.mc-outline { background:white; border-color:#c7d2df; }
+#mycad-workbench button.mc-active { background:var(--mc-blue-soft); color:var(--mc-blue); }
+#mycad-workbench .mc-icon { width:17px; height:17px; stroke-width:1.65; flex-shrink:0; }
+#mycad-workbench .mc-muted { color:var(--mc-sub); }
+#mycad-workbench .mc-small { font-size:11px; }
+#mycad-workbench .mc-spacer { flex:1; }
+#mycad-workbench .mc-sep { width:1px; height:23px; background:var(--mc-line); margin:0 7px; }
+#mycad-workbench .mc-top { min-height:46px; display:flex; align-items:center; gap:18px;
+  padding:0 18px; border-bottom:1px solid var(--mc-line); }
+#mycad-workbench .mc-brand { font-size:17px; font-weight:700; letter-spacing:-.6px; display:flex; align-items:center; gap:8px; }
+#mycad-workbench .mc-brandmark { width:26px; height:26px; background:var(--mc-blue); color:white; display:grid;
+  place-items:center; border-radius:6px; font-size:16px; font-weight:600; }
+#mycad-workbench .mc-menulist { display:flex; gap:1px; }
+#mycad-workbench .mc-menulist button { font-size:12px; padding:5px 7px; }
+#mycad-workbench .mc-prototype { color:#65758a; font-size:11px; letter-spacing:.4px; margin-right:85px; }
+#mycad-workbench .mc-docbar { display:flex; align-items:center; gap:18px; padding:8px 18px; border-bottom:1px solid var(--mc-line); }
+#mycad-workbench .mc-document { display:flex; align-items:center; gap:7px; min-width:180px; font-weight:500; }
+#mycad-workbench .mc-workspaces { display:flex; gap:4px; align-items:center; }
+#mycad-workbench .mc-workspaces button { padding:6px 14px; }
+#mycad-workbench .mc-workspaces button[aria-pressed="true"] { color:var(--mc-blue); background:var(--mc-blue-soft); }
+#mycad-workbench .mc-toolbar { min-height:58px; padding:7px 14px; display:flex; align-items:center; gap:3px; border-bottom:1px solid var(--mc-line); }
+#mycad-workbench .mc-toolbar .mc-tool { flex-direction:column; font-size:11px; gap:3px; min-width:50px; padding:2px 7px; }
+#mycad-workbench .mc-toolbar .mc-tool .mc-icon { width:19px; height:19px; }
+#mycad-workbench .mc-toolbar .mc-sep { height:32px; }
+#mycad-workbench .mc-body { display:grid; grid-template-columns:194px minmax(0,1fr) 278px; grid-template-rows:minmax(0,1fr); min-height:500px; height:650px; }
+#mycad-workbench .mc-body > * { min-height:0; }
+#mycad-workbench .mc-left { border-right:1px solid var(--mc-line); padding:13px 10px; background:var(--mc-quiet); overflow-y:auto; }
+#mycad-workbench .mc-panel-title { display:flex; align-items:center; justify-content:space-between; font-weight:600; padding:0 5px 10px; }
+#mycad-workbench .mc-search { display:flex; align-items:center; gap:6px; border:1px solid var(--mc-line); padding:6px 8px; background:white; border-radius:5px; margin-bottom:17px; }
+#mycad-workbench .mc-search input { background:none; border:0; padding:0; width:100%; min-width:0; font-size:12px; }
+#mycad-workbench .mc-group-label { display:flex; align-items:center; gap:6px; color:var(--mc-sub); font-size:11px; font-weight:500; margin:18px 7px 6px; }
+#mycad-workbench .mc-command { display:flex; width:100%; justify-content:flex-start; min-height:var(--mc-row); padding:6px 9px; font-size:12px; }
+#mycad-workbench .mc-key { margin-left:auto; color:#718095; font:11px "DejaVu Sans Mono",monospace; }
+#mycad-workbench .mc-left-foot { margin:26px 6px 0; padding-top:12px; border-top:1px solid var(--mc-line); font-size:11px; color:var(--mc-sub); }
+#mycad-workbench .mc-center { background:var(--mc-canvas); min-width:0; position:relative; overflow:hidden; }
+#mycad-workbench .mc-center.mc-drawing, #mycad-workbench .mc-center.mc-sketch { background:#fbfcfe; }
+#mycad-workbench .mc-scene-head { position:absolute; left:20px; top:15px; display:flex; flex-wrap:wrap; align-items:center; gap:9px; z-index:2; }
+#mycad-workbench .mc-scene-head strong { font-size:12px; font-weight:500; }
+#mycad-workbench .mc-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--mc-line);
+  border-radius:4px; padding:3px 7px; font-size:11px; background:white; color:var(--mc-sub); }
+#mycad-workbench .mc-ok { color:var(--mc-green); background:var(--mc-green-soft); border-color:#c8e5d8; }
+#mycad-workbench .mc-warning { color:var(--mc-amber); background:var(--mc-amber-soft); border-color:#efd5a6; }
+#mycad-workbench .mc-error { color:var(--mc-red); background:var(--mc-red-soft); border-color:#edbdbb; }
+#mycad-workbench .mc-scene { width:100%; height:100%; display:block; }
+#mycad-workbench .mc-viewtools { position:absolute; right:15px; top:58px; display:flex; flex-direction:column; gap:5px; }
+#mycad-workbench .mc-viewtools button { background:white; border:1px solid var(--mc-line); padding:7px; min-width:32px; }
+#mycad-workbench .mc-scene-foot { position:absolute; bottom:16px; left:22px; right:18px; display:flex; justify-content:space-between; align-items:flex-end; gap:10px; font-size:11px; color:var(--mc-sub); }
+#mycad-workbench .mc-help { padding:7px 10px; border:1px solid #dce3eb; background:#ffffffef; border-radius:5px; }
+#mycad-workbench .mc-right { border-left:1px solid var(--mc-line); background:white; min-width:0; overflow:hidden; display:flex; flex-direction:column; }
+#mycad-workbench .mc-tabs { display:flex; padding:6px 8px 0; border-bottom:1px solid var(--mc-line); gap:0; flex-shrink:0; }
+#mycad-workbench .mc-tabs button { padding:7px 9px; font-size:12px; border-radius:0; }
+#mycad-workbench .mc-tabs button.mc-active { background:white; border-bottom:2px solid var(--mc-blue); }
+#mycad-workbench .mc-inspector { padding:12px 15px; min-height:0; overflow-y:auto; flex:1; }
+#mycad-workbench .mc-inspector-actions { padding:10px 15px; flex-shrink:0; border-top:1px solid var(--mc-line); }
+#mycad-workbench .mc-inspector-actions:empty { display:none; }
+#mycad-workbench .mc-inspector-actions .mc-actionrow { margin:0; }
+#mycad-workbench[data-ai="true"] .mc-body { height:450px; min-height:320px; }
+#mycad-workbench .mc-sectionhead { font-weight:600; font-size:12px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+#mycad-workbench .mc-rule { height:1px; background:var(--mc-line); border:0; margin:14px 0; }
+#mycad-workbench .mc-tree { display:flex; align-items:center; gap:7px; min-height:28px; font-size:12px; padding:3px 5px; border-radius:4px; }
+#mycad-workbench .mc-tree.mc-selected { color:var(--mc-blue); background:var(--mc-blue-soft); }
+#mycad-workbench .mc-indent { margin-left:20px; }
+#mycad-workbench .mc-field { display:block; margin:10px 0; font-size:12px; }
+#mycad-workbench .mc-field > span { display:block; color:var(--mc-sub); margin-bottom:5px; }
+#mycad-workbench .mc-field input, #mycad-workbench .mc-field select {
+  border:1px solid #c8d3e0; border-radius:4px; min-height:34px; padding:6px 9px; background:white; width:100%;
+}
+#mycad-workbench .mc-input-unit { position:relative; }
+#mycad-workbench .mc-input-unit input { padding-right:36px; font-variant-numeric:tabular-nums; }
+#mycad-workbench .mc-input-unit em { position:absolute; right:9px; top:8px; font-size:11px; font-style:normal; color:var(--mc-sub); }
+#mycad-workbench .mc-two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+#mycad-workbench .mc-note { font-size:11px; color:var(--mc-sub); line-height:1.8; margin:6px 0; }
+#mycad-workbench .mc-feedback { padding:11px; border-radius:5px; font-size:12px; line-height:1.7; margin:15px 0; }
+#mycad-workbench .mc-actionrow { display:flex; gap:8px; margin-top:12px; }
+#mycad-workbench .mc-actionrow button { flex:1; }
+#mycad-workbench .mc-check { display:flex; align-items:center; gap:7px; margin:10px 0; font-size:12px; }
+#mycad-workbench input[type=checkbox] { accent-color:var(--mc-blue); }
+#mycad-workbench .mc-layer { display:flex; align-items:center; gap:8px; min-height:36px; border-bottom:1px solid #eef1f5; font-size:12px; }
+#mycad-workbench .mc-swatch { display:inline-block; width:10px; height:10px; border-radius:2px; }
+#mycad-workbench .mc-footer { min-height:53px; border-top:1px solid var(--mc-line); padding:9px 16px; display:flex; align-items:center; gap:10px; }
+#mycad-workbench .mc-ai-entry { display:flex; align-items:center; flex:1; gap:8px; }
+#mycad-workbench .mc-ai-entry button { justify-content:flex-start; color:var(--mc-sub); background:var(--mc-quiet); border:1px solid var(--mc-line); flex:1; padding:7px 12px; }
+#mycad-workbench .mc-status { min-height:29px; display:flex; align-items:center; gap:15px; border-top:1px solid var(--mc-line);
+  font-size:11px; padding:4px 16px; color:var(--mc-sub); background:var(--mc-quiet); }
+#mycad-workbench .mc-status button { font-size:11px; padding:1px 5px; min-height:20px; }
+#mycad-workbench .mc-ai-panel { border-top:1px solid var(--mc-line); padding:14px 20px; background:white; display:grid; grid-template-columns:minmax(220px,1fr) minmax(360px,1.5fr); gap:24px; }
+#mycad-workbench .mc-ai-message { font-size:12px; color:var(--mc-sub); margin:9px 0; }
+#mycad-workbench .mc-plan { background:#f6f9ff; border:1px solid #d3e0fa; border-radius:6px; padding:13px 16px; }
+#mycad-workbench .mc-planline { display:flex; justify-content:space-between; gap:12px; font-size:12px; padding:9px 0; }
+#mycad-workbench .mc-planline strong { color:var(--mc-blue); font-weight:500; }
+#mycad-workbench .mc-toast { position:absolute; bottom:96px; left:50%; transform:translateX(-50%);
+  border:1px solid #c4d0df; padding:9px 14px; background:white; border-radius:6px; z-index:10;
+  box-shadow:0 4px 14px #283c4d15; max-width:85%; font-size:12px; }
+#mycad-workbench .mc-settings { min-height:650px; display:grid; grid-template-columns:210px minmax(0,1fr); background:#f7f9fc; }
+#mycad-workbench .mc-settings-nav { border-right:1px solid var(--mc-line); background:white; padding:26px 14px; }
+#mycad-workbench .mc-settings-nav h2 { font-size:17px; margin:0 10px 24px; font-weight:600; }
+#mycad-workbench .mc-settings-nav button { width:100%; justify-content:flex-start; padding:9px 12px; margin:2px 0; }
+#mycad-workbench .mc-settings-main { padding:32px 36px; min-width:0; }
+#mycad-workbench .mc-settings-heading { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:25px; gap:12px; }
+#mycad-workbench .mc-settings-heading h2 { font-size:22px; font-weight:600; letter-spacing:-.4px; margin:0 0 6px; }
+#mycad-workbench .mc-settings-heading p { margin:0; font-size:12px; color:var(--mc-sub); }
+#mycad-workbench .mc-provider-layout { display:grid; grid-template-columns:235px minmax(0,1fr); gap:20px; }
+#mycad-workbench .mc-provider { display:block; text-align:left; width:100%; border:1px solid var(--mc-line); padding:15px; background:white; margin:0 0 10px; min-height:84px; }
+#mycad-workbench .mc-provider.mc-active { border-color:#9cb8ee; box-shadow:inset 3px 0 var(--mc-blue); background:white; }
+#mycad-workbench .mc-provider strong { display:block; color:var(--mc-ink); font-size:13px; margin-bottom:6px; font-weight:500; }
+#mycad-workbench .mc-provider span { display:block; font-size:11px; color:var(--mc-sub); }
+#mycad-workbench .mc-box { background:white; border:1px solid var(--mc-line); border-radius:7px; padding:22px; }
+#mycad-workbench .mc-box h3 { font-size:15px; font-weight:600; margin:0; }
+#mycad-workbench .mc-inlinehead { display:flex; align-items:center; gap:10px; margin-bottom:17px; }
+#mycad-workbench .mc-tablewrap { overflow:auto; }
+#mycad-workbench .mc-table { width:100%; border-collapse:collapse; text-align:left; font-size:12px; }
+#mycad-workbench .mc-table th { font-weight:500; color:var(--mc-sub); background:#f8fafc; padding:11px 12px; border-bottom:1px solid var(--mc-line); }
+#mycad-workbench .mc-table td { padding:15px 12px; border-bottom:1px solid #e8edf3; vertical-align:middle; }
+#mycad-workbench .mc-modelname { font-weight:500; display:block; margin-bottom:3px; }
+#mycad-workbench .mc-modelid { font:11px "DejaVu Sans Mono",monospace; color:var(--mc-sub); }
+#mycad-workbench .mc-stepbar { display:flex; gap:22px; margin:20px 0; color:var(--mc-sub); font-size:12px; flex-wrap:wrap; }
+#mycad-workbench .mc-stepbar span { display:flex; gap:7px; align-items:center; }
+#mycad-workbench .mc-stepbar b { width:21px; height:21px; border-radius:50%; display:grid; place-items:center; color:var(--mc-blue); background:var(--mc-blue-soft); font-size:11px; }
+#mycad-workbench .mc-settings-save { display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
+@media (min-width:1600px) { #mycad-workbench .mc-body { height:800px; } #mycad-workbench[data-ai="true"] .mc-body { height:600px; } }
+@media (min-width:901px) and (max-width:1400px) {
+  #mycad-workbench .mc-body { height:500px; min-height:400px; }
+  #mycad-workbench[data-ai="true"] .mc-body { height:320px; min-height:320px; }
+}
+@media (max-width:1150px) {
+  #mycad-workbench .mc-body { grid-template-columns:162px minmax(0,1fr) 248px; }
+  #mycad-workbench .mc-menulist button { padding:4px; }
+  #mycad-workbench .mc-docbar { gap:7px; padding:8px 12px; }
+  #mycad-workbench .mc-workspaces button { padding:6px 9px; }
+  #mycad-workbench .mc-prototype { margin-right:76px; }
+  #mycad-workbench .mc-settings-main { padding:24px; }
+  #mycad-workbench .mc-provider-layout { grid-template-columns:190px minmax(0,1fr); gap:14px; }
+  #mycad-workbench .mc-settings { grid-template-columns:174px minmax(0,1fr); }
+}
+@media (max-width:900px) {
+  #mycad-workbench .mc-menulist { display:none; }
+  #mycad-workbench .mc-document { min-width:0; }
+  #mycad-workbench .mc-docbar { flex-wrap:wrap; }
+  #mycad-workbench .mc-body { grid-template-columns:48px minmax(0,1fr) 224px; }
+  #mycad-workbench .mc-left { padding:12px 4px; }
+  #mycad-workbench .mc-left .mc-command { justify-content:center; }
+  #mycad-workbench .mc-left .mc-command span, #mycad-workbench .mc-left .mc-command .mc-key,
+  #mycad-workbench .mc-left .mc-panel-title, #mycad-workbench .mc-left .mc-search,
+  #mycad-workbench .mc-left .mc-group-label, #mycad-workbench .mc-left .mc-left-foot { display:none; }
+  #mycad-workbench .mc-toolbar { flex-wrap:wrap; }
+  #mycad-workbench .mc-inspector { padding:13px 12px; }
+  #mycad-workbench .mc-settings { grid-template-columns:1fr; }
+  #mycad-workbench .mc-settings-nav { display:flex; align-items:center; gap:5px; padding:10px; border-bottom:1px solid var(--mc-line); }
+  #mycad-workbench .mc-settings-nav h2 { margin:0 12px; font-size:14px; }
+  #mycad-workbench .mc-settings-nav button { width:auto; }
+}
+@media (max-width:620px) {
+  #mycad-workbench .mc-body, #mycad-workbench[data-ai="true"] .mc-body { grid-template-columns:40px minmax(0,1fr); grid-template-rows:430px auto; height:auto; }
+  #mycad-workbench .mc-center { height:430px; }
+  #mycad-workbench .mc-right { grid-column:1 / -1; border-top:1px solid var(--mc-line); border-left:0; }
+  #mycad-workbench .mc-left { grid-row:1; }
+  #mycad-workbench .mc-workspaces { width:100%; }
+  #mycad-workbench .mc-workspaces button { flex:1; font-size:12px; padding:5px; }
+  #mycad-workbench .mc-prototype { margin-right:75px; font-size:11px; }
+  #mycad-workbench .mc-top { padding:0 10px; gap:8px; }
+  #mycad-workbench .mc-brand { font-size:15px; }
+  #mycad-workbench .mc-toolbar .mc-tool { min-width:42px; }
+  #mycad-workbench .mc-toolbar .mc-toolbar-secondary { display:none; }
+  #mycad-workbench .mc-scene-head { left:10px; right:6px; top:12px; }
+  #mycad-workbench .mc-scene-foot { left:9px; right:9px; }
+  #mycad-workbench .mc-scene-foot .mc-help { display:none; }
+  #mycad-workbench .mc-status { flex-wrap:wrap; gap:5px 10px; padding:5px 10px; }
+  #mycad-workbench .mc-status .mc-coordinate { display:none; }
+  #mycad-workbench .mc-footer { flex-wrap:wrap; padding:8px; gap:5px; }
+  #mycad-workbench .mc-ai-entry { flex-basis:100%; }
+  #mycad-workbench .mc-ai-panel { grid-template-columns:1fr; padding:14px; gap:10px; }
+  #mycad-workbench .mc-settings-main { padding:18px 12px; }
+  #mycad-workbench .mc-provider-layout { grid-template-columns:1fr; }
+  #mycad-workbench .mc-settings-nav { flex-wrap:wrap; }
+  #mycad-workbench .mc-settings-nav h2 { width:100%; margin:0 8px 3px; }
+  #mycad-workbench .mc-settings-nav button { font-size:12px; padding:7px; }
+  #mycad-workbench .mc-settings-heading { flex-wrap:wrap; }
+  #mycad-workbench .mc-settings-heading h2 { font-size:20px; }
+  #mycad-workbench .mc-box { padding:16px; }
+  #mycad-workbench .mc-two { grid-template-columns:1fr; gap:0; }
+  #mycad-workbench .mc-stepbar { gap:10px; }
+}
+@media (prefers-reduced-motion:reduce) { #mycad-workbench * { transition:none !important; } }
+</style>
+<div id="mycad-workbench" aria-label="MyCAD 明亮工作台设计稿">
+  <div class="mc-top">
+    <div class="mc-brand"><span class="mc-brandmark">M</span>MyCAD</div>
+    <div class="mc-menulist" aria-label="主菜单">
+      <button type="button" data-hint="文件菜单：新建、打开、保存、导入与导出">文件</button>
+      <button type="button" data-hint="编辑菜单：撤销、重做、删除与选择">编辑</button>
+      <button type="button" data-hint="视图菜单：标准方向、显示样式与布局">视图</button>
+      <button type="button" data-hint="设计菜单：绘图、草图与实体特征">设计</button>
+      <button type="button" data-hint="工具菜单：单位、测量与重建">工具</button>
+      <button type="button" data-action="ai">智能体</button>
+      <button type="button" data-hint="鼠标中键平移 · Shift + 中键旋转 · F 适应窗口">帮助</button>
+    </div>
+    <div class="mc-spacer"></div><span class="mc-prototype">PHASE 2 · 设计稿 · 示例数据</span>
+  </div>
+  <div class="mc-docbar">
+    <div class="mc-document"><i class="mc-icon" data-lucide="file-box" aria-hidden="true"></i><span id="mc-document-name">安装板 / 零件</span></div>
+    <div class="mc-workspaces" aria-label="设计工作区">
+      <button type="button" data-view="drawing" aria-pressed="false"><i class="mc-icon" data-lucide="drafting-compass" aria-hidden="true"></i>二维绘图</button>
+      <button type="button" data-view="sketch" aria-pressed="false"><i class="mc-icon" data-lucide="pencil-ruler" aria-hidden="true"></i>参数化草图</button>
+      <button type="button" data-view="model" aria-pressed="true"><i class="mc-icon" data-lucide="box" aria-hidden="true"></i>三维建模</button>
+    </div>
+    <div class="mc-spacer"></div>
+    <button type="button" data-view="settings"><i class="mc-icon" data-lucide="settings-2" aria-hidden="true"></i>AI 设置</button>
+  </div>
+  <div class="mc-toolbar" id="mc-toolbar" aria-label="上下文工具栏"></div>
+  <div class="mc-body" id="mc-body">
+    <aside class="mc-left" aria-label="命令库">
+      <div class="mc-panel-title">命令库<i class="mc-icon" data-lucide="panel-left-close" aria-hidden="true"></i></div>
+      <label class="mc-search"><i class="mc-icon" data-lucide="search" aria-hidden="true"></i><input id="mc-search" placeholder="搜索工具…" aria-label="搜索命令"></label>
+      <div id="mc-commands"></div>
+      <div class="mc-left-foot">精确输入 · 可撤销操作<br>所有尺寸以 mm 显示</div>
+    </aside>
+    <main class="mc-center" id="mc-center" aria-label="设计视口">
+      <div class="mc-scene-head" id="mc-scene-head"></div>
+      <svg class="mc-scene" id="mc-scene" role="img" aria-label="安装板设计示意"></svg>
+      <div class="mc-viewtools" aria-label="视图操作">
+        <button type="button" data-action="fit" aria-label="适应窗口"><i class="mc-icon" data-lucide="scan" aria-hidden="true"></i></button>
+        <button type="button" data-action="orientation" aria-label="切换俯视和等轴测"><i class="mc-icon" data-lucide="box" aria-hidden="true"></i></button>
+        <button type="button" data-action="grid" aria-label="切换网格"><i class="mc-icon" data-lucide="grid-2x2" aria-hidden="true"></i></button>
+      </div>
+      <div class="mc-scene-foot"><span id="mc-view-caption">等轴测 · 正交</span><span class="mc-help" id="mc-view-help">中键平移 · Shift + 中键旋转 · F 适应</span></div>
+    </main>
+    <aside class="mc-right" aria-label="结构与参数">
+      <div class="mc-tabs" id="mc-right-tabs" aria-label="检查面板"></div>
+      <div class="mc-inspector" id="mc-inspector"></div>
+      <div class="mc-inspector-actions" id="mc-inspector-actions"></div>
+    </aside>
+  </div>
+  <section class="mc-settings" id="mc-settings" aria-label="AI 模型服务设置" hidden></section>
+  <section class="mc-ai-panel" id="mc-ai-panel" aria-label="AI 设计计划" hidden></section>
+  <div class="mc-footer" id="mc-footer">
+    <button type="button" data-action="ai"><i class="mc-icon" data-lucide="sparkles" aria-hidden="true"></i>设计助手</button>
+    <div class="mc-ai-entry"><button type="button" data-action="ai">描述你的设计，或询问当前模型…<span class="mc-spacer"></span><i class="mc-icon" data-lucide="arrow-up" aria-hidden="true"></i></button></div>
+    <button type="button" data-view="settings" class="mc-small"><span class="mc-chip mc-ok">本地</span>本地规划模型</button>
+    <button type="button" data-hint="CLI 可按需展开，与图形操作使用同一命令体系">CLI</button>
+  </div>
+  <div class="mc-status">
+    <span id="mc-operation-status">就绪</span><span class="mc-coordinate">X 0.00　Y 0.00　Z 0.00</span>
+    <span class="mc-spacer"></span><button type="button" data-action="snap" id="mc-snap" class="mc-active">对象捕捉</button>
+    <button type="button" data-action="grid" class="mc-active">网格</button><span>mm</span><span id="mc-zoom">100%</span>
+  </div>
+  <div class="mc-toast" id="mc-toast" role="status" hidden></div>
+</div>
+<script>
+(function () {
+  const root = document.getElementById('mycad-workbench');
+  const byId = function(id) { return root.querySelector('#'+id); };
+  const state = {view:'model', settingsTab:'providers', provider:'local', depth:8, draftDepth:8, width:160, validWidth:160,
+    grid:true, snap:true, dimensions:true, centerlines:true, ai:false, planApplied:false, planDepth:10, planFromDepth:8, planEditing:false, orientation:'iso',
+    selectedTab:'结构', connection:'ready', modelVerified:false, solver:'complete', selectedTool:'选择'};
+  const design = {canvas:'#eff3f7', row:34};
+  const icon = function(name) { return '<i class="mc-icon" data-lucide="'+name+'" aria-hidden="true"></i>'; };
+  const button = function(name, label, action, cls) {
+    return '<button type="button" class="'+(cls||'')+'" data-action="'+action+'">'+icon(name)+'<span>'+label+'</span></button>';
+  };
+  const tool = function(name,label) {
+    return '<button type="button" class="mc-tool" data-tool="'+label+'">'+icon(name)+'<span>'+label+'</span></button>';
+  };
+  function icons() { if (globalThis.lucide) globalThis.lucide.createIcons({attrs:{width:17,height:17,class:'mc-icon','stroke-width':1.65}}); }
+  function saveState() {
+    if (window.openai && window.openai.setWidgetState) {
+      window.openai.setWidgetState({modelContent:{view:state.view,settingsTab:state.settingsTab},
+        privateContent:{view:state.view,settingsTab:state.settingsTab,provider:state.provider,grid:state.grid}}).catch(function(){});
+    }
+  }
+  function restore(saved) {
+    const s = saved && (saved.privateContent || saved.modelContent);
+    if (!s) return;
+    if (['drawing','sketch','model','settings'].includes(s.view)) state.view=s.view;
+    if (['providers','models','defaults'].includes(s.settingsTab)) state.settingsTab=s.settingsTab;
+    if (['local','deepseek','qwen'].includes(s.provider)) state.provider=s.provider;
+    if (typeof s.grid==='boolean') state.grid=s.grid;
+  }
+  restore(window.openai && window.openai.widgetState);
+  let toastTimer;
+  function toast(text) { byId('mc-toast').textContent=text; byId('mc-toast').hidden=false;
+    clearTimeout(toastTimer); toastTimer=setTimeout(function(){byId('mc-toast').hidden=true;},3200); }
+  function field(label,value,id,unit,type) {
+    return '<label class="mc-field"><span>'+label+'</span><div class="mc-input-unit"><input '+(id?'id="'+id+'" ':'readonly ')
+      +'type="'+(type||'text')+'" value="'+value+'">'+(unit?'<em>'+unit+'</em>':'')+'</div></label>';
+  }
+  function select(label, values, id) {
+    return '<label class="mc-field"><span>'+label+'</span><select id="'+id+'">'+values.map(function(v){return '<option>'+v+'</option>';}).join('')+'</select></label>';
+  }
+  function renderChrome() {
+    root.querySelectorAll('[data-view]').forEach(function(b){ b.setAttribute('aria-pressed',String(b.dataset.view===state.view)); });
+    byId('mc-document-name').textContent=state.view==='drawing'?'安装板 / 二维图':state.view==='settings'?'应用设置':'安装板 / 零件';
+    const settings=state.view==='settings';
+    root.dataset.ai=String(state.ai&&!settings);
+    byId('mc-body').hidden=settings; byId('mc-toolbar').hidden=settings; byId('mc-settings').hidden=!settings;
+    byId('mc-footer').hidden=settings; byId('mc-ai-panel').hidden=settings||!state.ai;
+    byId('mc-operation-status').textContent=settings?'设置仅作用于模型服务':state.view==='sketch'?'正在编辑 草图 01':'就绪 · 无待提交操作';
+    byId('mc-snap').classList.toggle('mc-active',state.snap);
+    if(settings) { renderSettings(); return; }
+    const shared=tool('mouse-pointer-2','选择')+'<span class="mc-sep"></span>';
+    const sets={
+      drawing:[['minus','直线'],['rectangle-horizontal','矩形'],['circle','圆'],['spline','圆弧'],['scissors','修剪'],['copy','偏移'],['ruler','标注']],
+      sketch:[['minus','直线'],['rectangle-horizontal','矩形'],['circle','圆'],['spline','圆弧'],['scan-line','构造线'],['ruler','尺寸'],['link-2','约束']],
+      model:[['move-up','拉伸'],['rotate-3d','旋转'],['circle-dot','孔'],['blend','圆角'],['diamond','倒角'],['combine','布尔'],['grid-2x2','阵列']]
+    };
+    byId('mc-toolbar').innerHTML=button('save','保存','save','mc-toolbar-secondary')+button('undo-2','','undo','mc-toolbar-secondary')
+      +'<span class="mc-sep"></span>'+shared+sets[state.view].map(function(t){return tool(t[0],t[1]);}).join('')
+      +'<span class="mc-spacer"></span>'+(state.view==='sketch'?button('check','完成草图','finish-sketch','mc-primary'):
+        state.view==='drawing'?button('download','导出 DXF','export','mc-outline'):button('download','导出','export','mc-outline'));
+    const groups={
+      drawing:[['绘制',[['minus','直线','L'],['waypoints','折线',''],['rectangle-horizontal','矩形','R'],['circle','圆','C'],['spline','圆弧','A']]],
+        ['编辑',[['scissors','修剪','T'],['copy','偏移','O'],['move','移动 / 复制',''],['flip-horizontal-2','镜像','']]],
+        ['标注与图层',[['ruler','尺寸标注','D'],['layers','图层管理','']]]],
+      sketch:[['绘制',[['minus','直线','L'],['rectangle-horizontal','矩形','R'],['circle','圆','C'],['spline','圆弧','A'],['scan-line','构造线','']]],
+        ['约束',[['link-2','重合',''],['equal','相等',''],['tangent','相切',''],['equal-not','平行',''],['lock-keyhole','固定','']]],
+        ['尺寸',[['ruler','驱动尺寸','D'],['ruler-dimension-line','参考尺寸','']]]],
+      model:[['创建特征',[['pencil-ruler','新建草图','S'],['move-up','拉伸','E'],['rotate-3d','旋转',''],['circle-dot','孔','H']]],
+        ['修改',[['blend','圆角',''],['diamond','倒角',''],['combine','布尔运算',''],['grid-2x2','线性 / 环形阵列',''],['flip-horizontal-2','镜像','']]],
+        ['检查',[['ruler','测量','M'],['scan-line','剖切预览','']]]]
+    };
+    byId('mc-commands').innerHTML=groups[state.view].map(function(g){return '<div class="mc-group-label">'+g[0]+'</div>'
+      +g[1].map(function(t){return '<button type="button" class="mc-command" data-tool="'+t[1]+'" aria-label="'+t[1]+'">'+icon(t[0])+'<span>'+t[1]+'</span><kbd class="mc-key">'+t[2]+'</kbd></button>';}).join('');}).join('');
+    byId('mc-search').value='';
+    const names=state.view==='drawing'?['图层','属性','标注']:['结构','属性','选项','显示','测量'];
+    byId('mc-right-tabs').innerHTML=names.map(function(n){return '<button type="button" data-right-tab="'+n+'" class="'+(n===state.selectedTab?'mc-active':'')+'">'+n+'</button>';}).join('');
+    byId('mc-center').className='mc-center mc-'+state.view;
+    byId('mc-scene-head').innerHTML=state.view==='drawing'?'<strong>安装板平面图</strong><span class="mc-chip">模型空间 · 1:1</span>':
+      state.view==='sketch'?'<strong>草图 01</strong><span class="mc-chip">XY 基准面</span><span class="mc-chip '+(state.solver==='complete'?'mc-ok':'mc-error')+'">'+(state.solver==='complete'?'完全约束 · 0 自由度':'尺寸冲突 · 待修复')+'</span>':
+      '<strong>安装板</strong><span class="mc-chip">实体 1</span><span class="mc-chip">着色带边</span>';
+    byId('mc-view-caption').textContent=state.view==='model'&&state.orientation==='iso'?'等轴测 · 正交':'俯视 · 正交';
+    byId('mc-view-help').textContent=state.view==='sketch'?'D 标注尺寸 · Esc 取消当前工具':state.view==='drawing'?'对象捕捉已开启 · 精确输入优先':'中键平移 · Shift + 中键旋转 · F 适应';
+    renderInspector(); renderAI(); icons(); requestAnimationFrame(drawScene);
+  }
+  function renderInspector() {
+    let html='';
+    if(state.selectedTab==='显示') {
+      html='<div class="mc-sectionhead">视口显示</div>'+select('显示样式',['着色带边','着色','工程线框'],'mc-shading')
+        +'<label class="mc-check"><input type="checkbox" data-toggle="grid" '+(state.grid?'checked':'')+'>显示参考网格</label>'
+        +'<label class="mc-check"><input type="checkbox" checked disabled>显示实体边界</label>'
+        +'<div class="mc-note">三角剖分边仅在网格诊断中显示。</div>';
+    } else if(state.selectedTab==='测量') {
+      html='<div class="mc-sectionhead">几何测量</div><div class="mc-feedback mc-ok">已选择：安装板</div>'
+        +field('长度',state.width,null,'mm')+field('宽度',100,null,'mm')+field('厚度',state.depth,null,'mm')
+        +field('安装孔直径',10,null,'mm')+'<div class="mc-note">示例尺寸。测量值只读，不产生建模命令。</div>';
+    } else if(state.view==='drawing') {
+      html='<div class="mc-sectionhead">图层<span class="mc-muted mc-small">4 个</span></div>'
+        +[['轮廓','#34485d','0.35 mm',null],['中心线','#527fa1','0.18 mm','centerlines'],['尺寸','#255bce','0.18 mm','dimensions'],['辅助线','#8798aa','0.13 mm',null]].map(function(a){
+          return '<label class="mc-layer"><input type="checkbox" '+(!a[3]||state[a[3]]?'checked':'')+' '+(a[3]?'data-toggle="'+a[3]+'"':'disabled')+'><span class="mc-swatch" style="background:'+a[1]+'"></span>'+a[0]+'<span class="mc-spacer"></span><span class="mc-muted mc-small">'+a[2]+'</span></label>';
+        }).join('')+'<hr class="mc-rule"><div class="mc-sectionhead">当前标注</div>'
+        +'<span class="mc-chip">线性 · 测量标注</span>'+field('显示值','160.00',null,'mm')
+        +select('精度',['0.00','0.0','0.000'],'mc-precision')+select('样式',['ISO / 毫米','自定义'],'mc-dimstyle')
+        +'<div class="mc-note">标注跟随图形更新。修改显示文字不会改变轮廓尺寸。</div>'
+        +'<hr class="mc-rule"><div class="mc-sectionhead">图形信息</div><div class="mc-note">外轮廓 + 4 个圆孔 + 1 个长圆孔<br>闭合轮廓 6 个 · 单位 mm</div>'
+        +'<div class="mc-actionrow">'+button('pencil-ruler','用作参数化草图','use-sketch','mc-outline')+'</div>';
+    } else if(state.view==='sketch') {
+      html='<div class="mc-sectionhead">草图 01<span class="mc-chip">编辑中</span></div>'+select('附着平面',['XY 基准面'],'mc-plane')
+        +'<div class="mc-feedback '+(state.solver==='complete'?'mc-ok':'mc-error')+'" role="status"><strong>'+(state.solver==='complete'?'完全约束':'尺寸冲突')+'</strong><br>'
+        +(state.solver==='complete'?'0 个自由度 · 几何关系已确定':'宽度不足以容纳固定孔距与边距，保留上次有效轮廓。')+'</div>'
+        +'<div class="mc-sectionhead">驱动尺寸</div>'+field('板长 W',state.width,'mc-width','mm','number')
+        +field('板宽 H',100,null,'mm')+'<div class="mc-two">'+field('孔距 X',120,null,'mm')+field('孔距 Y',60,null,'mm')+'</div>'
+        +'<hr class="mc-rule"><div class="mc-sectionhead">几何关系</div>'
+        +'<div class="mc-tree">'+icon('link-2')+'端点重合</div><div class="mc-tree">'+icon('equal')+'四孔等径 · Ø10</div>'
+        +'<div class="mc-tree">'+icon('flip-horizontal-2')+'孔系关于中心对称</div>'
+        +'<div class="mc-note">蓝色尺寸可编辑；绿色轮廓表示完全约束。</div>'
+        +'<div class="mc-actionrow">'+button('x','取消','cancel-sketch','mc-outline')+button('check','完成','finish-sketch','mc-primary')+'</div>';
+    } else {
+      html='<div class="mc-sectionhead">模型结构<span class="mc-muted mc-small">1 个实体</span></div>'
+        +'<div class="mc-tree">'+icon('chevron-down')+icon('file-box')+'安装板</div>'
+        +'<div class="mc-tree mc-indent">'+icon('axis-3d')+'基准 / 坐标系</div>'
+        +'<button type="button" data-view="sketch" class="mc-tree mc-indent">'+icon('pencil-ruler')+'草图 01<span class="mc-chip mc-ok">约束</span></button>'
+        +'<div class="mc-tree mc-indent mc-selected">'+icon('move-up')+'拉伸 01</div>'
+        +'<div class="mc-tree mc-indent">'+icon('circle-dot')+'安装孔 × 4</div>'
+        +'<div class="mc-tree mc-indent">'+icon('rectangle-ellipsis')+'长圆孔</div>'
+        +'<hr class="mc-rule"><div class="mc-sectionhead">拉伸 01<span class="mc-chip">可编辑</span></div>'
+        +select('操作',['新建实体','合并','切除'],'mc-extrude-mode')+field('深度',state.draftDepth,'mc-depth','mm','number')
+        +select('方向',['正向','反向','对称'],'mc-direction')
+        +'<label class="mc-check"><input type="checkbox" checked disabled>实时预览</label>'
+        +'<div class="mc-note">改参将重建下游孔特征。预览不会覆盖已保存的模型。</div>'
+        +'<div class="mc-actionrow">'+button('x','取消','cancel-depth','mc-outline')+button('check','应用','apply-depth','mc-primary')+'</div>';
+    }
+    byId('mc-inspector').innerHTML=html;
+    byId('mc-inspector-actions').innerHTML='';
+    const actions=byId('mc-inspector').querySelector('.mc-actionrow');
+    if(actions)byId('mc-inspector-actions').appendChild(actions);
+    icons();
+  }
+  function renderSettings() {
+    const tab=state.settingsTab, local=state.provider==='local';
+    const providerName=local?'Ollama 本地':state.provider==='deepseek'?'DeepSeek 云端':'通义 / 百炼';
+    let nav='<nav class="mc-settings-nav" aria-label="AI 设置分类"><h2>AI 设置</h2>';
+    [['providers','plug','服务连接'],['models','boxes','模型管理'],['defaults','sliders-horizontal','任务默认值']].forEach(function(n){
+      nav+='<button type="button" data-settings-tab="'+n[0]+'" class="'+(tab===n[0]?'mc-active':'')+'">'+icon(n[1])+n[2]+'</button>';
+    });
+    nav+='<hr class="mc-rule"><button type="button" data-view="model">'+icon('arrow-left')+'返回工作台</button></nav>';
+    const headings={providers:['服务连接','管理本地与云端模型服务，按连接实例隔离配置。'],
+      models:['模型管理','选择可用于设计的模型，并验证需要的能力。'],
+      defaults:['任务默认值','为设计任务选择模型，明确本地与云端的数据范围。']};
+    let main='<div class="mc-settings-main"><div class="mc-settings-heading"><div><h2>'+headings[tab][0]+'</h2><p>'+headings[tab][1]+'</p></div>'
+      +(tab==='providers'?button('plus','添加连接','add-provider','mc-primary'):tab==='models'?button('plus','手动添加模型','add-model','mc-outline'):'')+'</div>';
+    if(tab==='providers') {
+      main+='<div class="mc-stepbar"><span><b>1</b>添加服务连接</span><span><b>2</b>发现与验证模型</span><span><b>3</b>选择任务默认值</span></div>'
+        +'<div class="mc-provider-layout"><div>';
+      [['local','Ollama 本地','本机运行 · 已连接'],['deepseek','DeepSeek 云端','API 服务 · 待配置'],['qwen','通义 / 百炼','API 服务 · 待配置']].forEach(function(p){
+        main+='<button type="button" data-provider="'+p[0]+'" class="mc-provider '+(p[0]===state.provider?'mc-active':'')+'"><strong>'+p[1]+'</strong><span>'+p[2]+'</span></button>';
+      });
+      main+='<div class="mc-note">同一服务可添加多个账号或地域连接。</div></div><div class="mc-box">'
+        +'<div class="mc-inlinehead">'+icon(local?'hard-drive':'cloud')+'<h3>'+providerName+'</h3><span class="mc-spacer"></span><span class="mc-chip '+(local?'mc-ok':'mc-warning')+'">'+(local?'本地连接':'待配置')+'</span></div>'
+        +field('连接名称',providerName,'mc-provider-name')
+        +select('协议',[local?'Ollama 原生 API':'OpenAI 兼容 API'],'mc-protocol')
+        +field('服务地址',local?'http://127.0.0.1:11434':'https://models.example.com/v1','mc-endpoint')
+        +(local?'<div class="mc-note">模型在本机运行。此连接无需云端 API Key。</div>':
+          '<label class="mc-field"><span>API Key</span><input type="password" readonly placeholder="设计稿，请勿输入真实密钥"></label><div class="mc-note">凭据保存至系统钥匙串，文档与日志只记录连接名称。</div>')
+        +'<div class="mc-two">'+field('请求超时','60',null,'秒')+select('代理',['使用系统设置','不使用代理'],'mc-proxy')+'</div>'
+        +'<div class="mc-feedback '+(state.connection==='error'?'mc-error':state.connection==='testing'||!local?'mc-warning':'mc-ok')+'" role="status">'
+        +(state.connection==='error'?'认证未通过 · 请检查 API Key 和服务地址。':state.connection==='testing'?'正在检测连接…':local?'连接可用 · 下一步获取模型并验证能力。':'配置后可测试连接。云端地址按实际服务填写。')+'</div>'
+        +'<div class="mc-actionrow">'+button('activity',state.connection==='testing'?'检测中…':'测试连接','test-connection','mc-outline')
+        +button('refresh-cw','获取模型','get-models','mc-primary')+'</div></div></div>';
+    } else if(tab==='models') {
+      main+='<div class="mc-box"><div class="mc-inlinehead">'+icon('hard-drive')+'<h3>Ollama 本地</h3><span class="mc-chip mc-ok">2 个示例模型</span><span class="mc-spacer"></span>'+button('refresh-cw','刷新','refresh-models','mc-outline')+'</div>'
+        +'<div class="mc-tablewrap"><table class="mc-table"><thead><tr><th>模型</th><th>规划输出</th><th>视觉</th><th>状态</th><th>操作</th></tr></thead><tbody>'
+        +'<tr><td><span class="mc-modelname">本地规划模型</span><span class="mc-modelid">cad-planner:local</span></td><td><span class="mc-chip '+(state.modelVerified?'mc-ok':'')+'">'+(state.modelVerified?'Schema 已验证':'Schema 待验证')+'</span></td><td>不支持</td><td>可调用</td><td>'+button('badge-check','验证能力','verify-model','mc-outline')+'</td></tr>'
+        +'<tr><td><span class="mc-modelname">图纸理解模型</span><span class="mc-modelid">vision-review:local</span></td><td>待验证</td><td><span class="mc-chip">支持</span></td><td>待验证</td><td>'+button('badge-check','验证能力','verify-vision','mc-outline')+'</td></tr></tbody></table></div>'
+        +'<div class="mc-note">模型名称与能力均为设计示例。发现列表不等于已验证当前模型能力。</div></div>'
+        +'<div class="mc-box" style="margin-top:18px"><div class="mc-sectionhead">能力验证 · 本地规划模型</div>'
+        +'<div class="mc-two"><div><div class="mc-tree">'+icon('check')+'文本请求可完成</div><div class="mc-tree">'+icon('check')+'流式响应可用</div></div>'
+        +'<div><div class="mc-tree">'+icon(state.modelVerified?'check':'circle-dashed')+(state.modelVerified?'JSON Schema 已验证':'JSON Schema 尚未验证')+'</div><div class="mc-tree">'+icon('circle-dashed')+'CAD 任务质量需单独评测</div></div></div>'
+        +'<div class="mc-note">验证会发送小型测试请求；云端模型可能产生少量调用费用。</div>'
+        +'<div class="mc-actionrow">'+button('sliders-horizontal','设为建模计划默认模型','assign-default','mc-primary')+'</div></div>';
+    } else {
+      main+='<div class="mc-box"><h3>任务模型</h3><div class="mc-note">每次任务开始时固定模型配置。切换默认值仅影响后续任务。</div>'
+        +'<div class="mc-two">'+select('建模计划',['本地规划模型 · Ollama','选择其他已验证模型'],'mc-plan-model')
+        +select('解释 / 修复',['跟随建模计划','本地规划模型 · Ollama'],'mc-explain-model')+'</div>'
+        +'<div class="mc-two">'+select('图纸理解',['未启用','图纸理解模型 · 先验证能力'],'mc-vision-model')
+        +select('失败时切换模型',['关闭 · 保留当前草稿','询问后切换'],'mc-fallback')+'</div></div>'
+        +'<div class="mc-box" style="margin-top:18px"><h3>设计上下文</h3>'
+        +'<label class="mc-check"><input type="checkbox" checked>发送必要尺寸、单位与所选对象引用</label>'
+        +'<label class="mc-check"><input type="checkbox">允许附加图纸图片</label>'
+        +'<label class="mc-check"><input type="checkbox">允许发送完整命令历史</label>'
+        +'<div class="mc-feedback mc-ok">当前默认：本地推理<br>手工绘图、建模与文档保存可离线使用。</div>'
+        +'<div class="mc-note">涉及云端服务时，在任务中展示实际发送范围。生成的设计变更仍须确认后执行。</div></div>';
+    }
+    main+='<div class="mc-settings-save">'+button('rotate-ccw','放弃修改','discard-settings','mc-outline')+button('check','保存设置','save-settings','mc-primary')+'</div></div>';
+    byId('mc-settings').innerHTML=nav+main; icons();
+  }
+  function renderAI() {
+    if(!state.ai) return;
+    byId('mc-ai-panel').innerHTML='<div><div class="mc-sectionhead">'+icon('sparkles')+'设计助手<span class="mc-chip mc-ok">本地规划模型</span></div>'
+      +'<div class="mc-ai-message">将安装板厚度改为 10 mm，保持四个安装孔直径 10 mm。</div>'
+      +'<div class="mc-note">上下文：当前零件、尺寸与所选特征<br>目标：安装板 · 修订 r12</div>'
+      +button('chevron-down','收起助手','ai','')+'</div><div class="mc-plan">'
+      +'<div class="mc-sectionhead">'+(state.planApplied?'变更已应用':'待确认 · 1 项设计变更')+'<span class="mc-chip '+(state.planApplied?'mc-ok':'mc-warning')+'">'+(state.planApplied?'示例完成':'模型尚未改变')+'</span></div>'
+      +'<div class="mc-planline"><span>拉伸 01 · 厚度</span><strong>'+state.planFromDepth.toFixed(2)+' → '+state.planDepth.toFixed(2)+' mm</strong></div>'
+      +(state.planEditing?field('计划中的新厚度',state.planDepth,'mc-plan-depth','mm','number'):'')
+      +'<div class="mc-note">保持：4 × Ø10 安装孔、120 × 60 孔距。执行后重新检查尺寸。</div>'
+      +'<div class="mc-actionrow">'+button('x','取消计划','cancel-plan','mc-outline')
+      +button('pencil','编辑参数','edit-plan','mc-outline')
+      +'<button type="button" class="mc-primary" data-action="apply-plan" '+(state.planApplied?'disabled':'')+'>'+icon('check')+(state.planApplied?'已应用':'确认应用')+'</button></div></div>';
+    icons();
+  }
+  const svgText=function(x,y,s,c,size,anchor){
+    return '<text x="'+x+'" y="'+y+'" fill="'+(c||'#51667c')+'" font-size="'+(size||12)+'" text-anchor="'+(anchor||'middle')+'" font-family="Noto Sans CJK SC, sans-serif">'+s+'</text>';
+  };
+  const line=function(x1,y1,x2,y2,c,w,dash){
+    return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+c+'" stroke-width="'+(w||1)+'"'+(dash?' stroke-dasharray="'+dash+'"':'')+'/>';
+  };
+  function rounded(w,h,r) {
+    const result=[];
+    [[w/2-r,h/2-r,0],[-w/2+r,h/2-r,90],[-w/2+r,-h/2+r,180],[w/2-r,-h/2+r,270]].forEach(function(a){
+      for(let j=0;j<=12;j++){const t=(a[2]+j*7.5)*Math.PI/180; result.push([a[0]+r*Math.cos(t),a[1]+r*Math.sin(t)]);}
+    });
+    return result;
+  }
+  function circlePoints(x,y,r) { return Array.from({length:64},function(_,i){const t=i*Math.PI/32;return [x+r*Math.cos(t),y+r*Math.sin(t)];}); }
+  function slotPoints() {
+    const a=[]; for(let i=0;i<=32;i++){const t=-Math.PI/2+i*Math.PI/32;a.push([23+7*Math.cos(t),7*Math.sin(t)]);}
+    for(let i=0;i<=32;i++){const t=Math.PI/2+i*Math.PI/32;a.push([-23+7*Math.cos(t),7*Math.sin(t)]);}return a;
+  }
+  function path(points,project,z) { return points.map(function(p,i){const q=project(p[0],p[1],z||0);return (i?'L':'M')+q[0].toFixed(2)+','+q[1].toFixed(2);}).join(' ')+' Z'; }
+  function drawScene() {
+    if(state.view==='settings') return;
+    const scene=byId('mc-scene'), parent=byId('mc-center');
+    const w=parent.clientWidth,h=parent.clientHeight;
+    if(!w||!h)return;
+    scene.setAttribute('viewBox','0 0 '+w+' '+h);
+    const flat=state.view!=='model'||state.orientation==='top';
+    const holes=[[-60,-30],[60,-30],[-60,30],[60,30]];
+    const safeWidth=state.validWidth;
+    const outline=rounded(safeWidth,100,8), slot=slotPoints();
+    const curves=holes.map(function(p){return circlePoints(p[0],p[1],5);}).concat([slot]);
+    let body='<title>安装板：160 × 100 mm，4 个直径 10 mm 安装孔，60 × 14 mm 长圆孔</title>';
+    if(flat) {
+      const s=Math.min((w-100)/safeWidth,(h-185)/100),cx=w/2-8,cy=h/2+8;
+      const p=function(x,y){return [cx+x*s,cy-y*s];};
+      if(state.grid) {
+        const spacing=10*s;
+        for(let x=cx%spacing;x<w;x+=spacing)body+=line(x,50,x,h-32,'#e9eef4',.8);
+        for(let y=cy%spacing;y<h;y+=spacing)body+=line(0,y,w,y,'#e9eef4',.8);
+      }
+      if(state.centerlines) {
+        body+=line(15,cy,w-15,cy,'#88a3bc',1,'10 4 2 4')+line(cx,60,cx,h-35,'#88a3bc',1,'10 4 2 4');
+      }
+      const sketch=state.view==='sketch', c=sketch?(state.solver==='complete'?'#17735a':'#b13c42'):'#354c63';
+      let d=path(outline,p)+curves.map(function(a){return path(a,p);}).join('');
+      body+='<path d="'+d+'" fill="'+(sketch?'#edf7f2':'#ffffff')+'" fill-rule="evenodd" stroke="'+c+'" stroke-width="1.9"/>';
+      holes.forEach(function(q){
+        const a=p(q[0],q[1]);body+=line(a[0]-9,a[1],a[0]+9,a[1],'#6d8ca8',.8)+line(a[0],a[1]-9,a[0],a[1]+9,'#6d8ca8',.8);
+      });
+      const lx=cx-safeWidth*s/2,rx=cx+safeWidth*s/2,ty=cy-50*s,by=cy+50*s;
+      function hdim(x1,x2,y,from,label,selected) {
+        const color=selected?'#9a5d09':'#376aa8';
+        body+=line(x1,from,x1,y+6,'#a6b8cb',.8)+line(x2,from,x2,y+6,'#a6b8cb',.8)+line(x1,y,x2,y,color,1);
+        body+=line(x1-3,y+4,x1+3,y-4,color,1)+line(x2-3,y+4,x2+3,y-4,color,1);
+        body+='<rect x="'+((x1+x2)/2-31)+'" y="'+(y-16)+'" width="62" height="22" rx="3" fill="'+(selected?'#fff0d0':'#fbfcfe')+'"/>';
+        body+=svgText((x1+x2)/2,y, label,color,12);
+      }
+      if(state.dimensions||sketch) {
+        hdim(lx,rx,by+34,by+4,sketch&&state.solver==='conflict'?state.width.toFixed(2)+' !':safeWidth.toFixed(2),true);
+        if(w>430) hdim(cx-60*s,cx+60*s,ty-32,ty-4,'120.00',false);
+        const dx=rx+29;
+        body+=line(rx+4,ty,dx+5,ty,'#a6b8cb',.8)+line(rx+4,by,dx+5,by,'#a6b8cb',.8)+line(dx,ty,dx,by,'#376aa8',1);
+        body+=line(dx-4,ty+3,dx+4,ty-3,'#376aa8',1)+line(dx-4,by+3,dx+4,by-3,'#376aa8',1);
+        body+='<text transform="translate('+(dx+15)+','+cy+') rotate(-90)" fill="#376aa8" font-size="12" text-anchor="middle">100.00</text>';
+        const hp=p(60,30);
+        if(w>430)body+='<path d="M'+hp[0]+','+hp[1]+' l22,-36 h55" fill="none" stroke="#376aa8" stroke-width="1"/>'+svgText(hp[0]+74,hp[1]-43,'4 × Ø10','#376aa8',12);
+        body+=svgText(cx,cy-15,'60 × 14','#376aa8',12);
+      }
+      if(sketch) {
+        [[-safeWidth/2+8,50],[safeWidth/2-8,50],[-safeWidth/2+8,-50],[safeWidth/2-8,-50]].forEach(function(q){
+          const a=p(q[0],q[1]);body+='<rect x="'+(a[0]-2.5)+'" y="'+(a[1]-2.5)+'" width="5" height="5" fill="white" stroke="'+c+'" stroke-width="1.3"/>';
+        });
+        body+=svgText(cx,ty-10,'H',c,12)+svgText(lx-11,cy,'V',c,12);
+        body+='<circle cx="'+cx+'" cy="'+cy+'" r="4" fill="white" stroke="#b45150" stroke-width="1.3"/>';
+      }
+      body+=line(28,h-65,65,h-65,'#b65d5c',1.4)+line(28,h-65,28,h-102,'#497e62',1.4)
+        +svgText(72,h-61,'X','#a04e4b',11)+svgText(28,h-111,'Y','#3c6e54',11);
+    } else {
+      const s=Math.min((w-100)/240,(h-150)/155),cx=w/2,cy=h/2+12;
+      const p=function(x,y,z){return [cx+s*.866*(x-y),cy+s*(.5*x+.5*y-.95*z)];};
+      const depth=Number.isFinite(state.draftDepth)&&state.draftDepth>0&&state.draftDepth<=40?state.draftDepth:state.depth;
+      if(state.grid) {
+        for(let i=-140;i<=140;i+=20){
+          let a=p(-140,i,-2),b=p(140,i,-2);body+=line(a[0],a[1],b[0],b[1],'#dfe6ee',.8);
+          a=p(i,-140,-2);b=p(i,140,-2);body+=line(a[0],a[1],b[0],b[1],'#dfe6ee',.8);
+        }
+      }
+      body+='<defs><linearGradient id="mc-metal" x1="0%" y1="0%" x2="100%" y2="100%"><stop stop-color="#e6edf4"/><stop offset="1" stop-color="#bdcddb"/></linearGradient>'
+        +'<filter id="mc-shadow"><feGaussianBlur stdDeviation="8"/></filter></defs>';
+      body+='<path d="'+path(outline,p,-5)+'" fill="#71879b" opacity=".16" filter="url(#mc-shadow)"/>';
+      body+='<path d="'+path(outline,p,0)+'" fill="#9bafc2" stroke="#687f96" stroke-width="1.2"/>';
+      let top=path(outline,p,depth)+curves.map(function(a){return path(a,p,depth);}).join('');
+      body+='<path d="'+top+'" fill="url(#mc-metal)" fill-rule="evenodd" stroke="#536d85" stroke-width="1.2"/>';
+      curves.forEach(function(a,i){
+        const d=path(a,p,depth);
+        body+='<defs><clipPath id="mc-hole-'+i+'"><path d="'+d+'"/></clipPath></defs><path d="'+d+'" fill="#718ba3"/>'
+          +'<path d="'+path(a,p,0)+'" fill="#e9eff5" stroke="#536d85" stroke-width=".8" clip-path="url(#mc-hole-'+i+')"/>'
+          +'<path d="'+d+'" fill="none" stroke="#4b647c" stroke-width="1.2"/>';
+      });
+      body+='<path d="'+path(outline,p,depth)+'" fill="none" stroke="#d98a22" stroke-width="2.1" opacity=".9"/>';
+      const anchor=p(safeWidth/2,8,depth);
+      if(w>430){
+        body+='<path d="M'+anchor[0]+','+anchor[1]+' l35,-30 h48" fill="none" stroke="#a76a16" stroke-width="1"/>';
+        body+=svgText(anchor[0]+60,anchor[1]-39,'厚 '+depth.toFixed(2)+' mm','#8c5d1d',12);
+      }
+      body+=line(32,h-70,66,h-51,'#b8605d',1.6)+line(32,h-70,6,h-55,'#50886e',1.6)+line(32,h-70,32,h-108,'#5281ba',1.6)
+        +svgText(74,h-46,'X','#a75250',11)+svgText(9,h-43,'Y','#3b745a',11)+svgText(32,h-116,'Z','#4773a9',11);
+      const cubeX=w-72,cubeY=95;
+      body+='<path d="M'+cubeX+','+(cubeY-22)+' l24,13 v27 l-24,14 l-24,-14 v-27 Z M'+cubeX+','+(cubeY+5)+' l24,-14 M'+cubeX+','+(cubeY+5)+' l-24,-14 M'+cubeX+','+(cubeY+5)+' v27" fill="#f9fbfd" stroke="#a8b8c8"/>';
+      body+=svgText(cubeX,cubeY-3,'上','#617890',11)+svgText(cubeX-12,cubeY+17,'前','#617890',11);
+    }
+    scene.innerHTML=body;
+  }
+  root.addEventListener('input',function(event){
+    const target=event.target;
+    if(target.id==='mc-search'){
+      root.querySelectorAll('.mc-command').forEach(function(b){b.hidden=!b.textContent.includes(target.value);});
+    } else if(target.id==='mc-depth'){
+      state.draftDepth=Number(target.value); drawScene();
+      byId('mc-operation-status').textContent='预览中 · 点击应用提交变更';
+    } else if(target.id==='mc-width'){
+      state.width=Number(target.value); state.solver=!Number.isFinite(state.width)||state.width<140?'conflict':'complete';
+      if(state.solver==='complete')state.validWidth=state.width;
+      drawScene();
+      byId('mc-operation-status').textContent=state.solver==='conflict'?'尺寸冲突 · 检查孔距与边距':'尺寸预览中 · 完成草图后应用';
+    }
+  });
+  root.addEventListener('change',function(event){
+    const target=event.target;
+    if(target.dataset.toggle){state[target.dataset.toggle]=target.checked;drawScene();}
+    if(target.id==='mc-width'){renderInspector();renderChrome();}
+    if(target.id==='mc-plan-depth'){
+      const n=Number(target.value);
+      if(!Number.isFinite(n)||n<=0||n>40){toast('示例厚度需大于 0 且不超过 40 mm');target.value=state.planDepth;return;}
+      state.planDepth=n;state.planApplied=false;renderAI();
+    }
+  });
+  root.addEventListener('click',function(event){
+    const b=event.target.closest('button');if(!b||!root.contains(b))return;
+    if(b.dataset.view){
+      state.view=b.dataset.view;state.selectedTab=state.view==='drawing'?'图层':state.view==='sketch'?'选项':'结构';
+      state.ai=false;renderChrome();saveState();return;
+    }
+    if(b.dataset.settingsTab){state.settingsTab=b.dataset.settingsTab;renderSettings();saveState();return;}
+    if(b.dataset.provider){state.provider=b.dataset.provider;state.connection='ready';renderSettings();saveState();return;}
+    if(b.dataset.rightTab){state.selectedTab=b.dataset.rightTab;renderChrome();return;}
+    if(b.dataset.hint){toast(b.dataset.hint);return;}
+    if(b.dataset.tool){
+      state.selectedTool=b.dataset.tool;byId('mc-operation-status').textContent=b.dataset.tool+' · 选择对象或输入参数';
+      root.querySelectorAll('[data-tool]').forEach(function(t){t.classList.toggle('mc-active',t.dataset.tool===state.selectedTool);});
+      if(b.dataset.tool==='新建草图'){state.view='sketch';state.selectedTab='选项';renderChrome();}
+      else if(b.dataset.tool==='测量'){state.selectedTab='测量';renderChrome();}
+      else toast('工具流程示意：'+b.dataset.tool+' → 选择 / 参数 → 预览 → 应用');
+      return;
+    }
+    const a=b.dataset.action;
+    if(a==='grid'){state.grid=!state.grid;drawScene();saveState();}
+    else if(a==='snap'){state.snap=!state.snap;renderChrome();}
+    else if(a==='orientation'){state.orientation=state.orientation==='iso'?'top':'iso';renderChrome();}
+    else if(a==='fit'){drawScene();toast('已适应当前模型');}
+    else if(a==='ai'){
+      state.view='model';state.ai=!state.ai;
+      if(state.ai){state.planFromDepth=state.depth;state.planDepth=10;state.planApplied=false;state.planEditing=false;}
+      renderChrome();
+    }
+    else if(a==='apply-depth'){
+      if(!Number.isFinite(state.draftDepth)||state.draftDepth<=0||state.draftDepth>40){toast('请输入 0～40 mm 范围内的示例厚度');return;}
+      state.depth=state.draftDepth;renderChrome();toast('示例：厚度已应用，下游孔特征重建完成');
+    } else if(a==='cancel-depth'){state.draftDepth=state.depth;renderChrome();toast('已取消预览');}
+    else if(a==='finish-sketch'){
+      if(state.solver==='conflict'){toast('请先修复尺寸冲突');return;}
+      state.view='model';state.selectedTab='结构';renderChrome();saveState();
+    } else if(a==='cancel-sketch'){state.width=160;state.validWidth=160;state.solver='complete';state.view='model';renderChrome();}
+    else if(a==='use-sketch'){state.view='sketch';state.selectedTab='选项';renderChrome();toast('示例：已复制轮廓，二维图保留独立');}
+    else if(a==='test-connection'){
+      state.connection='testing';renderSettings();setTimeout(function(){state.connection=state.provider==='local'?'ready':'error';renderSettings();toast('演示检测完成，未发起网络请求');},450);
+    } else if(a==='get-models'){state.settingsTab='models';renderSettings();saveState();}
+    else if(a==='verify-model'){state.modelVerified=true;renderSettings();toast('示例能力验证完成；CAD 任务质量需单独评测');}
+    else if(a==='verify-vision'){toast('示例：视觉请求可用，结构化输出仍待验证');}
+    else if(a==='assign-default'){state.settingsTab='defaults';renderSettings();saveState();}
+    else if(a==='save-settings'){toast('设计稿：设置保存流程已演示，未写入真实配置');}
+    else if(a==='discard-settings'){state.provider='local';state.connection='ready';renderSettings();toast('已恢复演示默认值');}
+    else if(a==='add-provider'){toast('添加连接：选择协议 → 填写地址与凭据 → 测试连接');}
+    else if(a==='add-model'){toast('手动添加：选择服务连接 → 输入模型 ID → 验证能力');}
+    else if(a==='refresh-models'){toast('示例列表已刷新，未请求真实服务');}
+    else if(a==='cancel-plan'){state.ai=false;state.planApplied=false;renderChrome();toast('已取消计划，模型保持原状');}
+    else if(a==='edit-plan'){state.planEditing=true;state.planApplied=false;renderAI();byId('mc-plan-depth').focus();}
+    else if(a==='apply-plan'){state.depth=state.planDepth;state.draftDepth=state.planDepth;state.planApplied=true;state.planEditing=false;renderChrome();toast('示例：确认后已应用，四孔直径保持 10 mm');}
+    else if(a==='save'){toast('设计稿：文档保存交互示意，未创建 CAD 文件');}
+    else if(a==='export'){toast(state.view==='drawing'?'DXF 导出：确认单位、实体范围与兼容性报告':'STEP / STL 导出：检查实体有效性与单位');}
+    else if(a==='undo'){state.depth=8;state.draftDepth=8;state.planApplied=false;renderChrome();toast('已恢复示例初始厚度 8 mm');}
+  });
+  root.addEventListener('keydown',function(event){
+    if(['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName))return;
+    if(event.key==='Escape'){state.ai=false;state.draftDepth=state.depth;renderChrome();}
+    if(event.key.toLowerCase()==='f'){drawScene();toast('已适应当前模型');}
+  });
+  window.addEventListener('openai:set_globals',function(event){
+    if(event.detail&&event.detail.globals&&event.detail.globals.widgetState){restore(event.detail.globals.widgetState);renderChrome();}
+  });
+  renderChrome();
+  new ResizeObserver(function(){drawScene();}).observe(byId('mc-center'));
+  if(globalThis.Tweak){
+    const tweak=new Tweak({container:root,onChange:function(){
+      root.style.setProperty('--mc-canvas',design.canvas);
+      root.style.setProperty('--mc-row',design.row+'px');
+      drawScene();
+    }});
+    tweak.addColorPicker(design,'canvas',{label:'三维画布颜色',reference:'--mc-canvas'});
+    tweak.addSlider(design,'row',{label:'命令行密度',min:30,max:42,step:2,unit:'px',reference:'--mc-row'});
+  }
+})();
+</script>

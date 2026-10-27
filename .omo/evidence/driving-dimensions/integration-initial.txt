@@ -1,0 +1,43 @@
+.......................................................F................ [ 52%]
+................................................................         [100%]
+=================================== FAILURES ===================================
+__________________ test_origin_grid_and_object_snap_priority ___________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75146bd78d40>
+
+    def test_origin_grid_and_object_snap_priority(qtbot: QtBot) -> None:
+        draft = SketchEditorDialog(continuous_lines=True)
+        qtbot.addWidget(draft)
+        draft.show()
+        canvas = draft.canvas
+        events: list[tuple[float, float, str]] = []
+    
+        def capture(u: float, v: float, kind: str) -> None:
+            events.append((u, v, kind))
+    
+        canvas.cursor_changed.connect(capture)
+    
+        def hover(u: float, v: float) -> tuple[float, float, str]:
+            QTest.mouseMove(canvas, canvas.local_to_screen((u, v)))
+            return events[-1]
+    
+>       assert hover(0.4, -0.4) == (0.0, 0.0, "UCS 原点")
+               ^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_acceptance_round2.py:82: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+u = 0.4, v = -0.4
+
+    def hover(u: float, v: float) -> tuple[float, float, str]:
+        QTest.mouseMove(canvas, canvas.local_to_screen((u, v)))
+>       return events[-1]
+               ^^^^^^^^^^
+E       IndexError: list index out of range
+
+tests/ui/test_drafting_acceptance_round2.py:80: IndexError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_acceptance_round2.py::test_origin_grid_and_object_snap_priority
+1 failed, 135 passed in 41.67s

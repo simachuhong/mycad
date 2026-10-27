@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Formal shared ``$defs`` table for the eight built-in commands (T7a).
 
-``COMMAND_SCHEMA_DEFS`` is the single verbatim transcription of plan
-Appendix A.0 (#round9-7). Every built-in command schema references shared
-objects exclusively through ``{"$ref": "#/$defs/<Name>"}`` — substructures
-are never copied — and the T3 validator receives this table via
-``CommandRegistry(schema_defs=...)`` at the composition root. The T7a test
-suite AST-guards that no second ``COMMAND_SCHEMA_DEFS`` assignment exists
-anywhere under ``src/``.
+``COMMAND_SCHEMA_DEFS`` contains the shared definitions from plan Appendix
+A.0 (#round9-7) plus anchor-aware interactive selector variants. Every
+built-in command schema references shared objects through
+``{"$ref": "#/$defs/<Name>"}`` where a reusable definition applies, and the
+T3 validator receives this table via ``CommandRegistry(schema_defs=...)`` at
+the composition root. The T7a test suite AST-guards that no second
+``COMMAND_SCHEMA_DEFS`` assignment exists anywhere under ``src/``.
 
 Transcription notes (T7a deviations vs. raw A.0 text):
 
@@ -26,8 +26,158 @@ from typing import Any
 
 __all__ = ["COMMAND_SCHEMA_DEFS"]
 
-#: Appendix A.0 shared definitions — 11 defs, verbatim (see module docstring).
+#: Appendix A.0 shared definitions plus anchor-aware interactive selectors.
 COMMAND_SCHEMA_DEFS: Mapping[str, Any] = {
+    "BodySelector": {
+        "type": "object",
+        "required": ["volume_mm3", "center_mm", "bounds_mm"],
+        "additionalProperties": False,
+        "properties": {
+            "volume_mm3": {"type": "number", "exclusiveMinimum": 0.0},
+            "center_mm": {"$ref": "#/$defs/Center3"},
+            "bounds_mm": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 6,
+                "maxItems": 6,
+            },
+            "rank": {"type": "integer", "minimum": 0},
+        },
+        "description": "几何体积/质心/包围框锚点；重复匹配时用 rank 区分，不保存临时 BodyId。",
+    },
+    "BodyTransform": {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["operation", "translation_mm"],
+                "properties": {
+                    "operation": {"const": "move"},
+                    "translation_mm": {"$ref": "#/$defs/Center3"},
+                },
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "required": ["operation", "translation_mm"],
+                "properties": {
+                    "operation": {"const": "copy"},
+                    "translation_mm": {"$ref": "#/$defs/Center3"},
+                },
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "required": ["operation", "axis_unit", "center_mm", "angle_deg"],
+                "properties": {
+                    "operation": {"const": "rotate"},
+                    "axis_unit": {"$ref": "#/$defs/Center3"},
+                    "center_mm": {"$ref": "#/$defs/Center3"},
+                    "angle_deg": {"type": "number"},
+                },
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "required": ["operation", "plane_normal_unit", "plane_origin_mm"],
+                "properties": {
+                    "operation": {"const": "mirror"},
+                    "plane_normal_unit": {"$ref": "#/$defs/Center3"},
+                    "plane_origin_mm": {"$ref": "#/$defs/Center3"},
+                },
+                "additionalProperties": False,
+            },
+        ],
+        "description": "移动/旋转/镜像替换所选实体；复制保留原实体并按位移创建副本。",
+    },
+    "BodyPattern": {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["kind", "count", "spacing_mm"],
+                "properties": {
+                    "kind": {"const": "linear"},
+                    "count": {"type": "integer", "minimum": 2, "maximum": 64},
+                    "spacing_mm": {"$ref": "#/$defs/Center3"},
+                },
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "required": ["kind", "count", "axis_unit", "center_mm", "angle_deg"],
+                "properties": {
+                    "kind": {"const": "circular"},
+                    "count": {"type": "integer", "minimum": 2, "maximum": 64},
+                    "axis_unit": {"$ref": "#/$defs/Center3"},
+                    "center_mm": {"$ref": "#/$defs/Center3"},
+                    "angle_deg": {
+                        "type": "number",
+                        "exclusiveMinimum": 0.0,
+                        "maximum": 360.0,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        ],
+        "description": "count 包含种子；完整 360° 不重复末端实例，部分角度包含两端。",
+    },
+    "ExtrudeProfile": {
+        "oneOf": [
+            {"$ref": "#/$defs/Profile"},
+            {
+                "type": "object",
+                "required": ["type", "target_face"],
+                "additionalProperties": False,
+                "properties": {
+                    "type": {"const": "face"},
+                    "target_face": {
+                        "oneOf": [
+                            {"$ref": "#/$defs/FaceSelector"},
+                            {"$ref": "#/$defs/InteractiveFaceSelector"},
+                        ]
+                    },
+                },
+                "description": "模型平面的完整边界（含内环），沿外法向拉伸；不构造替代圆形。",
+            },
+        ]
+    },
+    "SketchProfileReference": {
+        "type": "object",
+        "required": ["type", "sketch_id"],
+        "additionalProperties": False,
+        "properties": {
+            "type": {"const": "sketch"},
+            "sketch_id": {"type": "string", "minLength": 32, "maxLength": 36},
+        },
+        "description": ("引用命令历史中先前创建的闭合草图；草图尺寸变化后，重放会重新构建该特征。"),
+    },
+    "SketchExtrudeProfile": {
+        "oneOf": [
+            {"$ref": "#/$defs/ExtrudeProfile"},
+            {"$ref": "#/$defs/SketchProfileReference"},
+        ]
+    },
+    "SketchRevolveProfile": {
+        "oneOf": [
+            {"$ref": "#/$defs/Profile"},
+            {"$ref": "#/$defs/SketchProfileReference"},
+        ]
+    },
+    "SketchHole": {
+        "type": "object",
+        "required": ["profile", "target_face", "depth"],
+        "additionalProperties": False,
+        "properties": {
+            "profile": {"$ref": "#/$defs/SketchProfileReference"},
+            "target_face": {
+                "oneOf": [
+                    {"$ref": "#/$defs/FaceSelector"},
+                    {"$ref": "#/$defs/InteractiveFaceSelector"},
+                ]
+            },
+            "depth": {"$ref": "#/$defs/Depth"},
+        },
+        "description": ("草图中的非构造圆图元作为孔中心和直径；支撑面与草图平面必须重合。"),
+    },
     "FaceSelector": {
         "oneOf": [
             {
@@ -68,6 +218,62 @@ COMMAND_SCHEMA_DEFS: Mapping[str, Any] = {
             "0 或多个均 TopologyReferenceError(no-match/ambiguous)。禁止裸拓扑索引。"
         ),
     },
+    "InteractiveFaceSelector": {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["surface", "center_mm"],
+                "additionalProperties": False,
+                "properties": {
+                    "surface": {"const": "plane"},
+                    "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]},
+                    "rank": {"type": "integer", "minimum": 0},
+                    "center_mm": {"$ref": "#/$defs/Center3"},
+                },
+                "description": "鼠标选中的平面定位器：surface + 面心锚点。",
+            },
+            {
+                "type": "object",
+                "required": ["surface", "center_mm"],
+                "additionalProperties": False,
+                "properties": {
+                    "surface": {"const": "cylinder"},
+                    "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z", ""]},
+                    "rank": {"type": "integer", "minimum": 0},
+                    "center_mm": {"$ref": "#/$defs/Center3"},
+                    "radius_mm": {"type": "number", "exclusiveMinimum": 0.0},
+                },
+                "description": "鼠标选中的圆柱面定位器：面心与半径锚点。",
+            },
+        ],
+        "description": "运行时拓扑身份转换成可重放的几何锚点，不保存临时拓扑 ID。",
+    },
+    "PlanarFaceSelector": {
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["surface", "axis"],
+                "additionalProperties": False,
+                "properties": {
+                    "surface": {"const": "plane"},
+                    "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]},
+                    "rank": {"type": "integer", "minimum": 0},
+                },
+            },
+            {
+                "type": "object",
+                "required": ["surface", "center_mm"],
+                "additionalProperties": False,
+                "properties": {
+                    "surface": {"const": "plane"},
+                    "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]},
+                    "rank": {"type": "integer", "minimum": 0},
+                    "center_mm": {"$ref": "#/$defs/Center3"},
+                },
+            },
+        ],
+        "description": "到面终止只接受稳定或鼠标选择得到的平面面定位器。",
+    },
     "EdgeSelector": {
         "type": "object",
         "required": ["parent_faces"],
@@ -81,16 +287,42 @@ COMMAND_SCHEMA_DEFS: Mapping[str, Any] = {
             "curve": {"type": "string", "enum": ["line", "circle", ""]},
         },
     },
+    "InteractiveEdgeSelector": {
+        "type": "object",
+        "required": ["parent_faces", "center_mm"],
+        "additionalProperties": False,
+        "properties": {
+            "parent_faces": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/InteractiveFaceSelector"},
+                "minItems": 1,
+            },
+            "curve": {"type": "string", "enum": ["line", "circle"]},
+            "center_mm": {"$ref": "#/$defs/Center3"},
+            "radius_mm": {"type": "number", "exclusiveMinimum": 0.0},
+        },
+        "description": "鼠标选中的边定位器：相邻面 + 曲线类型 + 边心锚点。",
+    },
     "Position": {
+        "default": {"kind": "center"},
         "oneOf": [
             {
                 "type": "object",
                 "properties": {"kind": {"const": "center"}},
                 "required": ["kind"],
                 "additionalProperties": False,
-            }
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"const": "point"},
+                    "point": {"$ref": "#/$defs/Center3"},
+                },
+                "required": ["kind", "point"],
+                "additionalProperties": False,
+            },
         ],
-        "description": "v1 仅支持面心；任何其他 kind 必须 ValidationError。",
+        "description": "面心或所选平面上的世界坐标点（mm）；点位随命令存档并重放。",
     },
     "Depth": {
         "oneOf": [
@@ -207,14 +439,19 @@ COMMAND_SCHEMA_DEFS: Mapping[str, Any] = {
                 "additionalProperties": False,
             },
         ],
-        "description": "仅 modify.boolean_cut 使用；内联工具体，v1 不支持具名引用。",
+        "description": "modify.boolean_cut/boolean_intersect 共享；内联盒/圆柱工具体，v1 不支持具名引用。",
     },
     "Hole": {
         "type": "object",
         "required": ["target_face", "position", "diameter", "depth"],
         "additionalProperties": False,
         "properties": {
-            "target_face": {"$ref": "#/$defs/FaceSelector"},
+            "target_face": {
+                "oneOf": [
+                    {"$ref": "#/$defs/FaceSelector"},
+                    {"$ref": "#/$defs/InteractiveFaceSelector"},
+                ]
+            },
             "position": {"$ref": "#/$defs/Position"},
             "diameter": {"$ref": "#/$defs/Positive"},
             "depth": {"$ref": "#/$defs/Depth"},

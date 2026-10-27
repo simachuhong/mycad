@@ -58,7 +58,7 @@ def test_flange_batch_volume_history_and_confirmed_by(
     assert ": feature.hole_pattern " in out
 
 
-def test_batch_rollback_on_second_step_invalid_params(
+def test_batch_confirmation_rejects_second_step_invalid_params_before_execution(
     session: CliSession, services: AppServices, capsys: pytest.CaptureFixture[str]
 ) -> None:
     session.execute_line("new")
@@ -70,9 +70,9 @@ def test_batch_rollback_on_second_step_invalid_params(
     )
     assert session.execute_line("end-batch") == 1
     captured = capsys.readouterr()
-    assert "rolled back: 0" in captured.out
-    assert "batch failed at step 1" in captured.err
-    assert "feature.hole" in captured.err
+    assert "rolled back" not in captured.out
+    assert "diameter" in captured.err
+    assert "exclusiveMinimum" in captured.err
     assert services.kernel.mass_properties().solid_count == 0  # nothing survived
 
 
@@ -88,7 +88,8 @@ def test_batch_first_step_failure_has_no_rollback_line(
     assert session.execute_line("end-batch") == 1
     captured = capsys.readouterr()
     assert "rolled back" not in captured.out
-    assert "batch failed at step 0" in captured.err
+    assert "diameter" in captured.err
+    assert "exclusiveMinimum" in captured.err
 
 
 def test_nested_begin_batch_is_a_usage_error(

@@ -1,0 +1,26 @@
+..........................F............................................. [ 71%]
+.............................                                            [100%]
+=================================== FAILURES ===================================
+___________ test_hover_shows_candidate_without_selecting_or_mutating ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7342db70e600>
+
+    def test_hover_shows_candidate_without_selecting_or_mutating(qtbot: QtBot) -> None:
+        view = editor(qtbot)
+        view.dimensions.buttons["smart"].click()
+        QApplication.processEvents()
+        QTest.mouseMove(view.canvas, view.canvas.local_to_screen((15, 10)))
+>       assert view.canvas.dimension_candidate is not None
+E       assert None is not None
+E        +  where None = <mycad.ui.sketch_editor.SketchCanvas(0x168ca1c0) at 0x7342db5e73c0>.dimension_candidate
+E        +    where <mycad.ui.sketch_editor.SketchCanvas(0x168ca1c0) at 0x7342db5e73c0> = <mycad.ui.sketch_editor.SketchEditorDialog(0x16746760) at 0x7342db5c8dc0>.canvas
+
+tests/ui/test_canvas_dimensions.py:105: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_canvas_dimensions.py::test_hover_shows_candidate_without_selecting_or_mutating
+1 failed, 100 passed in 41.40s

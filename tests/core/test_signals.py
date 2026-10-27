@@ -8,6 +8,7 @@ import gc
 import subprocess
 import sys
 import typing
+import warnings
 from collections.abc import Mapping
 
 import pytest
@@ -73,6 +74,42 @@ def test_listener_exception_is_isolated() -> None:
     with pytest.warns(RuntimeWarning):
         bus.emit("metadata_changed", {"k": "v"})
     assert got == [{"k": "v"}]
+
+
+def test_listener_warning_filtered_as_error_still_does_not_abort_delivery() -> None:
+    bus = SignalBus()
+    got: list[object] = []
+
+    def boom(payload: Mapping[str, object]) -> None:
+        raise RuntimeError("listener exploded")
+
+    bus.subscribe("metadata_changed", boom)
+    bus.subscribe("metadata_changed", got.append)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        bus.emit("metadata_changed", {"k": "v"})
+    assert got == [{"k": "v"}]
+
+
+def test_signal_transaction_buffers_and_discards_commit_notifications() -> None:
+    bus = SignalBus()
+    pre_calls: list[object] = []
+    post_calls: list[object] = []
+    bus.subscribe("pre_command", pre_calls.append)
+    bus.subscribe("post_command", post_calls.append)
+
+    bus.begin_transaction()
+    bus.emit("post_command", {"ordinal": 0})
+    bus.emit_immediate("pre_command", {"command_id": "demo.a"})
+    assert pre_calls == [{"command_id": "demo.a"}]
+    assert post_calls == []
+    bus.discard_transaction()
+    assert post_calls == []
+
+    bus.begin_transaction()
+    bus.emit("post_command", {"ordinal": 1})
+    bus.commit_transaction()
+    assert post_calls == [{"ordinal": 1}]
 
 
 def test_dead_subscriber_is_dropped() -> None:

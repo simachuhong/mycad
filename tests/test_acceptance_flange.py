@@ -203,9 +203,9 @@ def test_plan_confirm_execute_and_step_roundtrip(services: AppServices, tmp_path
     ]
     plan = Plan(steps)
     assert plan.status == "draft"
-    plan.confirm(actor="acceptance-test")
+    loaded.bus.confirm_plan(plan, actor="acceptance-test", scope="cli")
     assert plan.status == "confirmed"
-    loaded.bus.execute_batch(plan)
+    loaded.bus.execute_batch(plan, scope="cli")
     _assert_geometry(services, "A")
 
     step_file = tmp_path / "flange.step"
@@ -347,8 +347,11 @@ def test_ui_layout_acceptance(
     for title in RIGHT_TAB_TITLES:
         assert title in titles
 
-    # §11.5 left palette: all P0 commands discoverable, searchable.
-    assert palette.apply_filter("") == 8
+    # §11.5 left palette: all registered builtins are discoverable, searchable.
+    expected_builtin_count = sum(
+        len(specs) for specs in services.registry.list_by_category().values()
+    )
+    assert palette.apply_filter("") == expected_builtin_count
     assert palette.apply_filter("box") == 1
 
     # §11.4 Chat page: a drafted plan renders as cards and the model only
@@ -376,8 +379,8 @@ def test_ui_layout_acceptance(
 
     cards.execute_plan()
     plan = cards.plan
-    assert plan is not None and plan.status == "done"
-    assert len(loaded.document.commands) == 2
+    assert plan is not None
+    qtbot.waitUntil(lambda: plan.status == "done" and len(loaded.document.commands) == 2)
 
     # STEP export of the post-execution state (§8.3 acceptance workflow).
     step_path = tmp_path / "acceptance.step"

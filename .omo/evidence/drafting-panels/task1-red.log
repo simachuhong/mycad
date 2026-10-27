@@ -1,0 +1,53 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+___________ test_parameters_default_right_and_keep_original_controls ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7996e2d34230>
+
+    def test_parameters_default_right_and_keep_original_controls(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        editor.resize(1400, 850)
+        editor.show()
+>       dock = editor.parameter_dock
+               ^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'parameter_dock'
+
+tests/ui/test_drafting_panels.py:17: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___________ test_floating_parameters_suspend_restore_close_and_reset ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7996e2d36300>
+
+    def test_floating_parameters_suspend_restore_close_and_reset(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        editor.show()
+>       dock = editor.parameter_dock
+               ^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'parameter_dock'
+
+tests/ui/test_drafting_panels.py:34: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____________ test_parameter_layout_roundtrip_with_old_toolbar_state ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7996e2d37fb0>
+
+    def test_parameter_layout_roundtrip_with_old_toolbar_state(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        editor.show()
+>       editor.toolbar_host.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, editor.parameter_dock)
+                                                                                ^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'parameter_dock'
+
+tests/ui/test_drafting_panels.py:58: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_parameters_default_right_and_keep_original_controls
+FAILED tests/ui/test_drafting_panels.py::test_floating_parameters_suspend_restore_close_and_reset
+FAILED tests/ui/test_drafting_panels.py::test_parameter_layout_roundtrip_with_old_toolbar_state
+3 failed in 9.71s

@@ -1,0 +1,63 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+____________ test_drafting_toolbars_dock_independently_and_restore _____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7f566f334dd0>
+
+    def test_drafting_toolbars_dock_independently_and_restore(qtbot: QtBot) -> None:
+        draft = SketchEditorDialog()
+        qtbot.addWidget(draft)
+        draft.show()
+>       host = draft.toolbar_host
+               ^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'toolbar_host'
+
+tests/ui/test_toolbar_workspaces.py:18: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+________ test_bottom_panel_starts_collapsed_even_after_visible_session _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7f566f335fd0>
+
+    def test_bottom_panel_starts_collapsed_even_after_visible_session(qtbot: QtBot) -> None:
+        first = MainWindow(services=build_app(discoverers=()))
+        qtbot.addWidget(first)
+        first.show()
+        first.act_show_cli.trigger()
+        assert first.bottom_dock.isVisible()
+        first.store_window_state()
+        second = MainWindow()
+        qtbot.addWidget(second)
+        second.show()
+>       assert second.bottom_dock.isHidden()
+E       assert False
+E        +  where False = <built-in method isHidden of PySide6.QtWidgets.QDockWidget object at 0x7f566ef1d400>()
+E        +    where <built-in method isHidden of PySide6.QtWidgets.QDockWidget object at 0x7f566ef1d400> = <PySide6.QtWidgets.QDockWidget(0x253aa260, name="bottomPanelDock") at 0x7f566ef1d400>.isHidden
+E        +      where <PySide6.QtWidgets.QDockWidget(0x253aa260, name="bottomPanelDock") at 0x7f566ef1d400> = <mycad.ui.main_window.MainWindow(0x25320c70) at 0x7f566ef21c80>.bottom_dock
+
+tests/ui/test_toolbar_workspaces.py:47: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+____________ test_three_dimensional_actions_have_their_own_toolbar _____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7f566ef61f10>
+
+    def test_three_dimensional_actions_have_their_own_toolbar(qtbot: QtBot) -> None:
+        window = MainWindow(services=build_app(discoverers=()))
+        qtbot.addWidget(window)
+        window.show()
+        main_texts = {action.text() for action in window.main_toolbar.actions()}
+>       model_texts = {action.text() for action in window.modeling_toolbar.actions()}
+                                                   ^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'MainWindow' object has no attribute 'modeling_toolbar'. Did you mean: 'main_toolbar'?
+
+tests/ui/test_toolbar_workspaces.py:56: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+--------------------------- Captured stderr teardown ---------------------------
+QOpenGLWidget: No fbo, cannot render
+=========================== short test summary info ============================
+FAILED tests/ui/test_toolbar_workspaces.py::test_drafting_toolbars_dock_independently_and_restore
+FAILED tests/ui/test_toolbar_workspaces.py::test_bottom_panel_starts_collapsed_even_after_visible_session
+FAILED tests/ui/test_toolbar_workspaces.py::test_three_dimensional_actions_have_their_own_toolbar
+3 failed in 12.98s

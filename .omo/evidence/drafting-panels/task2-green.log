@@ -1,0 +1,43 @@
+...F.........                                                            [100%]
+=================================== FAILURES ===================================
+_________ test_navigation_selection_is_bidirectional_and_history_free __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7ac98159c290>
+
+    def test_navigation_selection_is_bidirectional_and_history_free(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        line = editor.canvas.entities[0]
+        assert (
+            editor.toolbar_host.dockWidgetArea(editor.navigation_dock)
+            == Qt.DockWidgetArea.LeftDockWidgetArea
+        )
+        tree = editor.navigator.tree
+        tree.setCurrentItem(leaf(editor, line.entity_id))
+        assert editor.canvas.selected_entity_ids == {line.entity_id}
+        assert editor.canvas.tool == "选择元素"
+        assert not editor.canvas.can_undo
+        editor.canvas.selected_entity_ids.clear()
+        editor.canvas.changed.emit()
+        assert not leaf(editor, line.entity_id).isSelected()
+        QTest.mouseClick(
+            editor.canvas, Qt.MouseButton.LeftButton, pos=editor.canvas.local_to_screen((15, 0))
+        )
+        assert leaf(editor, line.entity_id).isSelected()
+        editor.canvas.replace_draft_entities(())
+>       assert editor.navigator.tree.topLevelItem(0).child(0).childCount() == 0
+E       assert 1 == 0
+E        +  where 1 = <built-in method childCount of PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac986831480>()
+E        +    where <built-in method childCount of PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac986831480> = <PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac986831480>.childCount
+E        +      where <PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac986831480> = <built-in method child of PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac9815bb280>(0)
+E        +        where <built-in method child of PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac9815bb280> = <PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac9815bb280>.child
+E        +          where <PySide6.QtWidgets.QTreeWidgetItem object at 0x7ac9815bb280> = <built-in method topLevelItem of PySide6.QtWidgets.QTreeWidget object at 0x7ac981599f40>(0)
+E        +            where <built-in method topLevelItem of PySide6.QtWidgets.QTreeWidget object at 0x7ac981599f40> = <PySide6.QtWidgets.QTreeWidget(0x45d48230, name="draftingNavigationTree") at 0x7ac981599f40>.topLevelItem
+E        +              where <PySide6.QtWidgets.QTreeWidget(0x45d48230, name="draftingNavigationTree") at 0x7ac981599f40> = <mycad.ui.sketch_navigation.SketchNavigator(0x4556a9e0) at 0x7ac981598600>.tree
+E        +                where <mycad.ui.sketch_navigation.SketchNavigator(0x4556a9e0) at 0x7ac981598600> = <mycad.ui.sketch_editor.SketchEditorDialog(0x45d513b0) at 0x7ac9868543c0>.navigator
+
+tests/ui/test_drafting_panels.py:160: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_navigation_selection_is_bidirectional_and_history_free
+1 failed, 12 passed in 16.63s

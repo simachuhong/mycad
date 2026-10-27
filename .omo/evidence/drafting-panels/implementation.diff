@@ -1,0 +1,408 @@
+--- sketch_editor.py.before
++++ sketch_editor.py
+@@ -30,6 +30,7 @@
+     QColorDialog,
+     QComboBox,
+     QDialog,
++    QDockWidget,
+     QDoubleSpinBox,
+     QFormLayout,
+     QGridLayout,
+@@ -43,6 +44,7 @@
+     QScrollArea,
+     QSizePolicy,
+     QSpinBox,
++    QTabWidget,
+     QToolBar,
+     QToolButton,
+     QVBoxLayout,
+@@ -93,6 +95,7 @@
+ from mycad.ui.cad_icons import set_button_icon
+ from mycad.ui.dimension_tools import DimensionTools
+ from mycad.ui.layer_panel import DrawingLayerPanel
++from mycad.ui.sketch_navigation import SketchNavigator
+ from mycad.ui.sketch_selection import entity_in_selection_box
+ 
+ _SNAP_RADIUS_PX = 12.0
+@@ -443,6 +446,7 @@
+         self._line_edit_preview_original: SketchEntity | None = None
+         self._line_edit_preview_result: tuple[SketchEntity, ...] = ()
+         self.selected_entity_ids: set[str] = set()
++        self.selected_constraint_ids: set[str] = set()
+         self._hovered_entity_id: str | None = None
+         self._selection_anchor: QPointF | None = None
+         self._selection_corner = QPointF()
+@@ -632,7 +636,7 @@
+             self._cancel_selection_box()
+         self.background_entities = tuple(background)
+         self.selected_entity_ids.intersection_update(
+-            entity.entity_id for entity in self._selectable_entities()
++            entity.entity_id for entity in self.selectable_entities()
+         )
+         self._snap_candidates_cache = None
+         self.update()
+@@ -719,7 +723,7 @@
+     def _visible_entities(self) -> tuple[SketchEntity, ...]:
+         return tuple(entity for entity in self.entities if self._layer(entity).displayed)
+ 
+-    def _selectable_entities(self) -> tuple[SketchEntity, ...]:
++    def selectable_entities(self) -> tuple[SketchEntity, ...]:
+         """Include committed drawing geometry while keeping part references separate."""
+         return (
+             *self._visible_entities(),
+@@ -782,6 +786,7 @@
+         self._cancel_active_edit_gesture()
+         if tool != "选择元素":
+             self.selected_entity_ids.clear()
++            self.selected_constraint_ids.clear()
+         self.tool = tool
+         self._hovered_line_edit_entity_id = None
+         self._clear_line_edit_preview()
+@@ -837,7 +842,7 @@
+             self.message = f"几何已变更；移除了 {removed_relations} 条失效或需重新确认的自动关系。"
+         available_ids = {entity.entity_id for entity in self.entities}
+         self.selected_entity_ids.intersection_update(
+-            entity.entity_id for entity in self._selectable_entities()
++            entity.entity_id for entity in self.selectable_entities()
+         )
+         if select_new:
+             self.selected_entity_ids.update(available_ids - previous_ids)
+@@ -956,7 +961,7 @@
+         except KeyError:
+             self.active_layer_name = "0"
+         self.selected_entity_ids.intersection_update(
+-            entity.entity_id for entity in self._selectable_entities()
++            entity.entity_id for entity in self.selectable_entities()
+         )
+         self._snap_candidates_cache = None
+         self._snap_kind = ""
+@@ -967,7 +972,7 @@
+     def _hit_entity_at(self, point: Point2D) -> str | None:
+         tolerance = _SNAP_RADIUS_PX / self._scale
+         candidates: list[tuple[float, str]] = []
+-        for entity in self._selectable_entities():
++        for entity in self.selectable_entities():
+             if isinstance(entity, SplineEntity):
+                 points = entity.sampled_points()
+                 distance = min(
+@@ -1065,7 +1070,7 @@
+         first, second = self.screen_to_local(anchor), self.screen_to_local(position)
+         identities = {
+             entity.entity_id
+-            for entity in self._selectable_entities()
++            for entity in self.selectable_entities()
+             if entity_in_selection_box(entity, first, second, crossing=crossing)
+         }
+         if self._selection_modifiers & Qt.KeyboardModifier.ShiftModifier:
+@@ -3121,9 +3126,17 @@
+             label_color = (
+                 QColor(210, 45, 45)
+                 if constraint.constraint_id in self.dimension_error_constraint_ids
++                else QColor(0, 145, 180)
++                if constraint.constraint_id in self.selected_constraint_ids
+                 else QColor(*layer.color_rgb)
+             )
+-            dimension_pen = QPen(label_color, max(1.0, layer.lineweight_mm * 4))
++            dimension_pen = QPen(
++                label_color,
++                max(
++                    2.5 if constraint.constraint_id in self.selected_constraint_ids else 1.0,
++                    layer.lineweight_mm * 4,
++                ),
++            )
+             dimension_pen.setStyle(
+                 {
+                     "CONTINUOUS": Qt.PenStyle.SolidLine,
+@@ -3335,6 +3348,10 @@
+ 
+     @override
+     def mousePressEvent(self, event: QMouseEvent) -> None:
++        if event.button() == Qt.MouseButton.LeftButton and self.selected_constraint_ids:
++            self.selected_constraint_ids.clear()
++            self.changed.emit()
++            self.update()
+         if self._selection_anchor is not None:
+             if event.button() == Qt.MouseButton.LeftButton:
+                 self._finish_selection_box(event.position())
+@@ -3711,8 +3728,11 @@
+             self.update()
+             event.accept()
+             return
+-        if event.key() == Qt.Key.Key_Escape and self.selected_entity_ids:
++        if event.key() == Qt.Key.Key_Escape and (
++            self.selected_entity_ids or self.selected_constraint_ids
++        ):
+             self.selected_entity_ids.clear()
++            self.selected_constraint_ids.clear()
+             self.message = "已清除选择。"
+             self.changed.emit()
+             self.update()
+@@ -3805,7 +3825,6 @@
+         self.tool_panel = QScrollArea()
+         self.tool_panel.setWidgetResizable(True)
+         self.tool_panel.setMinimumWidth(250)
+-        self.tool_panel.setMaximumWidth(285)
+         self.tool_panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+         panel = QWidget()
+         panel_layout = QVBoxLayout(panel)
+@@ -3814,7 +3833,27 @@
+             "QToolButton:checked { background: #dceafa; border: 1px solid #2472ba; }"
+         )
+         self.tool_panel.setWidget(panel)
+-        body.addWidget(self.tool_panel)
++        self.parameter_tabs = QTabWidget()
++        self.parameter_dock = QDockWidget("绘图与修改", self.toolbar_host)
++        self.parameter_dock.setObjectName("draftingParameterDock")
++        self.parameter_dock.setAllowedAreas(
++            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
++        )
++        self.parameter_dock.setWidget(self.parameter_tabs)
++        self.toolbar_host.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.parameter_dock)
++        self.toolbar_host.resizeDocks([self.parameter_dock], [270], Qt.Orientation.Horizontal)
++        self.navigator = SketchNavigator()
++        self.navigation_dock = QDockWidget("图形导航", self.toolbar_host)
++        self.navigation_dock.setObjectName("draftingNavigationDock")
++        self.navigation_dock.setAllowedAreas(
++            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
++        )
++        self.navigation_dock.setWidget(self.navigator)
++        self.navigation_dock.setMinimumWidth(200)
++        self.toolbar_host.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.navigation_dock)
++        self.toolbar_host.resizeDocks([self.navigation_dock], [260], Qt.Orientation.Horizontal)
++        self.navigator.selection_requested.connect(self._select_navigation)
++        self.navigator.constraint_activated.connect(self._activate_navigation_constraint)
+         drawing = QVBoxLayout()
+         body.addLayout(drawing, 1)
+         controls = QGridLayout()
+@@ -3901,13 +3940,16 @@
+         ):
+             layer_bar.addWidget(check)
+         self.toolbar_menu_button = QToolButton()
+-        self.toolbar_menu_button.setText("工具栏")
++        self.toolbar_menu_button.setText("工具栏与面板")
+         self.toolbar_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+         toolbar_menu = QMenu(self.toolbar_menu_button)
+         for bar in self.drafting_toolbars:
+             toolbar_menu.addAction(bar.toggleViewAction())
+         toolbar_menu.addSeparator()
+-        toolbar_menu.addAction("恢复二维工具栏布局", self.reset_toolbar_layout)
++        for dock in self.drafting_docks:
++            toolbar_menu.addAction(dock.toggleViewAction())
++        toolbar_menu.addSeparator()
++        toolbar_menu.addAction("恢复二维布局", self.reset_toolbar_layout)
+         self.toolbar_menu_button.setMenu(toolbar_menu)
+         layer_bar.addWidget(self.toolbar_menu_button)
+         self.tool_buttons: dict[str, QToolButton] = {}
+@@ -3998,6 +4040,8 @@
+         ):
+             controls.addWidget(check, 6 + index // 2, index % 2)
+         panel_layout.addWidget(options_group)
++        panel_layout.addStretch()
++        self.parameter_tabs.addTab(self.tool_panel, "绘图")
+ 
+         origin = QFormLayout()
+         self.origin_fields: dict[str, QDoubleSpinBox] = {}
+@@ -4015,7 +4059,7 @@
+             origin.addRow(axis + "₀", field)
+         origin_group = QGroupBox("UCS 原点 / mm")
+         origin_group.setLayout(origin)
+-        panel_layout.addWidget(origin_group)
++        self.parameter_tabs.addTab(self._parameter_page(origin_group), "UCS")
+ 
+         self.canvas = SketchCanvas(self, select_committed_entities=select_committed_entities)
+         self.canvas.continuous_lines = continuous_lines
+@@ -4174,8 +4218,7 @@
+         self.transform_buttons["copy"].setToolTip(
+             "复制：选择对象、指定基点和目标点；原对象保留，单击放置副本。"
+         )
+-        panel_layout.addWidget(transform_group)
+-        panel_layout.addStretch()
++        self.parameter_tabs.addTab(self._parameter_page(transform_group), "修改")
+ 
+         self.status_label = QLabel(self.canvas.message)
+         self.status_label.setWordWrap(True)
+@@ -4225,6 +4268,23 @@
+         self.canvas.cursor_changed.connect(self._show_cursor)
+         self._sync_state()
+ 
++    @staticmethod
++    def _parameter_page(group: QGroupBox) -> QScrollArea:
++        page = QScrollArea()
++        page.setWidgetResizable(True)
++        page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
++        content = QWidget()
++        layout = QVBoxLayout(content)
++        layout.setContentsMargins(4, 4, 4, 4)
++        layout.addWidget(group)
++        layout.addStretch()
++        page.setWidget(content)
++        return page
++
++    @property
++    def drafting_docks(self) -> tuple[QDockWidget, ...]:
++        return (self.navigation_dock, self.parameter_dock)
++
+     @property
+     def drafting_toolbars(self) -> tuple[QToolBar, QToolBar, QToolBar]:
+         return (self.drawing_toolbar, self.modify_toolbar, self.dimension_toolbar)
+@@ -4251,6 +4311,104 @@
+         self.toolbar_host.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+         self.toolbar_host.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.dimension_toolbar)
+         self.dimension_toolbar.show()
++        if hasattr(self, "parameter_dock"):
++            self.parameter_dock.setFloating(False)
++            self.toolbar_host.addDockWidget(
++                Qt.DockWidgetArea.RightDockWidgetArea, self.parameter_dock
++            )
++            self.parameter_dock.show()
++            self.toolbar_host.resizeDocks([self.parameter_dock], [270], Qt.Orientation.Horizontal)
++            self.navigation_dock.setFloating(False)
++            self.toolbar_host.addDockWidget(
++                Qt.DockWidgetArea.LeftDockWidgetArea, self.navigation_dock
++            )
++            self.navigation_dock.show()
++            self.toolbar_host.resizeDocks([self.navigation_dock], [260], Qt.Orientation.Horizontal)
++
++    def _navigation_scope(self) -> tuple[frozenset[str], frozenset[str]]:
++        selectable = frozenset(e.entity_id for e in self.canvas.selectable_entities())
++        # An independently displayed DIM annotation remains selectable even when
++        # its referenced geometry's layer is off. Keep that geometry unselected.
++        in_scope = {e.entity_id for e in self.canvas.entities} | {
++            e.entity_id
++            for e, _layer in self.canvas.background_entities
++            if self.canvas.select_committed_entities
++        }
++        constraints = frozenset(
++            c.constraint_id
++            for c in self.canvas.dimension_constraints()
++            if self.canvas.annotation_layer(c).displayed
++            and all(ref.entity_id in in_scope for ref in c.references)
++        )
++        return selectable, constraints
++
++    def _sync_navigation(self) -> None:
++        selectable, constraints = self._navigation_scope()
++        self.canvas.selected_constraint_ids.intersection_update(constraints)
++        self.canvas.selected_constraint_ids.intersection_update(
++            c.constraint_id
++            for c in self.canvas.dimension_constraints()
++            if all(
++                r.entity_id not in selectable or r.entity_id in self.canvas.selected_entity_ids
++                for r in c.references
++            )
++        )
++        self.navigator.sync(
++            self.dimension_sources(),
++            frozenset(self.canvas.selected_entity_ids),
++            frozenset(self.canvas.selected_constraint_ids),
++            selectable,
++            constraints,
++        )
++
++    def _navigation_busy(self) -> bool:
++        return (
++            self.canvas.has_pending_geometry
++            or self.canvas.has_active_edit_gesture
++            or self.dimensions.mode is not None
++            or self.dimensions.candidate is not None
++        )
++
++    def _select_navigation(self, entity_ids: object, constraint_ids: object) -> None:
++        if self._navigation_busy():
++            self.status_label.setText("请先完成当前操作或按 Esc 退出，再选择导航对象。")
++            self._sync_navigation()
++            target = (
++                self.dimensions.value_editor
++                if self.dimensions.value_editor.isVisible()
++                else self.canvas
++            )
++            target.window().activateWindow()
++            target.setFocus()
++            return
++        selectable, constraints = self._navigation_scope()
++        selected_constraints = set(cast("frozenset[str]", constraint_ids)) & constraints
++        selected = set(cast("frozenset[str]", entity_ids)) & selectable
++        selected.update(
++            r.entity_id
++            for c in self.canvas.dimension_constraints()
++            if c.constraint_id in selected_constraints
++            for r in c.references
++            if r.entity_id in selectable
++        )
++        self.dimensions.cancel()
++        self.canvas.set_tool("选择元素")
++        self.canvas.selected_entity_ids = selected
++        self.canvas.selected_constraint_ids = selected_constraints
++        self.canvas.message = (
++            f"图形导航：已选 {len(selected)} 个图元、{len(selected_constraints)} 个约束。"
++        )
++        self.canvas.changed.emit()
++        self.canvas.update()
++
++    def _activate_navigation_constraint(self, identity: str) -> None:
++        if self._navigation_busy() or identity not in self._navigation_scope()[1]:
++            return
++        for sketch in self.dimension_sources():
++            for constraint in sketch.constraints:
++                if constraint.constraint_id == identity and constraint.kind in DIMENSION_KINDS:
++                    self.dimensions.edit(sketch, constraint)
++                    return
+ 
+     def toolbar_layout_state(self) -> QByteArray:
+         return (
+@@ -4275,8 +4433,8 @@
+     def hideEvent(self, event: QHideEvent) -> None:
+         if self._suspended_toolbar_state is None:
+             self._suspended_toolbar_state = self.toolbar_host.saveState()
+-        for bar in self.drafting_toolbars:
+-            bar.hide()
++        for widget in (*self.drafting_toolbars, *self.drafting_docks):
++            widget.hide()
+         super().hideEvent(event)
+ 
+     @override
+@@ -4659,6 +4817,8 @@
+         if return_to_zero and self.layer_table.get("0").frozen:
+             self.canvas.message = "0 图层已冻结，请先解冻后开始绘图。"
+         elif self.canvas.set_tool(tool):
++            if tool != "选择元素":
++                self.parameter_tabs.setCurrentIndex(0)
+             if return_to_zero:
+                 self.layer_combo.setCurrentText("0")
+             self.canvas.setFocus()
+@@ -4731,6 +4891,7 @@
+             self._apply_transform("rotate")
+ 
+     def _start_transform(self, operation: str) -> None:
++        self.parameter_tabs.setCurrentIndex(2)
+         if operation in {"move", "copy", "rotate", "mirror"}:
+             self.canvas.begin_transform(
+                 operation,
+@@ -4920,3 +5081,4 @@
+             )
+         if self.canvas.message:
+             self.status_label.setText(self.canvas.message)
++        self._sync_navigation()
+--- dimension_tools.py.before
++++ dimension_tools.py
+@@ -647,6 +647,12 @@
+         self.original = sketch
+         self.candidate = dimension
+         self._editing = True
++        selectable = {e.entity_id for e in self.canvas.selectable_entities()}
++        self.canvas.selected_entity_ids = {
++            ref.entity_id for ref in dimension.references if ref.entity_id in selectable
++        }
++        self.canvas.selected_constraint_ids = {dimension.constraint_id}
++        self.canvas.changed.emit()
+         self.anchor_combo.blockSignals(True)
+         self.anchor_combo.setCurrentIndex(self.anchor_combo.findData(dimension.anchor_mode))
+         self.anchor_combo.blockSignals(False)
+@@ -689,6 +695,7 @@
+             )
+             self.inline_box.show()
+             self.inline_box.raise_()
++            self.value_editor.window().activateWindow()
+             self.value_editor.setFocus()
+             self.value_editor.selectAll()
+ 

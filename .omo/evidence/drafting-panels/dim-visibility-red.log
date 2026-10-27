@@ -1,0 +1,29 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_visible_dim_layer_remains_navigable_when_geometry_layer_is_hidden ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7852e3bdb2c0>
+
+    def test_visible_dim_layer_remains_navigable_when_geometry_layer_is_hidden(qtbot: QtBot) -> None:
+        from dataclasses import replace
+    
+        editor = populated_editor(qtbot)
+        dimension = replace(editor.canvas.constraints[0], layer_name='DIM')
+        editor.canvas.constraints = [dimension]
+        table = editor.layer_table.replace(SketchLayer('0', visible=False))
+        editor.canvas.set_layer_table(table, 'DIM')
+        editor.canvas.changed.emit()
+        item = leaf(editor, dimension.constraint_id)
+>       assert item.flags() & Qt.ItemFlag.ItemIsSelectable
+E       AssertionError: assert (<ItemFlag.ItemIsDragEnabled|ItemIsDropEnabled|ItemIsUserCheckable: 28> & <ItemFlag.ItemIsSelectable: 1>)
+E        +  where <ItemFlag.ItemIsDragEnabled|ItemIsDropEnabled|ItemIsUserCheckable: 28> = <built-in method flags of PySide6.QtWidgets.QTreeWidgetItem object at 0x7852e3a694c0>()
+E        +    where <built-in method flags of PySide6.QtWidgets.QTreeWidgetItem object at 0x7852e3a694c0> = <PySide6.QtWidgets.QTreeWidgetItem object at 0x7852e3a694c0>.flags
+E        +  and   <ItemFlag.ItemIsSelectable: 1> = <flag 'ItemFlag'>.ItemIsSelectable
+E        +    where <flag 'ItemFlag'> = Qt.ItemFlag
+
+tests/ui/test_drafting_panels.py:307: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_visible_dim_layer_remains_navigable_when_geometry_layer_is_hidden
+1 failed, 14 deselected in 9.39s

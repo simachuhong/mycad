@@ -1,0 +1,25 @@
+{
+  "tests": 902,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "duration_seconds": 137.03,
+  "checks": {
+    "ruff": "pass",
+    "format": "194 files",
+    "basedpyright": "0 errors, 0 warnings, 0 notes",
+    "pytest": "902 passed",
+    "diff_whitespace": "pass"
+  },
+  "validated_file_sha256": {
+    "src/mycad/core/document.py": "aa08c6a34b76efc01df9a6965a7090ce105d8a2791c2d52d33b8d46a86510b3a",
+    "src/mycad/core/viewport_protocol.py": "33dac08058af32145b59771bfd8398329743708ddec98e80a9fa9af2228c3ecf",
+    "src/mycad/geom/kernel.py": "765959ef7588d8fe8eb36001fb2abf713203a2ae29d0d38c5194e94e8a303649",
+    "src/mycad/ui/viewport.py": "18f00230e1e47677b789d2db0ac317cfd93abe6bba80dea447300587b3c8b7ef",
+    "tests/core/test_history_isolation.py": "f38b6db0f50f6d43cd892e721b0ac742dff9c368cb4d45a899c6b00803f10070",
+    "tests/geom/test_viewport_snapshots.py": "80392724aa39ff1eafb91152ba17af4e8872ad8d7bc59f64ec3e9908a814d639",
+    "tests/ui/test_viewport.py": "74cb78df19e3f2bdeec488cb5ca92b92565ba129e5bcfcd3201e6e1b1aed35c7",
+    "tests/ui/conftest.py": "a5d9825efd8dfbfbf67606512cdce40d3980b868962985f1c7f4b4c1ab09b624",
+    "tests/ui/test_menus_toolbar.py": "99b61e0488d43115bcd9736d2c66c578f0cca6e4fa3e37821144bea0549154cc"
+  }
+}

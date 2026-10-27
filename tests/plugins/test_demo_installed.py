@@ -28,7 +28,7 @@ from mycad.builtin_commands import BUILTIN_COMMAND_SPECS
 #: tests/plugins/test_demo_installed.py -> parents[2] is the repository root.
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 DEMO_DIR: Path = REPO_ROOT / "plugins_examples" / "mycad_plugin_demo"
-BUILTIN_IDS: tuple[str, ...] = tuple(spec.id for spec in BUILTIN_COMMAND_SPECS)
+BUILTIN_IDS: tuple[str, ...] = tuple(dict.fromkeys(spec.id for spec in BUILTIN_COMMAND_SPECS))
 
 #: Exit 0 only when the demo package is no longer importable.
 _RESIDUAL_PROBE = (

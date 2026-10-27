@@ -1,0 +1,35 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_two_dimensional_console_is_a_collapsed_tab_strip _____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x738633475490>
+
+    def test_two_dimensional_console_is_a_collapsed_tab_strip(qtbot: QtBot) -> None:
+        window = drawing_window(qtbot)
+        tabs = window.bottom_tabs
+        assert tabs is not None
+        assert [tabs.tabText(i) for i in range(tabs.count())] == ["信息", "CLI", "AI 对话", "计划"]
+        assert window.bottom_dock.isVisible()
+        assert not tabs.expanded
+        qtbot.wait(20)
+        assert window.bottom_dock.height() < 80
+        draft = window.active_sketch_dialog()
+        assert draft is not None
+        assert draft.toolbar_host.statusBar().isHidden()
+        QTest.mouseClick(
+            tabs.tabBar(), Qt.MouseButton.LeftButton, pos=tabs.tabBar().tabRect(1).center()
+        )
+        assert tabs.expanded and tabs.currentWidget() is window.cli_tab
+        qtbot.wait(20)
+>       assert 160 <= window.bottom_dock.height() < 330
+E       assert 342 < 330
+E        +  where 342 = <built-in method height of PySide6.QtWidgets.QDockWidget object at 0x73863347a640>()
+E        +    where <built-in method height of PySide6.QtWidgets.QDockWidget object at 0x73863347a640> = <PySide6.QtWidgets.QDockWidget(0x42b75a40, name="bottomPanelDock") at 0x73863347a640>.height
+E        +      where <PySide6.QtWidgets.QDockWidget(0x42b75a40, name="bottomPanelDock") at 0x73863347a640> = <mycad.ui.main_window.MainWindow(0x432c73b0) at 0x738633479e40>.bottom_dock
+
+tests/ui/test_workspace_console.py:38: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_workspace_console.py::test_two_dimensional_console_is_a_collapsed_tab_strip
+1 failed in 12.85s

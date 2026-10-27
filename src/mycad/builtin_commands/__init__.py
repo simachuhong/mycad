@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Built-in Phase-0 commands (T7a): shared ``$defs`` table + 8 CommandSpecs.
+"""Built-in Phase-0 and released P2 commands with shared ``$defs``.
 
 ``COMMAND_SCHEMA_DEFS`` is the single formal A.0 transcription;
-``BUILTIN_COMMAND_SPECS`` the eight A.1 specs in catalog order. The
+``BUILTIN_COMMAND_SPECS`` the A.1 specs plus individually released P2 commands. The
 composition root (``build_app``) registers them into a
 ``CommandRegistry(schema_defs=COMMAND_SCHEMA_DEFS)`` — built-ins never go
 through entry_points.
@@ -20,5 +20,7 @@ __all__ = [
     "COMMAND_SCHEMA_DEFS",
 ]
 
-#: The eight command ids, in BUILTIN_COMMAND_SPECS (A.1 catalog) order.
-BUILTIN_COMMAND_IDS: tuple[str, ...] = tuple(spec.id for spec in BUILTIN_COMMAND_SPECS)
+#: Unique command ids in the explicit catalog order; versions live in SPECS.
+BUILTIN_COMMAND_IDS: tuple[str, ...] = tuple(
+    dict.fromkeys(spec.id for spec in BUILTIN_COMMAND_SPECS)
+)

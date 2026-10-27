@@ -1,0 +1,36 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_narrow_command_bar_keeps_confirmation_visible ______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x743f59bec3b0>
+
+    def test_narrow_command_bar_keeps_confirmation_visible(qtbot: QtBot) -> None:
+        window = QMainWindow()
+        qtbot.addWidget(window)
+        bar = ModelingCommandBar(window)
+        window.addToolBar(bar)
+        bar.configure("feature.hole_pattern")
+        window.resize(683, 384)
+        window.show()
+        qtbot.wait(50)
+        assert window.width() <= 683
+        for name in ("modelingCommitButton", "modelingCancelButton"):
+            button = bar.findChild(QPushButton, name)
+            assert button is not None and button.isVisible()
+            assert window.rect().contains(button.mapTo(window, QPoint(0, 0)))
+            assert window.rect().contains(button.mapTo(window, button.rect().bottomRight()))
+        field = bar.findChild(QDoubleSpinBox, "start_angle_deg")
+        assert field is not None
+        field.setFocus(Qt.FocusReason.TabFocusReason)
+        qtbot.wait(30)
+>       assert not field.visibleRegion().isEmpty()
+E       assert not True
+E        +  where True = <built-in method isEmpty of PySide6.QtGui.QRegion object at 0x743f59bf7dc0>()
+E        +    where <built-in method isEmpty of PySide6.QtGui.QRegion object at 0x743f59bf7dc0> = <PySide6.QtGui.QRegion(null) at 0x743f59bf7dc0>.isEmpty
+E        +      where <PySide6.QtGui.QRegion(null) at 0x743f59bf7dc0> = <built-in method visibleRegion of _DistanceSpinBox object at 0x743f59bf7bc0>()
+E        +        where <built-in method visibleRegion of _DistanceSpinBox object at 0x743f59bf7bc0> = <mycad.ui.modeling_toolbar._DistanceSpinBox(0x1dcc4590, name="start_angle_deg") at 0x743f59bf7bc0>.visibleRegion
+
+tests/ui/test_modeling_toolbar.py:34: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_modeling_toolbar.py::test_narrow_command_bar_keeps_confirmation_visible
+1 failed, 9 deselected in 21.77s

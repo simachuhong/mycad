@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Field-level lock of the eight built-in CommandSpecs (plan Appendix A.1)
+"""Field-level lock of built-in CommandSpecs (Appendix A.1 plus releases)
 plus registry assembly, validate_params smoke tests and structural guards
 (no P1/P2 id leaks, AFFECTED_OBJECTS shape, PlannedCommand table gate,
 single COMMAND_SCHEMA_DEFS assignment site, CLI alias uniqueness).
@@ -28,7 +28,7 @@ from mycad.core.exceptions import UnknownCommandError, ValidationError
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: The eight Appendix A.1 ids in catalog order.
+#: Appendix A.1 ids followed by individually released P2 drawing/modeling commands.
 EXPECTED_IDS: tuple[str, ...] = (
     "feature.box",
     "feature.cylinder",
@@ -38,11 +38,22 @@ EXPECTED_IDS: tuple[str, ...] = (
     "feature.hole_pattern",
     "modify.fillet",
     "modify.boolean_cut",
+    "modify.boolean_intersect",
+    "modify.boolean_bodies",
+    "modify.body_transform",
+    "modify.body_pattern",
+    "modify.chamfer",
+    "sketch.create",
+    "sketch.constraint.add",
+    "sketch.constraint.update",
+    "drawing.layers.set",
 )
 
 
-def _spec(command_id: str) -> CommandSpec:
-    matches = [spec for spec in BUILTIN_COMMAND_SPECS if spec.id == command_id]
+def _spec(command_id: str, version: int = 1) -> CommandSpec:
+    matches = [
+        spec for spec in BUILTIN_COMMAND_SPECS if spec.id == command_id and spec.version == version
+    ]
     assert len(matches) == 1
     return matches[0]
 
@@ -86,7 +97,7 @@ EXPECTED_CYLINDER_SCHEMA: dict[str, object] = {
 EXPECTED_EXTRUDE_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
-        "profile": {"$ref": "#/$defs/Profile"},
+        "profile": {"$ref": "#/$defs/ExtrudeProfile"},
         "distance": {"type": "number"},
         "mode": {"$ref": "#/$defs/Mode"},
     },
@@ -137,7 +148,12 @@ EXPECTED_FILLET_SCHEMA: dict[str, object] = {
     "properties": {
         "edges": {
             "type": "array",
-            "items": {"$ref": "#/$defs/EdgeSelector"},
+            "items": {
+                "oneOf": [
+                    {"$ref": "#/$defs/EdgeSelector"},
+                    {"$ref": "#/$defs/InteractiveEdgeSelector"},
+                ]
+            },
             "minItems": 1,
         },
         "radius": {"$ref": "#/$defs/Positive"},
@@ -146,7 +162,33 @@ EXPECTED_FILLET_SCHEMA: dict[str, object] = {
     "additionalProperties": False,
 }
 
+EXPECTED_CHAMFER_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "edges": {
+            "type": "array",
+            "items": {
+                "oneOf": [
+                    {"$ref": "#/$defs/EdgeSelector"},
+                    {"$ref": "#/$defs/InteractiveEdgeSelector"},
+                ]
+            },
+            "minItems": 1,
+        },
+        "distance": {"$ref": "#/$defs/Positive"},
+    },
+    "required": ["edges", "distance"],
+    "additionalProperties": False,
+}
+
 EXPECTED_BOOLEAN_CUT_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+    "required": ["tool"],
+    "additionalProperties": False,
+}
+
+EXPECTED_BOOLEAN_INTERSECT_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {"tool": {"$ref": "#/$defs/Tool"}},
     "required": ["tool"],
@@ -184,11 +226,210 @@ def test_extrude_spec_fields() -> None:
     spec = _spec("feature.extrude")
     assert spec.id == "feature.extrude"
     assert spec.version == 1
-    assert spec.summary_en == "Extrude a parametric profile"
+    assert spec.summary_en == "Extrude a parametric profile or a selected planar face"
     assert spec.label_zh == "拉伸"
     assert spec.cli.verb_aliases == ("extrude",)
     assert spec.undo_compensation == "history_replay"
     assert spec.params_schema == EXPECTED_EXTRUDE_SCHEMA
+
+
+def test_sketch_extrude_v2_is_additive_and_keeps_the_cli_entry() -> None:
+    v1 = _spec("feature.extrude", 1)
+    v2 = _spec("feature.extrude", 2)
+    registry = _builtin_registry()
+
+    assert v1.params_schema == EXPECTED_EXTRUDE_SCHEMA
+    assert v2.cli.verb_aliases == ("extrude",)
+    assert v2.params_schema["properties"] == {
+        "profile": {"$ref": "#/$defs/SketchExtrudeProfile"},
+        "distance": {"type": "number"},
+        "mode": {"$ref": "#/$defs/Mode"},
+    }
+    v3_properties = cast(
+        "dict[str, object]", _spec("feature.extrude", 3).params_schema["properties"]
+    )
+    assert v3_properties["extent_mode"] == {
+        "type": "string",
+        "enum": ["one_sided", "symmetric"],
+        "default": "one_sided",
+        "description": "symmetric uses distance as total depth, split equally across the sketch plane",
+    }
+    assert registry.versions("feature.extrude") == (1, 2, 3, 4)
+    assert registry.resolve_verb("extrude") == _spec("feature.extrude", 4)
+
+
+def test_sketch_extrude_v3_adds_symmetric_extent_without_changing_v2() -> None:
+    v2 = _spec("feature.extrude", 2)
+    v3 = _spec("feature.extrude", 3)
+    registry = _builtin_registry()
+    sketch_params = {
+        "profile": {
+            "type": "sketch",
+            "sketch_id": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+        },
+        "distance": 8.0,
+        "mode": "new",
+        "extent_mode": "symmetric",
+    }
+
+    assert v2.params_schema["properties"] == {
+        "profile": {"$ref": "#/$defs/SketchExtrudeProfile"},
+        "distance": {"type": "number"},
+        "mode": {"$ref": "#/$defs/Mode"},
+    }
+    assert (
+        validate_params(v3, sketch_params, defs=registry.schema_defs)["extent_mode"] == "symmetric"
+    )
+    assert (
+        validate_params(
+            v3,
+            {"profile": sketch_params["profile"], "distance": 8.0},
+            defs=registry.schema_defs,
+        )["extent_mode"]
+        == "one_sided"
+    )
+    with pytest.raises(ValidationError):
+        validate_params(v2, sketch_params, defs=registry.schema_defs)
+
+
+def test_sketch_extrude_v4_requires_a_planar_target_for_to_face() -> None:
+    params = {
+        "profile": {
+            "type": "sketch",
+            "sketch_id": "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a",
+        },
+        "mode": "new",
+        "extent_mode": "to_face",
+        "target_face": {
+            "surface": "plane",
+            "axis": "+Z",
+            "center_mm": [0.0, 0.0, 25.0],
+        },
+    }
+
+    validated = validate_params(_spec("feature.extrude", 4), params, defs=COMMAND_SCHEMA_DEFS)
+
+    assert validated["extent_mode"] == "to_face"
+    assert validated["target_face"] == params["target_face"]
+    assert (
+        validate_params(
+            _spec("feature.extrude", 4),
+            {key: value for key, value in params.items() if key != "mode"},
+            defs=COMMAND_SCHEMA_DEFS,
+        )["mode"]
+        == "new"
+    )
+    with pytest.raises(ValidationError, match="oneOf"):
+        validate_params(
+            _spec("feature.extrude", 4),
+            {key: value for key, value in params.items() if key != "target_face"},
+            defs=COMMAND_SCHEMA_DEFS,
+        )
+    with pytest.raises(ValidationError, match="oneOf"):
+        validate_params(
+            _spec("feature.extrude", 4),
+            {
+                **params,
+                "target_face": {
+                    "surface": "cylinder",
+                    "axis": "+Z",
+                    "center_mm": [0.0, 0.0, 25.0],
+                    "radius_mm": 5.0,
+                },
+            },
+            defs=COMMAND_SCHEMA_DEFS,
+        )
+
+
+def test_sketch_revolve_v2_is_additive_and_keeps_the_cli_entry() -> None:
+    v1 = _spec("feature.revolve", 1)
+    v2 = _spec("feature.revolve", 2)
+    registry = _builtin_registry()
+
+    assert v1.version == 1
+    assert v2.version == 2
+    assert v2.cli.verb_aliases == ("revolve",)
+    properties = cast("dict[str, object]", v2.params_schema["properties"])
+    assert properties["profile"] == {"$ref": "#/$defs/SketchRevolveProfile"}
+    assert registry.versions("feature.revolve") == (1, 2, 3)
+    resolved = registry.resolve_verb("revolve")
+    assert resolved is not None and resolved.version == 3
+
+
+def test_sketch_revolve_v3_adds_a_stable_construction_line_axis_reference() -> None:
+    v2 = _spec("feature.revolve", 2)
+    v3 = _spec("feature.revolve", 3)
+    registry = _builtin_registry()
+    sketch_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+    entity_id = "1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b"
+    params = {
+        "profile": {"type": "sketch", "sketch_id": sketch_id},
+        "axis_reference": {
+            "type": "sketch_line",
+            "sketch_id": sketch_id,
+            "entity_id": entity_id,
+        },
+        "angle_deg": 360.0,
+        "mode": "new",
+    }
+
+    assert v2.params_schema == {
+        "type": "object",
+        "properties": {
+            "profile": {"$ref": "#/$defs/SketchRevolveProfile"},
+            "axis": {
+                "oneOf": [
+                    {"const": "X"},
+                    {"const": "Y"},
+                    {"const": "Z"},
+                    {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                ]
+            },
+            "angle_deg": {
+                "type": "number",
+                "exclusiveMinimum": 0.0,
+                "maximum": 360.0,
+                "default": 360.0,
+            },
+            "mode": {"$ref": "#/$defs/Mode"},
+        },
+        "required": ["profile", "axis"],
+        "additionalProperties": False,
+    }
+    assert v3.version == 3
+    assert (
+        validate_params(v3, params, defs=registry.schema_defs)["axis_reference"]
+        == params["axis_reference"]
+    )
+    with pytest.raises(ValidationError):
+        validate_params(v3, {**params, "axis": "Z"}, defs=registry.schema_defs)
+    with pytest.raises(ValidationError):
+        validate_params(v2, params, defs=registry.schema_defs)
+    assert registry.versions("feature.revolve") == (1, 2, 3)
+    assert registry.resolve_verb("revolve") == v3
+
+
+def test_sketch_hole_v2_is_additive_and_keeps_the_cli_entry() -> None:
+    v1 = _spec("feature.hole", 1)
+    v2 = _spec("feature.hole", 2)
+    registry = _builtin_registry()
+
+    assert v1.version == 1
+    assert v2.version == 2
+    assert v2.cli.verb_aliases == ("hole",)
+    assert v2.params_schema == {
+        "oneOf": [
+            {"$ref": "#/$defs/Hole"},
+            {"$ref": "#/$defs/SketchHole"},
+        ]
+    }
+    assert registry.versions("feature.hole") == (1, 2)
+    assert registry.resolve_verb("hole") == v2
 
 
 def test_revolve_spec_fields() -> None:
@@ -236,6 +477,17 @@ def test_fillet_spec_fields() -> None:
     assert spec.params_schema == EXPECTED_FILLET_SCHEMA
 
 
+def test_chamfer_spec_fields() -> None:
+    spec = _spec("modify.chamfer")
+    assert spec.id == "modify.chamfer"
+    assert spec.version == 1
+    assert spec.summary_en == "Chamfer selected edges with equal setbacks"
+    assert spec.label_zh == "倒角"
+    assert spec.cli.verb_aliases == ("chamfer",)
+    assert spec.undo_compensation == "history_replay"
+    assert spec.params_schema == EXPECTED_CHAMFER_SCHEMA
+
+
 def test_boolean_cut_spec_fields() -> None:
     spec = _spec("modify.boolean_cut")
     assert spec.id == "modify.boolean_cut"
@@ -247,19 +499,255 @@ def test_boolean_cut_spec_fields() -> None:
     assert spec.params_schema == EXPECTED_BOOLEAN_CUT_SCHEMA
 
 
+def test_boolean_intersect_spec_fields() -> None:
+    spec = _spec("modify.boolean_intersect")
+    assert spec.id == "modify.boolean_intersect"
+    assert spec.version == 1
+    assert spec.summary_en == "Intersect the current model with an inline tool solid"
+    assert spec.label_zh == "交集"
+    assert spec.cli.verb_aliases == ("intersect",)
+    assert spec.undo_compensation == "history_replay"
+    assert spec.params_schema == EXPECTED_BOOLEAN_INTERSECT_SCHEMA
+
+
+def test_body_boolean_and_transform_specs_use_replayable_body_locators() -> None:
+    boolean = _spec("modify.boolean_bodies")
+    transform = _spec("modify.body_transform")
+    pattern = _spec("modify.body_pattern")
+    assert boolean.min_archive_version == 2
+    assert boolean.params_schema == {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": ["union", "difference", "intersection"],
+            },
+            "target_body": {"$ref": "#/$defs/BodySelector"},
+            "tool_body": {"$ref": "#/$defs/BodySelector"},
+            "keep_tool": {"type": "boolean", "default": False},
+        },
+        "required": ["operation", "target_body", "tool_body"],
+        "additionalProperties": False,
+    }
+    assert transform.params_schema["properties"] == {
+        "body": {"$ref": "#/$defs/BodySelector"},
+        "transform": {"$ref": "#/$defs/BodyTransform"},
+    }
+    assert pattern.params_schema["properties"] == {
+        "seed_body": {"$ref": "#/$defs/BodySelector"},
+        "pattern": {"$ref": "#/$defs/BodyPattern"},
+    }
+
+
+def test_sketch_create_spec_is_versioned_and_requires_v2_persistence() -> None:
+    spec = _spec("sketch.create", 1)
+
+    assert spec.version == 1
+    assert spec.min_archive_version == 2
+    assert spec.label_zh == "创建草图"
+    assert spec.cli.verb_aliases == ("sketch-create",)
+    assert spec.params_schema["required"] == ["sketch_id", "frame", "entities"]
+
+
+def test_sketch_create_v2_schema_accepts_layered_sketch_and_rejects_missing_entity_layer() -> None:
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+
+    layer = SketchLayer("OUTLINE", color_rgb=(20, 80, 160), linetype="DASHED")
+    sketch = Sketch(
+        "0a0a0a0a0a0a4a0a8a0a0a0a0a0a0a0a",
+        WorkPlaneFrame.xy(),
+        (
+            LineEntity(
+                "1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b",
+                (0.0, 0.0),
+                (10.0, 0.0),
+                layer_name="OUTLINE",
+            ),
+        ),
+        layers=SketchLayerTable().add(layer),
+    )
+    spec = _spec("sketch.create", 2)
+
+    validated = validate_params(spec, sketch.to_mapping(), defs=COMMAND_SCHEMA_DEFS)
+    invalid = sketch.to_mapping()
+    invalid_entities = cast("list[object]", invalid["entities"])
+    invalid_entities[0] = {
+        key: value
+        for key, value in cast("dict[str, object]", invalid_entities[0]).items()
+        if key != "layer_name"
+    }
+    validated_layers = cast("list[dict[str, object]]", validated["layers"])
+
+    assert validated_layers[1]["name"] == "OUTLINE"
+    with pytest.raises(ValidationError):
+        validate_params(spec, invalid, defs=COMMAND_SCHEMA_DEFS)
+
+
+def test_sketch_create_v2_schema_accepts_replayable_face_support() -> None:
+    from mycad.core.sketch import LineEntity, Sketch, SketchSupportFace, WorkPlaneFrame
+
+    sketch = Sketch(
+        "0a0a0a0a0a0a4a0a8a0a0a0a0a0a0a0a",
+        WorkPlaneFrame.xy(),
+        (LineEntity("1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b", (0.0, 0.0), (10.0, 0.0)),),
+        support_face=SketchSupportFace((1.0, 2.0, 3.0), "+Z", 0),
+    )
+
+    validated = validate_params(
+        _spec("sketch.create", 2), sketch.to_mapping(), defs=COMMAND_SCHEMA_DEFS
+    )
+
+    assert validated["support_face"] == {
+        "surface": "plane",
+        "center_mm": [1.0, 2.0, 3.0],
+        "axis": "+Z",
+        "rank": 0,
+    }
+
+
+def test_sketch_create_v3_schema_accepts_associated_dimensions() -> None:
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    sketch = Sketch(
+        "0a0a0a0a0a0a4a0a8a0a0a0a0a0a0a0a",
+        WorkPlaneFrame.xy(),
+        (
+            LineEntity(
+                "1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b",
+                (0.0, 0.0),
+                (10.0, 0.0),
+            ),
+        ),
+        constraints=(
+            SketchConstraint(
+                "2c2c2c2c2c2c4c2c8c2c2c2c2c2c2c2c",
+                "length",
+                (SketchGeometryReference("1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b", "geometry"),),
+                value=10.0,
+                unit="mm",
+                driving=False,
+                precision=3,
+                scale=2.0,
+            ),
+        ),
+    )
+
+    validated = validate_params(
+        _spec("sketch.create", 3), sketch.to_mapping(version=3), defs=COMMAND_SCHEMA_DEFS
+    )
+
+    assert validated["constraints"] == [sketch.constraints[0].to_mapping()]
+
+
+def test_sketch_create_v3_schema_accepts_inferred_geometric_relations() -> None:
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    sketch = Sketch(
+        "0a0a0a0a0a0a4a0a8a0a0a0a0a0a0a0a",
+        WorkPlaneFrame.xy(),
+        (
+            LineEntity(
+                "1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b",
+                (0.0, 0.0),
+                (10.0, 0.0),
+            ),
+        ),
+        constraints=(
+            SketchConstraint(
+                "2c2c2c2c2c2c4c2c8c2c2c2c2c2c2c2c",
+                "horizontal",
+                (SketchGeometryReference("1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b", "geometry"),),
+                source="inferred",
+            ),
+        ),
+    )
+
+    validated = validate_params(
+        _spec("sketch.create", 3), sketch.to_mapping(version=3), defs=COMMAND_SCHEMA_DEFS
+    )
+
+    assert validated["constraints"] == [sketch.constraints[0].to_mapping()]
+
+
+def test_sketch_constraint_command_is_versioned_and_replayable() -> None:
+    spec = _spec("sketch.constraint.add")
+
+    assert spec.version == 1
+    assert spec.min_archive_version == 2
+    assert spec.label_zh == "添加草图约束"
+    assert spec.cli.verb_aliases == ()
+    assert spec.undo_compensation == "history_replay"
+    assert spec.params_schema["required"] == [
+        "sketch_id",
+        "base_state_sha256",
+        "constraint",
+        "solver_id",
+        "solver_version",
+        "degrees_of_freedom",
+        "solution_entities",
+    ]
+
+
+def test_sketch_constraint_add_v2_accepts_formatting_and_v1_remains_frozen() -> None:
+    params: dict[str, object] = {
+        "sketch_id": "0a0a0a0a0a0a4a0a8a0a0a0a0a0a0a0a",
+        "base_state_sha256": "0" * 64,
+        "constraint": {
+            "constraint_id": "2c2c2c2c2c2c4c2c8c2c2c2c2c2c2c2c",
+            "kind": "length",
+            "references": [
+                {
+                    "entity_id": "1b1b1b1b1b1b4b1b8b1b1b1b1b1b1b1b",
+                    "kind": "geometry",
+                }
+            ],
+            "value": 10.0,
+            "unit": "mm",
+            "driving": False,
+            "source": "user",
+            "precision": 3,
+            "scale": 2.0,
+        },
+        "solver_id": "planegcs",
+        "solver_version": "1.2.3",
+        "degrees_of_freedom": 2,
+        "solution_entities": [],
+    }
+
+    assert _spec("sketch.constraint.add", 2).version == 2
+    validate_params(_spec("sketch.constraint.add", 2), params, defs=COMMAND_SCHEMA_DEFS)
+    with pytest.raises(ValidationError):
+        validate_params(_spec("sketch.constraint.add", 1), params, defs=COMMAND_SCHEMA_DEFS)
+    normalized = validate_params(
+        _spec("sketch.constraint.add", 3), params, defs=COMMAND_SCHEMA_DEFS
+    )
+    assert normalized["rebuild_consumers"] is True
+    with pytest.raises(ValidationError):
+        validate_params(
+            _spec("sketch.constraint.add", 3),
+            {**params, "rebuild_consumers": False},
+            defs=COMMAND_SCHEMA_DEFS,
+        )
+    with pytest.raises(ValidationError):
+        validate_params(_spec("sketch.constraint.add", 2), normalized, defs=COMMAND_SCHEMA_DEFS)
+
+
 # ---------------------------------------------------------------------------
 # registry assembly + catalog order
 # ---------------------------------------------------------------------------
 
 
-def test_registry_holds_exactly_the_eight_appendix_a1_ids() -> None:
+def test_registry_holds_the_appendix_a1_ids_and_released_p2_ids() -> None:
     registry = _builtin_registry()
     assert _registered_ids(registry) == sorted(EXPECTED_IDS)
 
 
 def test_builtin_ids_follow_catalog_order() -> None:
     assert BUILTIN_COMMAND_IDS == EXPECTED_IDS
-    assert tuple(spec.id for spec in BUILTIN_COMMAND_SPECS) == EXPECTED_IDS
+    assert tuple(dict.fromkeys(spec.id for spec in BUILTIN_COMMAND_SPECS)) == EXPECTED_IDS
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +827,8 @@ def test_validate_params_pattern_linear_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 P1_P2_LEAKS: tuple[str, ...] = (
-    "chamfer",
     "shell",
     "union",
-    "intersect",
     "pattern_linear",
     "mirror",
     "draft",
@@ -368,10 +854,16 @@ def test_no_datum_namespace_leak() -> None:
 
 
 def test_affected_objects_static_shape() -> None:
-    assert len(AFFECTED_OBJECTS) == 8
+    assert len(AFFECTED_OBJECTS) == 13
     ids = _registered_ids(_builtin_registry())
-    assert set(AFFECTED_OBJECTS) == set(ids)
-    assert len(set(AFFECTED_OBJECTS.values())) == 8
+    # User-confirmed drawing/constraint operations are not agent PlannedCommands.
+    assert set(AFFECTED_OBJECTS) == set(ids) - {
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+        "drawing.layers.set",
+    }
+    assert len(set(AFFECTED_OBJECTS.values())) == 13
     assert set(AFFECTED_OBJECTS.values()) == {
         "box_body",
         "cylinder_body",
@@ -380,13 +872,26 @@ def test_affected_objects_static_shape() -> None:
         "hole",
         "hole_pattern",
         "edge",
+        "chamfer_edge",
         "tool_body",
+        "intersection_tool_body",
+        "body_pair",
+        "body_transform",
+        "body_pattern",
     }
 
 
 @pytest.mark.parametrize(
     "unknown_id",
-    ["feature.sweep", "modify.chamfer", "datum.xy", "", "feature.boxx"],
+    [
+        "feature.sweep",
+        "datum.xy",
+        "",
+        "feature.boxx",
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+    ],
 )
 def test_planned_command_rejects_out_of_table_ids(unknown_id: str) -> None:
     with pytest.raises(UnknownCommandError):
@@ -397,6 +902,17 @@ def test_planned_command_rejects_out_of_table_ids(unknown_id: str) -> None:
             summary_en="",
             affected_object="box_body",
         )
+
+
+def test_chamfer_is_available_to_the_plan_confirmation_table() -> None:
+    planned = PlannedCommand(
+        id="modify.chamfer",
+        version=1,
+        params={"edges": [], "distance": 1.0},
+        summary_en="Chamfer selected edges with equal setbacks",
+        affected_object="chamfer_edge",
+    )
+    assert planned.id == "modify.chamfer"
 
 
 # ---------------------------------------------------------------------------
@@ -425,9 +941,13 @@ def test_command_schema_defs_single_assignment_site() -> None:
 
 
 def test_cli_aliases_are_pairwise_distinct() -> None:
-    aliases = [alias for spec in BUILTIN_COMMAND_SPECS for alias in spec.cli.verb_aliases]
-    assert len(aliases) == 8
-    assert len(set(aliases)) == 8
+    latest: dict[str, CommandSpec] = {}
+    for spec in BUILTIN_COMMAND_SPECS:
+        if spec.id not in latest or spec.version > latest[spec.id].version:
+            latest[spec.id] = spec
+    aliases = [alias for spec in latest.values() for alias in spec.cli.verb_aliases]
+    assert len(aliases) == 14
+    assert len(set(aliases)) == 14
 
 
 def test_cut_verb_is_exclusive_to_boolean_cut() -> None:

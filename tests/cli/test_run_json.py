@@ -16,6 +16,8 @@ from mycad.app import AppServices, build_app
 from mycad.cli.__main__ import main
 from mycad.cli.plans import validate_plan_dict
 from mycad.cli.session import CliSession
+from mycad.commands.spec import CliSyntax, CommandSpec
+from mycad.core.exceptions import UnknownCommandError, ValidationError
 from tests.cli._flange import FLANGE_VOLUME, flange_plan, write_plan
 
 
@@ -34,6 +36,13 @@ def _steps(plan: dict[str, object]) -> list[dict[str, object]]:
 
 def test_missing_plan_file_is_usage_error(tmp_path: Path) -> None:
     assert main(["run", "--json", str(tmp_path / "absent.json")]) == 2
+
+
+def test_plan_writes_native_archive(services: AppServices, tmp_path: Path) -> None:
+    plan = flange_plan()
+    plan["outputs"] = {"archive": "flange.my3d"}
+    assert _run(services, write_plan(tmp_path / "native.json", plan)) == 0
+    assert (tmp_path / "flange.my3d").is_file()
 
 
 def test_corrupt_json_is_one_line_runtime_error(
@@ -115,6 +124,61 @@ def test_unknown_command_id_exit_1(
     _steps(plan)[0]["id"] = "feature.nope"
     assert _run(services, write_plan(tmp_path / "p.json", plan)) == 1
     assert "feature.nope" in capsys.readouterr().err
+
+
+def test_plan_uses_explicit_older_command_schema(services: AppServices, tmp_path: Path) -> None:
+    current = services.registry.get("feature.cylinder", version=1)
+    services.registry.register(
+        CommandSpec(
+            current.id,
+            2,
+            "cylinder v2",
+            "圆柱 v2",
+            {
+                "type": "object",
+                "properties": {
+                    "radius_mm": {"type": "number"},
+                    "height_mm": {"type": "number"},
+                },
+                "required": ["radius_mm", "height_mm"],
+                "additionalProperties": False,
+            },
+            CliSyntax(("cylinder",)),
+        )
+    )
+    plan: dict[str, object] = {
+        "metadata": {"part_no": "", "revision": "", "material": "", "source": "local"},
+        "steps": [
+            {
+                "id": current.id,
+                "version": 1,
+                "params": {"radius": 4.0, "height": 8.0},
+                "affected_object": "cylinder_body",
+            }
+        ],
+    }
+
+    validated = validate_plan_dict(plan, services.registry, base_dir=tmp_path)
+
+    assert validated.steps[0].version == 1
+    assert validated.steps[0].params["radius"] == 4.0
+    assert validated.steps[0].params["height"] == 8.0
+
+
+def test_plan_missing_command_version_is_explicit(services: AppServices, tmp_path: Path) -> None:
+    plan = flange_plan()
+    del _steps(plan)[0]["version"]
+
+    with pytest.raises(ValidationError, match="version"):
+        validate_plan_dict(plan, services.registry, base_dir=tmp_path)
+
+
+def test_plan_unknown_command_version_is_explicit(services: AppServices, tmp_path: Path) -> None:
+    plan = flange_plan()
+    _steps(plan)[0]["version"] = 99
+
+    with pytest.raises(UnknownCommandError, match="version 99"):
+        validate_plan_dict(plan, services.registry, base_dir=tmp_path)
 
 
 def test_default_plan_ids_are_fresh_hex(services: AppServices, tmp_path: Path) -> None:

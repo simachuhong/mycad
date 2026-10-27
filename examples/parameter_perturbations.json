@@ -1,0 +1,4292 @@
+[
+  {
+    "id": "perturb-flange-round-solid-01",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 40.0,
+    "perturbation_value": 38.0,
+    "expected": {
+      "volume_mm3": 36291.67833426929,
+      "bbox_size_mm": [
+        76.0,
+        76.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-round-solid-02",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 40.0,
+    "perturbation_value": 42.0,
+    "expected": {
+      "volume_mm3": 44334.15552745916,
+      "bbox_size_mm": [
+        84.0,
+        84.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-round-solid-03",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 8.0,
+    "perturbation_value": 6.0,
+    "expected": {
+      "volume_mm3": 30159.289474462013,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        6.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-round-solid-04",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 8.0,
+    "perturbation_value": 10.0,
+    "expected": {
+      "volume_mm3": 50265.482457436694,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        10.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-round-solid-05",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[0]",
+    "baseline_value": 0.0,
+    "perturbation_value": 2.0,
+    "expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        2.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-round-solid-06",
+    "catalog_case_id": "flange-round-solid",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[1]",
+    "baseline_value": 0.0,
+    "perturbation_value": -3.0,
+    "expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        -3.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 40212.385965949354,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-flange-center-bore-01",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-center-bore-02",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-center-bore-03",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-center-bore-04",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-center-bore-05",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-center-bore-06",
+    "catalog_case_id": "flange-center-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-01",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-02",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-03",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-04",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-05",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-four-bolt-06",
+    "catalog_case_id": "flange-four-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-01",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-02",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-03",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-04",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-05",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-six-bolt-06",
+    "catalog_case_id": "flange-six-bolt",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-01",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-02",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-03",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-04",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-05",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-flange-raised-hub-06",
+    "catalog_case_id": "flange-raised-hub",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-straight-01",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 8.0,
+    "perturbation_value": 6.0,
+    "expected": {
+      "volume_mm3": 9047.786842338604,
+      "bbox_size_mm": [
+        12.0,
+        12.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-straight-02",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 8.0,
+    "perturbation_value": 10.0,
+    "expected": {
+      "volume_mm3": 25132.741228718347,
+      "bbox_size_mm": [
+        20.0,
+        20.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-straight-03",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 80.0,
+    "perturbation_value": 60.0,
+    "expected": {
+      "volume_mm3": 12063.715789784805,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        60.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-straight-04",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 80.0,
+    "perturbation_value": 100.0,
+    "expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        100.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-straight-05",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[0]",
+    "baseline_value": 0.0,
+    "perturbation_value": 4.0,
+    "expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        4.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-straight-06",
+    "catalog_case_id": "shaft-straight",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 8.0,
+          "height": 80.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[2]",
+    "baseline_value": 0.0,
+    "perturbation_value": 10.0,
+    "expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        10.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 16084.95438637974,
+      "bbox_size_mm": [
+        16.0,
+        16.0,
+        80.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-shaft-stepped-01",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-stepped-02",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-stepped-03",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-stepped-04",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-stepped-05",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-stepped-06",
+    "catalog_case_id": "shaft-stepped",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-01",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-02",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-03",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-04",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-05",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-sleeve-through-bore-06",
+    "catalog_case_id": "sleeve-through-bore",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-01",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-02",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-03",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-04",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-05",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-shaft-cross-hole-06",
+    "catalog_case_id": "shaft-cross-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-rectangular-01",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_x",
+    "baseline_value": 100.0,
+    "perturbation_value": 90.0,
+    "expected": {
+      "volume_mm3": 43200.0,
+      "bbox_size_mm": [
+        90.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-rectangular-02",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_x",
+    "baseline_value": 100.0,
+    "perturbation_value": 110.0,
+    "expected": {
+      "volume_mm3": 52800.0,
+      "bbox_size_mm": [
+        110.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-rectangular-03",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_y",
+    "baseline_value": 60.0,
+    "perturbation_value": 50.0,
+    "expected": {
+      "volume_mm3": 40000.0,
+      "bbox_size_mm": [
+        100.0,
+        50.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-rectangular-04",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_y",
+    "baseline_value": 60.0,
+    "perturbation_value": 70.0,
+    "expected": {
+      "volume_mm3": 56000.0,
+      "bbox_size_mm": [
+        100.0,
+        70.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-rectangular-05",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_z",
+    "baseline_value": 8.0,
+    "perturbation_value": 6.0,
+    "expected": {
+      "volume_mm3": 36000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        6.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-rectangular-06",
+    "catalog_case_id": "plate-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 100.0,
+          "size_y": 60.0,
+          "size_z": 8.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_z",
+    "baseline_value": 8.0,
+    "perturbation_value": 10.0,
+    "expected": {
+      "volume_mm3": 60000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        10.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 48000.0,
+      "bbox_size_mm": [
+        100.0,
+        60.0,
+        8.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-plate-four-hole-01",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-four-hole-02",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-four-hole-03",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-four-hole-04",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-four-hole-05",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-four-hole-06",
+    "catalog_case_id": "plate-four-hole",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-01",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-02",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-03",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-04",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-05",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-circular-06",
+    "catalog_case_id": "plate-circular",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-01",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-02",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-03",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-04",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-05",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-plate-center-and-bolt-circle-06",
+    "catalog_case_id": "plate-center-and-bolt-circle",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-flat-round-01",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 40.0,
+    "perturbation_value": 38.0,
+    "expected": {
+      "volume_mm3": 18145.839167134644,
+      "bbox_size_mm": [
+        76.0,
+        76.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-round-02",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "radius",
+    "baseline_value": 40.0,
+    "perturbation_value": 42.0,
+    "expected": {
+      "volume_mm3": 22167.07776372958,
+      "bbox_size_mm": [
+        84.0,
+        84.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-round-03",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 4.0,
+    "perturbation_value": 3.0,
+    "expected": {
+      "volume_mm3": 15079.644737231007,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        3.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-round-04",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "height",
+    "baseline_value": 4.0,
+    "perturbation_value": 5.0,
+    "expected": {
+      "volume_mm3": 25132.741228718347,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        5.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-round-05",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[0]",
+    "baseline_value": 0.0,
+    "perturbation_value": 2.0,
+    "expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        2.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-round-06",
+    "catalog_case_id": "cover-flat-round",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": {
+          "radius": 40.0,
+          "height": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "center[1]",
+    "baseline_value": 0.0,
+    "perturbation_value": -2.0,
+    "expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        -2.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 20106.192982974677,
+      "bbox_size_mm": [
+        80.0,
+        80.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-01",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_x",
+    "baseline_value": 80.0,
+    "perturbation_value": 72.0,
+    "expected": {
+      "volume_mm3": 17280.0,
+      "bbox_size_mm": [
+        72.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-02",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_x",
+    "baseline_value": 80.0,
+    "perturbation_value": 88.0,
+    "expected": {
+      "volume_mm3": 21120.0,
+      "bbox_size_mm": [
+        88.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-03",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_y",
+    "baseline_value": 60.0,
+    "perturbation_value": 54.0,
+    "expected": {
+      "volume_mm3": 17280.0,
+      "bbox_size_mm": [
+        80.0,
+        54.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-04",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_y",
+    "baseline_value": 60.0,
+    "perturbation_value": 66.0,
+    "expected": {
+      "volume_mm3": 21120.0,
+      "bbox_size_mm": [
+        80.0,
+        66.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-05",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_z",
+    "baseline_value": 4.0,
+    "perturbation_value": 3.0,
+    "expected": {
+      "volume_mm3": 14400.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        3.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-flat-rectangular-06",
+    "catalog_case_id": "cover-flat-rectangular",
+    "status": "executable",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": {
+          "size_x": 80.0,
+          "size_y": 60.0,
+          "size_z": 4.0,
+          "center": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mode": "new"
+        }
+      }
+    ],
+    "target_ordinal": 0,
+    "parameter_path": "size_z",
+    "baseline_value": 4.0,
+    "perturbation_value": 5.0,
+    "expected": {
+      "volume_mm3": 24000.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        5.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "baseline_expected": {
+      "volume_mm3": 19200.0,
+      "bbox_size_mm": [
+        80.0,
+        60.0,
+        4.0
+      ],
+      "bbox_center_mm": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "restore_action": "edit the target back to baseline_value through CommandBus.edit_and_replay and replay downstream history"
+  },
+  {
+    "id": "perturb-cover-raised-rim-01",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-raised-rim-02",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-raised-rim-03",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-raised-rim-04",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-raised-rim-05",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-cover-raised-rim-06",
+    "catalog_case_id": "cover-raised-rim",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.cylinder",
+        "params": null
+      },
+      {
+        "id": "feature.hole_pattern",
+        "params": null
+      }
+    ],
+    "target_ordinal": 2,
+    "target_command_id": "feature.cylinder",
+    "parameter_path": "radius",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-01",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-02",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-03",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-04",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-05",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-small-safe-feature-06",
+    "catalog_case_id": "boundary-small-safe-feature",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "feature.hole",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-01",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 11.0,
+    "perturbation_value": 12.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-02",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 12.0,
+    "perturbation_value": 13.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-03",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 13.0,
+    "perturbation_value": 14.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-04",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 14.0,
+    "perturbation_value": 15.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-05",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 15.0,
+    "perturbation_value": 16.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  },
+  {
+    "id": "perturb-boundary-thin-valid-wall-06",
+    "catalog_case_id": "boundary-thin-valid-wall",
+    "status": "gated",
+    "command_chain": [
+      {
+        "id": "feature.box",
+        "params": null
+      },
+      {
+        "id": "modify.boolean_cut",
+        "params": null
+      }
+    ],
+    "target_ordinal": 1,
+    "target_command_id": "feature.box",
+    "parameter_path": "size_x",
+    "baseline_value": 16.0,
+    "perturbation_value": 17.0,
+    "expected": {
+      "geometry": "valid_brep",
+      "measurement": "matches the declared representative part analytic values",
+      "references": "rebind without rank fallback"
+    },
+    "gated_by": [
+      "P2-32",
+      "P2-33",
+      "P2-34",
+      "P2-35",
+      "P2-36",
+      "P2-37"
+    ],
+    "restore_action": "restore target parameter to baseline_value and replay the full declared command chain"
+  }
+]

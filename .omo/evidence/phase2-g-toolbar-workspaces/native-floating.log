@@ -1,0 +1,8 @@
+before 绘图 False PySide6.QtCore.QRect(0, 0, 349, 70)
+after 绘图 True PySide6.QtCore.QRect(155, 256, 349, 70)
+before 修改 False PySide6.QtCore.QRect(349, 0, 1051, 70)
+after 修改 True PySide6.QtCore.QRect(504, 256, 563, 70)
+before 尺寸标注 False PySide6.QtCore.QRect(0, 0, 1400, 39)
+after 尺寸标注 True PySide6.QtCore.QRect(155, 272, 348, 39)
+redocked False ToolBarArea.TopToolBarArea
+PASS native float, hide/show, committed-draft continuity, native redock

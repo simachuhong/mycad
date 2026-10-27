@@ -26,7 +26,12 @@ EXPECTED_AFFECTED: tuple[str, ...] = (
     "hole",
     "hole_pattern",
     "edge",
+    "chamfer_edge",
     "tool_body",
+    "intersection_tool_body",
+    "body_pair",
+    "body_transform",
+    "body_pattern",
 )
 
 EXPECTED_B2: dict[str, str] = {
@@ -37,7 +42,12 @@ EXPECTED_B2: dict[str, str] = {
     "feature.hole": "hole",
     "feature.hole_pattern": "hole_pattern",
     "modify.fillet": "edge",
+    "modify.chamfer": "chamfer_edge",
     "modify.boolean_cut": "tool_body",
+    "modify.boolean_intersect": "intersection_tool_body",
+    "modify.boolean_bodies": "body_pair",
+    "modify.body_transform": "body_transform",
+    "modify.body_pattern": "body_pattern",
 }
 
 
@@ -62,7 +72,7 @@ def _executed() -> ExecutedCommand:
     )
 
 
-def test_affected_object_literal_locked_to_eight_values() -> None:
+def test_affected_object_literal_locked_to_thirteen_values() -> None:
     args = typing.get_args(AffectedObject)
     assert isinstance(args, tuple)
     assert args == EXPECTED_AFFECTED
@@ -71,7 +81,7 @@ def test_affected_object_literal_locked_to_eight_values() -> None:
 
 def test_affected_objects_table_locked_to_b2() -> None:
     assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
-    assert len(set(AFFECTED_OBJECTS.values())) == 8
+    assert len(set(AFFECTED_OBJECTS.values())) == 13
 
 
 def test_planned_command_unknown_id_raises_unknown_command_error() -> None:

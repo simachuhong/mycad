@@ -52,8 +52,8 @@ class FormatPort(Protocol):
     extensions: tuple[str, ...]
     can_write: bool
 
-    def write(self, geometry: ExportableKernel, path: Path) -> None:
-        """Write the kernel's model to ``path`` in this format."""
+    def write(self, geometry: ExportableKernel, path: Path) -> object | None:
+        """Write the kernel's model and optionally return an exchange report."""
         ...
 
 

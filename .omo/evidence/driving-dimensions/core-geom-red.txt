@@ -1,0 +1,488 @@
+FFFFFFFFFFFFFFFF                                                         [100%]
+=================================== FAILURES ===================================
+_________ test_anchor_policy_roundtrip_preserves_legacy_default[auto] __________
+
+mode = 'auto'
+
+    @pytest.mark.parametrize("mode", ["auto", "start", "end", "symmetric"])
+    def test_anchor_policy_roundtrip_preserves_legacy_default(mode: str) -> None:
+        legacy = dimension().to_mapping()
+>       parsed = SketchConstraint.from_mapping({**legacy, "anchor_mode": mode})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_dimension_anchors.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': 'bacb9def263f4b3c8b04c6a3de4f1321', 'kind': 'length', 'references': [{'entity_id': 'd1d7348cd80447b0872b36d043bd6988', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+_________ test_anchor_policy_roundtrip_preserves_legacy_default[start] _________
+
+mode = 'start'
+
+    @pytest.mark.parametrize("mode", ["auto", "start", "end", "symmetric"])
+    def test_anchor_policy_roundtrip_preserves_legacy_default(mode: str) -> None:
+        legacy = dimension().to_mapping()
+>       parsed = SketchConstraint.from_mapping({**legacy, "anchor_mode": mode})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_dimension_anchors.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': 'c5cb29bb69b74aaf81ef1a4002c090e1', 'kind': 'length', 'references': [{'entity_id': 'b59d2c85c79c43d6ba2cfb3178c9c609', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+__________ test_anchor_policy_roundtrip_preserves_legacy_default[end] __________
+
+mode = 'end'
+
+    @pytest.mark.parametrize("mode", ["auto", "start", "end", "symmetric"])
+    def test_anchor_policy_roundtrip_preserves_legacy_default(mode: str) -> None:
+        legacy = dimension().to_mapping()
+>       parsed = SketchConstraint.from_mapping({**legacy, "anchor_mode": mode})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_dimension_anchors.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': '7aa08fb946ac4e28b87127c9a1293711', 'kind': 'length', 'references': [{'entity_id': '762a10cf0d2a4f46bc6e1f6e8314173a', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+_______ test_anchor_policy_roundtrip_preserves_legacy_default[symmetric] _______
+
+mode = 'symmetric'
+
+    @pytest.mark.parametrize("mode", ["auto", "start", "end", "symmetric"])
+    def test_anchor_policy_roundtrip_preserves_legacy_default(mode: str) -> None:
+        legacy = dimension().to_mapping()
+>       parsed = SketchConstraint.from_mapping({**legacy, "anchor_mode": mode})
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_dimension_anchors.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': 'cfdc7ccb84454990ab19e0c0d5947aa9', 'kind': 'length', 'references': [{'entity_id': '2b55e6381f6846d480427ba0e920ef5e', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+____________ test_non_linear_anchor_and_unknown_policy_are_rejected ____________
+
+    def test_non_linear_anchor_and_unknown_policy_are_rejected() -> None:
+        raw = dimension().to_mapping()
+>       with pytest.raises(ValueError, match="anchor"):
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'anchor'
+E         Actual message: 'constraint must contain its required fields and known optional values'
+
+tests/core/test_dimension_anchors.py:28: AssertionError
+___________ test_fixed_start_directed_projection[horizontal-finish0] ___________
+
+axis = 'horizontal', finish = (40, 0)
+
+    @pytest.mark.parametrize("axis,finish", [("horizontal", (40, 0)), ("vertical", (0, 40)), ("ordinate_x", (-40, 0)), ("ordinate_y", (0, -40))])
+    def test_fixed_start_directed_projection(axis: str, finish: tuple[int, int]) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0) if axis.endswith("x") or axis == "horizontal" else (0, 30))
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "start"),))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (fixed,))
+        result = solve_sketch_constraint(sketch, length(line, -40 if axis.startswith("ordinate") else 40, axis))
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, LineEntity)
+        assert solved.start_mm == pytest.approx((0, 0))
+>       assert solved.end_mm == pytest.approx(finish)
+E       assert (-40.0, 0.0) == approx((40 ± ... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 80.0
+E         Max relative difference: 2.0
+E         Index | Obtained | Expected    
+E         0     | -40.0    | 40 ± 4.0e-05
+
+tests/geom/test_dimension_driving.py:33: AssertionError
+____________ test_fixed_start_directed_projection[vertical-finish1] ____________
+
+axis = 'vertical', finish = (0, 40)
+
+    @pytest.mark.parametrize("axis,finish", [("horizontal", (40, 0)), ("vertical", (0, 40)), ("ordinate_x", (-40, 0)), ("ordinate_y", (0, -40))])
+    def test_fixed_start_directed_projection(axis: str, finish: tuple[int, int]) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0) if axis.endswith("x") or axis == "horizontal" else (0, 30))
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "start"),))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (fixed,))
+        result = solve_sketch_constraint(sketch, length(line, -40 if axis.startswith("ordinate") else 40, axis))
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, LineEntity)
+        assert solved.start_mm == pytest.approx((0, 0))
+>       assert solved.end_mm == pytest.approx(finish)
+E       assert (0.0, -40.0) == approx((0 ± 1...40 ± 4.0e-05))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 80.0
+E         Max relative difference: 2.0
+E         Index | Obtained | Expected    
+E         1     | -40.0    | 40 ± 4.0e-05
+
+tests/geom/test_dimension_driving.py:33: AssertionError
+___________ test_fixed_start_directed_projection[ordinate_x-finish2] ___________
+
+axis = 'ordinate_x', finish = (-40, 0)
+
+    @pytest.mark.parametrize("axis,finish", [("horizontal", (40, 0)), ("vertical", (0, 40)), ("ordinate_x", (-40, 0)), ("ordinate_y", (0, -40))])
+    def test_fixed_start_directed_projection(axis: str, finish: tuple[int, int]) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0) if axis.endswith("x") or axis == "horizontal" else (0, 30))
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "start"),))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (fixed,))
+        result = solve_sketch_constraint(sketch, length(line, -40 if axis.startswith("ordinate") else 40, axis))
+>       assert result.status == "success", result.message
+E       AssertionError: 求解尺寸残差超过 MyCAD 容差：b74217fb 残差 80，容差 4e-08
+E       assert 'failed' == 'success'
+E         
+E         - success
+E         + failed
+
+tests/geom/test_dimension_driving.py:28: AssertionError
+___________ test_fixed_start_directed_projection[ordinate_y-finish3] ___________
+
+axis = 'ordinate_y', finish = (0, -40)
+
+    @pytest.mark.parametrize("axis,finish", [("horizontal", (40, 0)), ("vertical", (0, 40)), ("ordinate_x", (-40, 0)), ("ordinate_y", (0, -40))])
+    def test_fixed_start_directed_projection(axis: str, finish: tuple[int, int]) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0) if axis.endswith("x") or axis == "horizontal" else (0, 30))
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "start"),))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (fixed,))
+        result = solve_sketch_constraint(sketch, length(line, -40 if axis.startswith("ordinate") else 40, axis))
+>       assert result.status == "success", result.message
+E       AssertionError: 求解尺寸残差超过 MyCAD 容差：c5ad5230 残差 80，容差 4e-08
+E       assert 'failed' == 'success'
+E         
+E         - success
+E         + failed
+
+tests/geom/test_dimension_driving.py:28: AssertionError
+______ test_linear_anchor_modes_do_not_add_permanent_relations[auto-0-40] ______
+
+mode = 'auto', start = 0, end = 40
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_linear_anchor_modes_do_not_add_permanent_relations(mode: str, start: int, end: int) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,))
+        dim = length(line, 40, mode=mode)
+        result = solve_sketch_constraint(sketch, dim)
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, LineEntity)
+>       assert solved.start_mm == pytest.approx((start, 0))
+E       assert (44.26131316480967, 0.0) == approx((0 ± 1... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 44.26131316480967
+E         Max relative difference: 1.0
+E         Index | Obtained          | Expected   
+E         0     | 44.26131316480967 | 0 ± 1.0e-12
+
+tests/geom/test_dimension_driving.py:48: AssertionError
+_____ test_linear_anchor_modes_do_not_add_permanent_relations[start-0-40] ______
+
+mode = 'start', start = 0, end = 40
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_linear_anchor_modes_do_not_add_permanent_relations(mode: str, start: int, end: int) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,))
+>       dim = length(line, 40, mode=mode)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/geom/test_dimension_driving.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/geom/test_dimension_driving.py:19: in length
+    return SketchConstraint.from_mapping(raw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': 'fd0e4d58a0f84c82b851eacf43b24a3c', 'kind': 'length', 'references': [{'entity_id': 'a176a997dd5144f09aaffeea132448e4', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+_____ test_linear_anchor_modes_do_not_add_permanent_relations[end--10-30] ______
+
+mode = 'end', start = -10, end = 30
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_linear_anchor_modes_do_not_add_permanent_relations(mode: str, start: int, end: int) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,))
+>       dim = length(line, 40, mode=mode)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/geom/test_dimension_driving.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/geom/test_dimension_driving.py:19: in length
+    return SketchConstraint.from_mapping(raw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': '2781ff51dd554e5d8b178d9d1a46f2d3', 'kind': 'length', 'references': [{'entity_id': '40da7d3fb4ab4791ad0a8dc9f0613359', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+___ test_linear_anchor_modes_do_not_add_permanent_relations[symmetric--5-35] ___
+
+mode = 'symmetric', start = -5, end = 35
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_linear_anchor_modes_do_not_add_permanent_relations(mode: str, start: int, end: int) -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,))
+>       dim = length(line, 40, mode=mode)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/geom/test_dimension_driving.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/geom/test_dimension_driving.py:19: in length
+    return SketchConstraint.from_mapping(raw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+cls = <class 'mycad.core.sketch_constraints.SketchConstraint'>
+value = {'constraint_id': 'f46145d0c052482d90bd27f5c71180eb', 'kind': 'length', 'references': [{'entity_id': '23f576142f944196a0a87e4c39252e8b', 'kind': 'geometry'}], 'driving': True, ...}
+
+    @classmethod
+    def from_mapping(cls, value: object) -> SketchConstraint:
+        if not isinstance(value, Mapping):
+            raise ValueError("constraint must be an object")
+        mapping = cast("Mapping[str, object]", value)
+        base = {"constraint_id", "kind", "references", "driving", "source"}
+        allowed = base | {
+            "unit",
+            "value",
+            "precision",
+            "scale",
+            "position_mm",
+            "text_position_mm",
+            "axis",
+            "layer_name",
+        }
+        if not base.issubset(mapping) or any(key not in allowed for key in mapping):
+>           raise ValueError(
+                "constraint must contain its required fields and known optional values"
+            )
+E           ValueError: constraint must contain its required fields and known optional values
+
+src/mycad/core/sketch_constraints.py:276: ValueError
+___ test_auto_anchor_respects_existing_fixed_end_and_explicit_conflict_fails ___
+
+    def test_auto_anchor_respects_existing_fixed_end_and_explicit_conflict_fails() -> None:
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "end"),))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (fixed,))
+        result = solve_sketch_constraint(sketch, length(line, 40))
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, LineEntity)
+>       assert solved.start_mm == pytest.approx((-10, 0))
+E       assert (70.0, 0.0) == approx((-10 ±... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 80.0
+E         Max relative difference: 1.1428571428571428
+E         Index | Obtained | Expected     
+E         0     | 70.0     | -10 ± 1.0e-05
+
+tests/geom/test_dimension_driving.py:64: AssertionError
+__________________ test_reverse_linear_direction_is_preserved __________________
+
+    def test_reverse_linear_direction_is_preserved() -> None:
+        line = LineEntity(uuid4().hex, (30, 0), (0, 0))
+        result = solve_sketch_constraint(Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,)), length(line, 40))
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, LineEntity)
+>       assert solved.start_mm == pytest.approx((30, 0))
+E       assert (-14.261313164809668, 0.0) == approx((30 ± ... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 44.261313164809664
+E         Max relative difference: 3.1035931020732463
+E         Index | Obtained            | Expected    
+E         0     | -14.261313164809668 | 30 ± 3.0e-05
+
+tests/geom/test_dimension_driving.py:79: AssertionError
+_______ test_rectangle_width_keeps_height_and_circle_radius_keeps_center _______
+
+    def test_rectangle_width_keeps_height_and_circle_radius_keeps_center() -> None:
+        rectangle = RectangleEntity(uuid4().hex, (0, 0), (80, 40))
+        constraint = SketchConstraint(uuid4().hex, "length", (SketchGeometryReference(rectangle.entity_id, "segment", 0),), 120, "mm", axis="horizontal")
+        result = solve_sketch_constraint(Sketch(uuid4().hex, WorkPlaneFrame.xy(), (rectangle,)), constraint)
+        assert result.status == "success", result.message
+        assert result.sketch is not None
+        solved = result.sketch.entities[0]
+        assert isinstance(solved, RectangleEntity)
+>       assert solved.first_corner_mm == pytest.approx((0, 0))
+E       assert (122.71322881631032, 0.0) == approx((0 ± 1... 0 ± 1.0e-12))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 122.71322881631032
+E         Max relative difference: 1.0
+E         Index | Obtained           | Expected   
+E         0     | 122.71322881631032 | 0 ± 1.0e-12
+
+tests/geom/test_dimension_driving.py:91: AssertionError
+=========================== short test summary info ============================
+FAILED tests/core/test_dimension_anchors.py::test_anchor_policy_roundtrip_preserves_legacy_default[auto]
+FAILED tests/core/test_dimension_anchors.py::test_anchor_policy_roundtrip_preserves_legacy_default[start]
+FAILED tests/core/test_dimension_anchors.py::test_anchor_policy_roundtrip_preserves_legacy_default[end]
+FAILED tests/core/test_dimension_anchors.py::test_anchor_policy_roundtrip_preserves_legacy_default[symmetric]
+FAILED tests/core/test_dimension_anchors.py::test_non_linear_anchor_and_unknown_policy_are_rejected
+FAILED tests/geom/test_dimension_driving.py::test_fixed_start_directed_projection[horizontal-finish0]
+FAILED tests/geom/test_dimension_driving.py::test_fixed_start_directed_projection[vertical-finish1]
+FAILED tests/geom/test_dimension_driving.py::test_fixed_start_directed_projection[ordinate_x-finish2]
+FAILED tests/geom/test_dimension_driving.py::test_fixed_start_directed_projection[ordinate_y-finish3]
+FAILED tests/geom/test_dimension_driving.py::test_linear_anchor_modes_do_not_add_permanent_relations[auto-0-40]
+FAILED tests/geom/test_dimension_driving.py::test_linear_anchor_modes_do_not_add_permanent_relations[start-0-40]
+FAILED tests/geom/test_dimension_driving.py::test_linear_anchor_modes_do_not_add_permanent_relations[end--10-30]
+FAILED tests/geom/test_dimension_driving.py::test_linear_anchor_modes_do_not_add_permanent_relations[symmetric--5-35]
+FAILED tests/geom/test_dimension_driving.py::test_auto_anchor_respects_existing_fixed_end_and_explicit_conflict_fails
+FAILED tests/geom/test_dimension_driving.py::test_reverse_linear_direction_is_preserved
+FAILED tests/geom/test_dimension_driving.py::test_rectangle_width_keeps_height_and_circle_radius_keeps_center
+16 failed in 8.12s

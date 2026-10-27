@@ -81,7 +81,9 @@ def _script(tmp_path: Path, *lines: str) -> Path:
     return path
 
 
-def test_failure_batch_rollback_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_failure_batch_validation_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     script = _script(
         tmp_path,
         "new",
@@ -93,9 +95,9 @@ def test_failure_batch_rollback_exit_1(tmp_path: Path, capsys: pytest.CaptureFix
     )
     assert main(["run", str(script)]) == 1
     captured = capsys.readouterr()
-    assert "rolled back: 0" in captured.out
-    assert "batch failed at step 1" in captured.err
-    assert "feature.hole" in captured.err
+    assert "rolled back" not in captured.out
+    assert "diameter" in captured.err
+    assert "exclusiveMinimum" in captured.err
     assert list(tmp_path.iterdir()) == [script]
 
 

@@ -1,0 +1,68 @@
+FF.......                                                                [100%]
+=================================== FAILURES ===================================
+_____ test_current_body_selection_is_synchronized_without_history_preview ______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7ca6466e48c0>
+
+    def test_current_body_selection_is_synchronized_without_history_preview(qtbot: QtBot) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 10}, "test")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        view, panel = window.viewport, window.right_panel
+        assert view is not None and panel is not None
+        tree = panel.structure_tree
+        matches = tree.findItems("实体 1", Qt.MatchFlag.MatchRecursive | Qt.MatchFlag.MatchExactly)
+        assert len(matches) == 1
+        body = matches[0]
+        before = loaded.document.commands
+        view.setCameraPosition(distance=95)
+        view.pan(25, 15, 0, relative="view-upright")
+        camera = view.camera_state()
+        tree.itemClicked.emit(body, 0)
+        selected = view.selection()
+        assert selected is not None and selected.kind == "body"
+        assert view.history_preview_ordinal() is None
+        assert tree.currentItem() is body
+>       assert view.camera_state() == camera
+E       assert (41.569219381....0, 0.0, 0.0)) == (95.0, (1.211...7434082, 0.0))
+E         
+E         At index 0 diff: 41.569219381653056 != 95.0
+E         Use -v to get more diff
+
+tests/ui/test_body_tree.py:36: AssertionError
+____________ test_multiple_selected_bodies_are_all_selected_in_tree ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7ca6466e5310>
+
+    def test_multiple_selected_bodies_are_all_selected_in_tree(qtbot: QtBot) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 10, "size_y": 10, "size_z": 10}, "test")
+        loaded.bus.execute("feature.box", {"size_x": 10, "size_y": 10, "size_z": 10,
+            "center": [20, 0, 0], "mode": "add"}, "test")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        view, panel = window.viewport, window.right_panel
+        assert view is not None and panel is not None
+        view.resize(800, 600)
+        view.set_orientation("top")
+        view.fit_view()
+        for x in (0, 20):
+            point = view.project_world_point((x, 0, 5))
+            assert point is not None and view.pick_at(*point, toggle=True)
+>       assert {item.text(0) for item in panel.structure_tree.selectedItems()} == {"实体 1", "实体 2"}
+E       AssertionError: assert {'实体 2'} == {'实体 1', '实体 2'}
+E         
+E         Extra items in the right set:
+E         '实体 1'
+E         Use -v to get more diff
+
+tests/ui/test_body_tree.py:69: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_body_tree.py::test_current_body_selection_is_synchronized_without_history_preview
+FAILED tests/ui/test_body_tree.py::test_multiple_selected_bodies_are_all_selected_in_tree
+2 failed, 7 passed in 36.30s

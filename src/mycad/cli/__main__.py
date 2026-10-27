@@ -30,6 +30,14 @@ def _force_utf8(stream: TextIO) -> None:
         reconfigure(encoding="utf-8")
 
 
+def _load_gui_entrypoint() -> Callable[[], int]:
+    """Load desktop code only when ``mycad gui`` is explicitly requested."""
+
+    from mycad.ui.entry import run_gui
+
+    return run_gui
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch one ``mycad`` invocation; never raises, always returns a code."""
     _force_utf8(sys.stdout)
@@ -80,7 +88,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if rest:
             print("gui takes no arguments", file=sys.stderr)
             return 2
-        from mycad.ui.entry import run_gui
+        try:
+            run_gui = _load_gui_entrypoint()
+        except ModuleNotFoundError as exc:
+            desktop_modules = {"PySide6", "pyqtgraph", "OpenGL", "shiboken6"}
+            missing_root = (exc.name or "").split(".", 1)[0]
+            if missing_root in desktop_modules:
+                print(
+                    "desktop dependencies are not installed; run `uv sync --extra desktop`",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"failed to load desktop support: {exc}", file=sys.stderr)
+            return 1
 
         return run_gui()
     print(f"unknown subcommand: {sub}", file=sys.stderr)

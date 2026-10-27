@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """CommandSpec / CliSyntax contract tests (T3-A).
 
-Pins the frozen dataclass field order (undo_compensation last, defaulted),
+Pins the frozen dataclass field order (archive schema floor before the
+undo_compensation field, which remains last and defaulted),
 the ``"history_replay"``-only undo policy, and CliSyntax defaults.
 """
 
@@ -37,6 +38,7 @@ def _spec(**overrides: object) -> CommandSpec:
         "cli": CliSyntax(verb_aliases=("ping",)),
     }
     values.update(overrides)
+    min_archive_version = values.pop("min_archive_version", 1)
     undo = values.pop("undo_compensation", "history_replay")
     return CommandSpec(
         id=cast(str, values["id"]),
@@ -45,6 +47,7 @@ def _spec(**overrides: object) -> CommandSpec:
         label_zh=cast(str, values["label_zh"]),
         params_schema=cast("Mapping[str, object]", values["params_schema"]),
         cli=cast(CliSyntax, values["cli"]),
+        min_archive_version=cast(int, min_archive_version),
         undo_compensation=cast(Literal["history_replay"], undo),
     )
 
@@ -58,12 +61,23 @@ def test_field_order_is_exact_and_undo_last() -> None:
         "label_zh",
         "params_schema",
         "cli",
+        "min_archive_version",
         "undo_compensation",
     ]
 
 
 def test_undo_compensation_defaults_to_history_replay() -> None:
     assert _spec().undo_compensation == "history_replay"
+
+
+def test_minimum_archive_version_defaults_to_v1() -> None:
+    assert _spec().min_archive_version == 1
+
+
+@pytest.mark.parametrize("bad_version", (0, -1, True))
+def test_minimum_archive_version_must_be_a_positive_integer(bad_version: object) -> None:
+    with pytest.raises(ValidationError, match="min_archive_version"):
+        _spec(min_archive_version=bad_version)
 
 
 def test_undo_compensation_rejects_any_other_value() -> None:

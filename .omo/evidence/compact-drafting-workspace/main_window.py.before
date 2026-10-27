@@ -1,0 +1,4052 @@
+# SPDX-FileCopyrightText: 2026 MyCAD contributors
+# SPDX-License-Identifier: Apache-2.0
+"""Todo-5 shell + todo-6 left panel: the five-zone main window.
+
+Zones keep the widget-identity contract from todo 4; this module adds the
+§3 menu set (seven menus, verbatim titles), toolbar toggling/locking
+(§4.1), QSettings layout memory, and the five-field status bar wired to
+the core signal union. The left dock hosts the todo-6 registry-driven
+palette (with its plan-draft controller) when services are provided;
+right/bottom/centre contents remain owned by todos 7 / 9 / 12.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from functools import partial
+from math import isfinite
+from pathlib import Path
+from typing import TYPE_CHECKING, cast, override
+from uuid import uuid4
+
+from PySide6.QtCore import (
+    QByteArray,
+    QObject,
+    QPoint,
+    QSettings,
+    QSize,
+    QStandardPaths,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QKeySequence,
+    QResizeEvent,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QSizePolicy,
+    QStatusBar,
+    QTabWidget,
+    QToolBar,
+    QWidget,
+)
+
+from mycad import app as mycad_app
+from mycad.commands.registry import CommandRegistry
+from mycad.core.bus import CommandBus
+from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, NATIVE_ARCHIVE_SUFFIXES, DocumentType
+from mycad.core.exceptions import InvalidHistoryError, MycadError, ValidationError
+from mycad.core.identity import BodyId
+from mycad.core.persistence import LoadedDocument, save_document
+from mycad.core.plan import Plan
+from mycad.core.signals import SignalName
+from mycad.core.sketch import Sketch, SketchSupportFace, WorkPlaneFrame
+from mycad.core.sketch_constraints import (
+    SketchConstraint,
+    SketchConstraintSolveResult,
+)
+from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
+from mycad.formats.dxf_preview import DxfOutputPreview, prepare_dxf_output_preview
+from mycad.formats.providers.dxf_provider import (
+    DXF_PROVIDER,
+    DxfExchangeReport,
+    DxfSketchImport,
+    DxfUnitOverrideRequired,
+)
+from mycad.formats.registry import UnknownFormatError
+from mycad.ui.cad_icons import cad_icon, command_icon_name, refresh_button_icons
+from mycad.ui.cli_tab import CliTab
+from mycad.ui.command_palette import CommandPalette
+from mycad.ui.command_reference import CommandReferenceDialog
+from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
+from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
+from mycad.ui.fillet_toolbar import FilletCommandBar
+from mycad.ui.modeling_handles import DimensionHandle
+from mycad.ui.modeling_toolbar import ModelingCommandBar
+from mycad.ui.new_document_dialog import NewDocumentDialog
+from mycad.ui.plan_cards import PlanCards
+from mycad.ui.plan_draft import PlanDraftController
+from mycad.ui.right_panel import RightPanel
+from mycad.ui.sketch_constraint_dialog import SketchConstraintDialog
+from mycad.ui.sketch_editor import SketchEditorDialog
+from mycad.ui.theme import ThemeName, apply_theme
+from mycad.ui.viewport import (
+    GLViewport,
+    ProjectionMode,
+    RenderMode,
+    SelectionKind,
+    SelectionState,
+    ViewOrientation,
+)
+
+if TYPE_CHECKING:
+    from mycad.app import AppServices
+
+CENTER_OBJECT_NAME = "viewportHost"
+LEFT_DOCK_OBJECT_NAME = "leftPanelDock"
+RIGHT_DOCK_OBJECT_NAME = "rightPanelDock"
+BOTTOM_DOCK_OBJECT_NAME = "bottomPanelDock"
+TOOLBAR_OBJECT_NAME = "mainToolBar"
+
+ORG_NAME = "MyCAD"
+APP_NAME = "MyCAD"
+SETTINGS_KEY_GEOMETRY = "mainWindow/geometry"
+SETTINGS_KEY_STATE = "mainWindow/state"
+SETTINGS_KEY_TOOLBAR_LOCKED = "toolbar/locked"
+SETTINGS_KEY_THEME = "appearance/theme"
+SETTINGS_KEY_TOOLBAR_AREA = "toolbar/preferredArea"
+SETTINGS_KEY_DOCUMENT_DIRECTORY = "documents/lastDirectory"
+
+APP_VERSION = "0.1.0"
+
+
+@dataclass(frozen=True, slots=True)
+class _DxfUnitPrompt:
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SketchConstraintPreview:
+    solve_result: SketchConstraintSolveResult
+    viewport: ViewportData | None = None
+    sketches: tuple[ViewportSketchData, ...] = ()
+
+
+#: UI draft §3, menu order and titles verbatim — pinned by tests/ui.
+MENU_TITLES: tuple[str, ...] = ("文件", "编辑", "视图", "特征", "工具", "智能体", "帮助")
+
+#: The plan todo-5/todo-8 union: signals that count as document changes
+#: (dirty marker) and drive the rebuild-status field.
+MODIFYING_SIGNALS: frozenset[str] = frozenset(
+    {
+        "post_command",
+        "geometry_rebuilt",
+        "command_amended",
+        "metadata_changed",
+        "named_group_added",
+        "named_group_removed",
+    }
+)
+
+#: Same union, minus the pure-geometry one: those mean "redispatch work of
+#: the layers". geometry_rebuilt means the rebuild finished.
+PENDING_REBUILD_SIGNALS: frozenset[str] = MODIFYING_SIGNALS - {"geometry_rebuilt"}
+
+#: The exact subscription set: the plan todo-5 union plus document_saved
+#: (drives the dirty marker back to clean).
+STATUS_SIGNALS: tuple[SignalName, ...] = (
+    "post_command",
+    "geometry_rebuilt",
+    "command_amended",
+    "metadata_changed",
+    "named_group_added",
+    "named_group_removed",
+    "document_saved",
+)
+
+# 面板刷新订阅集：结构树的数据面（document.commands / named_groups /
+# metadata）被这些信号击中时需要整树重建（todo 7 计划 References 明示
+# named_group 信号驱动树刷新；post_command/geometry_rebuilt/command_amended
+# 同理改变 feature_history 投影）。尾部 document_saved 只动脏标记，不缓存
+# 结构，故不在此列。
+STRUCTURE_REFRESH_SIGNALS: tuple[SignalName, ...] = (
+    "post_command",
+    "geometry_rebuilt",
+    "command_amended",
+    "metadata_changed",
+    "named_group_added",
+    "named_group_removed",
+)
+
+
+class _StatusMessage(QLabel):
+    """Long diagnostics stay available without forcing a wider main window."""
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        super().setText(text)
+        self.setToolTip(text)
+
+
+class MainWindow(QMainWindow):
+    """Shell shell: toolbar + viewportHost centre + three docks + status bar.
+
+    Dock features keep their Qt defaults (closable/movable/floatable) —
+    UI初稿 §2 requires docks to be floatable and closable, and the save/
+    restore behaviour of that default set is asserted in tests/ui.
+    """
+
+    _core_event_queued = Signal(int, str, object)
+
+    def __init__(self, *, services: AppServices | None = None) -> None:
+        super().__init__()
+        self.setWindowTitle("MyCAD")
+        self._compact_policy_ready = False
+        self._compact_layout_active = False
+        self._compact_policy_change = False
+        self._compact_left_was_visible = True
+        # resize() before restore_window_state(): a saved layout still wins.
+        self.resize(1400, 900)
+        self.setMinimumSize(640, 360)
+
+        self._services = services
+        self.execution_unit: SerializedExecutionUnit | None = None
+        self._session_id = 0
+        self._busy_action_states: dict[QAction, bool] = {}
+        self._loaded: LoadedDocument | None = None
+        self._sketch_dialog: SketchEditorDialog | None = None
+        self.new_document_dialog: NewDocumentDialog | None = None
+        self._sketch_dock_visibility: tuple[bool, bool] | None = None
+        self._drafting_toolbar_state: QByteArray | None = None
+        self._modeling_toolbar_was_visible = True
+        self._sketch_constraint_dialog: SketchConstraintDialog | None = None
+        self._sketch_constraint_preview_revision: int | None = None
+        self._document_path: Path | None = None
+        self._bus: CommandBus | None = None
+        self._active_modeling_command: str | None = None
+        self._active_selection_kind: SelectionKind | None = None
+        self._active_selection_role: str | None = None
+        self._active_placement_kind: str | None = None
+        self._previous_selection_filter: SelectionKind | None = None
+        self._fillet_edge_selectors: tuple[dict[str, object], ...] = ()
+        self._fillet_radius_value: float | None = 1.0
+        self._fillet_last_successful_radius = 1.0
+        self._fillet_preview_generation = 0
+        self._fillet_preview_valid = False
+        self._fillet_preview_document_revision: int | None = None
+        self._fillet_preview_pending = False
+        self._fillet_commit_inflight = False
+        self._modeling_face_selector: dict[str, object] | None = None
+        self._modeling_edge_selectors: tuple[dict[str, object], ...] = ()
+        self._modeling_body_selectors: tuple[dict[str, object], ...] = ()
+        self._modeling_body_names: tuple[str, ...] = ()
+        self._modeling_placement_ready = False
+        self._modeling_preview_generation = 0
+        self._modeling_preview_valid = False
+        self._modeling_preview_document_revision: int | None = None
+        self._modeling_preview_pending = False
+        self._modeling_commit_inflight = False
+        self._modeling_params: dict[str, object] = {}
+        self._modeling_face_frame: PlanarFaceFrame | None = None
+        self._modeling_params_valid = False
+        self._modeling_source_revision = 0
+        self._extrude_input_valid = True
+        self.fillet_command_bar: FilletCommandBar | None = None
+        self.modeling_command_bar: ModelingCommandBar | None = None
+        self._part_only_actions: list[QAction] = []
+        self._fillet_preview_timer = QTimer(self)
+        self._fillet_preview_timer.setSingleShot(True)
+        self._fillet_preview_timer.setInterval(200)
+        self._fillet_preview_timer.timeout.connect(self._request_fillet_preview)
+        self._modeling_preview_timer = QTimer(self)
+        self._modeling_preview_timer.setSingleShot(True)
+        self._modeling_preview_timer.setInterval(200)
+        self._modeling_preview_timer.timeout.connect(self._request_modeling_preview)
+        self._theme_name: ThemeName = "light"
+        self.rebuild_hook: Callable[[], None] | None = None
+        self.viewport: GLViewport | None = None
+        # Strong references to the per-signal adapters: the signal bus holds
+        # subscribers weakly, so anything not anchored here would die
+        # immediately at subscribe time.
+        self._signal_adapters: list[Callable[[Mapping[str, object]], None]] = []
+        self._core_event_queued.connect(self._dispatch_core_event)
+
+        # Center: services build the real GL viewport (todo 9); the bare
+        # shell keeps the placeholder host widget with the same name.
+        center = QWidget()
+        center.setObjectName(CENTER_OBJECT_NAME)
+        self.setCentralWidget(center)
+
+        self.main_toolbar = QToolBar("main")
+        self.main_toolbar.setObjectName(TOOLBAR_OBJECT_NAME)
+        # UI draft §10: movable, dockable to all four edges.
+        self.main_toolbar.setMovable(True)
+        self.main_toolbar.setFloatable(True)
+        self.main_toolbar.setAllowedAreas(Qt.ToolBarArea.AllToolBarAreas)
+        self.addToolBar(self.main_toolbar)
+        self.modeling_toolbar = QToolBar("三维建模", self)
+        self.modeling_toolbar.setObjectName("modelingToolsToolbar")
+        self.modeling_toolbar.setMovable(True)
+        self.modeling_toolbar.setFloatable(True)
+        self.modeling_toolbar.setAllowedAreas(Qt.ToolBarArea.AllToolBarAreas)
+        self.modeling_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.modeling_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self.addToolBar(self.modeling_toolbar)
+
+        self.left_dock = QDockWidget()
+        self.left_dock.setObjectName(LEFT_DOCK_OBJECT_NAME)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock)
+
+        self.right_dock = QDockWidget()
+        self.right_dock.setObjectName(RIGHT_DOCK_OBJECT_NAME)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.right_dock)
+
+        self.bottom_dock = QDockWidget()
+        self.bottom_dock.setObjectName(BOTTOM_DOCK_OBJECT_NAME)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
+
+        # Resident single-line status bar (UI draft §2/§8), five permanent
+        # fields from left to right.
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_command = _StatusMessage("空闲")
+        self.status_command.setObjectName("statusCommand")
+        self.status_command.setMinimumWidth(60)
+        self.status_command.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.status_camera = QLabel("无视图")
+        self.status_camera.setObjectName("statusCamera")
+        self.status_camera.setToolTip("中键旋转；Shift+中键平移；滚轮缩放；左键选择/框选。")
+        self.status_selection = QLabel("选择 0")
+        self.status_unit = QLabel("mm")
+        self.status_rebuild = QLabel("重建状态：就绪")
+        self.status_dirty = QLabel("未修改")
+        for label in (
+            self.status_command,
+            self.status_camera,
+            self.status_selection,
+            self.status_unit,
+            self.status_rebuild,
+            self.status_dirty,
+        ):
+            self.status_bar.addPermanentWidget(label, 1 if label is self.status_command else 0)
+
+        self._build_menus()
+        if services is not None:
+            self.execution_unit = SerializedExecutionUnit(self)
+            execution_unit = self.execution_unit
+
+            def join_executor(_object: QObject | None = None) -> None:
+                execution_unit.shutdown(wait_for_running=True)
+
+            self.destroyed.connect(join_executor)
+            self.execution_unit.busy_changed.connect(self._on_execution_busy_changed)
+        # Todo 6: with services the left dock hosts the command palette and
+        # its plan-draft controller; the todo-4 zero-arg form keeps the
+        # dock empty.
+        self.plan_draft: PlanDraftController | None = None
+        self.command_palette: CommandPalette | None = None
+        self.bottom_tabs: QTabWidget | None = None
+        self.cli_tab: CliTab | None = None
+        self.plan_cards: PlanCards | None = None
+        # Todo 7: with services the right dock hosts the five fixed tabs;
+        # its document binding still happens in ``bind_document``.
+        self.right_panel: RightPanel | None = None
+        self._registry: CommandRegistry | None = None
+        if services is not None:
+            self.command_palette = CommandPalette(services.registry)
+            self.left_dock.setWidget(self.command_palette)
+            self.left_dock.setWindowTitle("命令库")
+            self.plan_draft = PlanDraftController(services.registry)
+            self._registry = services.registry
+            self.act_command_reference.setEnabled(True)
+            self.right_panel = RightPanel()
+            self.right_dock.setWidget(self.right_panel)
+            self.right_dock.setWindowTitle("属性")
+            self.command_palette.command_activated.connect(self._on_palette_command)
+            # Todo 9: real viewport in the centre; snapshot refresh + 视图 actions.
+            viewport = GLViewport(viewport_port=services.kernel)
+            viewport.set_orientation("isometric")
+            viewport.setObjectName(CENTER_OBJECT_NAME)
+            self.viewport = viewport
+            self.setCentralWidget(viewport)
+            self.rebuild_hook = viewport.refresh
+            for action in self.render_mode_actions.values():
+                action.setEnabled(True)
+            for action in self.selection_filter_actions.values():
+                action.setEnabled(True)
+            for action in self.orientation_actions.values():
+                action.setEnabled(True)
+            for action in self.projection_actions.values():
+                action.setEnabled(True)
+            self.act_select_filter.setEnabled(True)
+            self.act_standard_orientation.setEnabled(True)
+            self.projection_menu.menuAction().setEnabled(True)
+            self.act_show_coordinate_axes.setEnabled(True)
+            self.act_show_xy_grid.setEnabled(True)
+            viewport.selection_changed.connect(self._on_selection_changed)
+            viewport.camera_changed.connect(self._sync_camera_status)
+            self._sync_camera_status()
+            viewport.current_snapshot_changed.connect(self._on_current_snapshot_changed)
+            self.right_panel.body_selection_requested.connect(self._on_body_pick)
+            self.right_panel.body_visibility_requested.connect(self._on_body_visibility_requested)
+            self.right_panel.show_all_bodies_requested.connect(viewport.show_all_bodies)
+            viewport.body_display_changed.connect(self._sync_body_display)
+            viewport.context_menu_requested.connect(self._on_viewport_context_requested)
+            viewport.fillet_commit_requested.connect(self._commit_fillet_group)
+            viewport.modeling_commit_requested.connect(self._commit_modeling_operation)
+            viewport.radius_edit_requested.connect(self._begin_fillet_radius_edit)
+            fillet_bar = FilletCommandBar(self)
+            fillet_bar.hide()
+            self.fillet_command_bar = fillet_bar
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, fillet_bar)
+            fillet_bar.radius_changed.connect(self._on_fillet_radius_changed)
+            fillet_bar.radius_accepted.connect(self._accept_fillet_radius)
+            fillet_bar.commit_requested.connect(self._commit_fillet_group)
+            fillet_bar.cancel_requested.connect(self._cancel_active_modeling_tool)
+            fillet_bar.clear_selection_requested.connect(self._clear_fillet_selection)
+            modeling_bar = ModelingCommandBar(self)
+            modeling_bar.hide()
+            self.modeling_command_bar = modeling_bar
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, modeling_bar)
+            modeling_bar.parameters_changed.connect(self._on_modeling_parameters_changed)
+            modeling_bar.commit_requested.connect(self._commit_modeling_operation)
+            modeling_bar.cancel_requested.connect(self._cancel_active_modeling_tool)
+            modeling_bar.distance_accepted.connect(self._accept_extrude_distance)
+            modeling_bar.distance_input_validity_changed.connect(self._on_extrude_input_validity)
+            modeling_bar.dimension_changed.connect(self._sync_dimension_handle)
+            viewport.extrude_manipulator.distance_changed.connect(self._on_dimension_value)
+            viewport.extrude_manipulator.input_validity_changed.connect(
+                self._on_extrude_input_validity
+            )
+            viewport.extrude_manipulator.toolbar_input_requested.connect(
+                self._focus_dimension_input
+            )
+            viewport.extrude_manipulator.hint_changed.connect(self.status_command.setText)
+            viewport.workplane_point_picked.connect(self._on_workplane_point_picked)
+            viewport.workplane_point_rejected.connect(self._on_workplane_point_rejected)
+            viewport.escape_pressed.connect(self._cancel_active_modeling_tool)
+            self.act_fit_view.setEnabled(True)
+            self.act_fit_view.triggered.connect(self._on_fit_view)
+            # Todo 11: bottom dock hosts the same-source CLI tab + chat placeholder.
+            tabs = QTabWidget()
+            tabs.setObjectName("bottomTabs")
+            self.cli_tab = CliTab(
+                services=services,
+                on_replace_doc=self._on_cli_document_replace,
+                execution_unit=self.execution_unit,
+            )
+            tabs.addTab(self.cli_tab, "CLI")
+            # Todo 12: the Chat page is the plan-card confirmation stream.
+            self.plan_cards = PlanCards()
+            if self.execution_unit is not None:
+                self.plan_cards.configure_execution(
+                    self.execution_unit,
+                    session_id=lambda: self._session_id,
+                    prepare_geometry=services.kernel.viewport_data,
+                    preview_builder=partial(mycad_app.preview_command, services),
+                    show_candidate_preview=viewport.show_candidate_preview,
+                    clear_candidate_preview=viewport.clear_candidate_preview,
+                )
+            tabs.addTab(self.plan_cards, "计划")
+            self.bottom_tabs = tabs
+            self.bottom_dock.setWidget(tabs)
+            self.act_show_cli.setEnabled(True)
+            self.act_view_plans.setEnabled(True)
+            assert self.plan_cards is not None  # created just above
+            self.plan_cards.bind_draft(self.plan_draft)
+            self.plan_cards.plan_done.connect(self._on_fillet_plan_done)
+            self.plan_cards.plan_failed.connect(self._on_fillet_plan_failed)
+            if self.execution_unit is not None:
+                self.execution_unit.busy_changed.connect(self._on_fillet_execution_busy_changed)
+                self.execution_unit.busy_changed.connect(self._on_modeling_execution_busy_changed)
+            self.bottom_dock.setWindowTitle("命令行与计划")
+            # P2-05: a tree click previews a historical state; a viewport
+            # hit selects the current model without inventing a source row.
+            self.right_panel.structure_selection_changed.connect(self._on_structure_pick)
+            self.right_panel.history_edit_requested.connect(self._on_history_edit_requested)
+            self.viewport.current_entity_picked.connect(self._on_current_entity_pick)
+            self.viewport.history_preview_changed.connect(self._on_history_preview_changed)
+        self._populate_toolbar()
+        self.resizeDocks(
+            [self.left_dock, self.right_dock],
+            [194, 278],
+            Qt.Orientation.Horizontal,
+        )
+        self.restore_window_state()
+
+    # ------------------------------------------------------------------
+    # Menus (UI draft §3)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _set_action_shortcut(
+        action: QAction, shortcut: QKeySequence, *, explanation: str | None = None
+    ) -> None:
+        action.setShortcut(shortcut)
+        hint = shortcut.toString(QKeySequence.SequenceFormat.NativeText)
+        tooltip = explanation or action.text()
+        if hint:
+            tooltip = f"{tooltip} · {hint}"
+        action.setToolTip(tooltip)
+        action.setStatusTip(tooltip)
+
+    def _build_menus(self) -> None:
+        self.menu_file = self.menuBar().addMenu("文件")
+        self.act_new = self.menu_file.addAction("新建")
+        self.act_new_drawing = self.menu_file.addAction("新建二维图")
+        self.act_open = self.menu_file.addAction("打开")
+        self.act_save = self.menu_file.addAction("保存")
+        self.act_save_as = self.menu_file.addAction("另存为")
+        self.act_import = self.menu_file.addAction("导入")
+        self.act_export = self.menu_file.addAction("导出（STEP/STL/DXF）")
+        self.act_screenshot = self.menu_file.addAction("截图")
+        self.act_quit = self.menu_file.addAction("退出")
+        self._set_action_shortcut(self.act_new, QKeySequence(QKeySequence.StandardKey.New))
+        self._set_action_shortcut(self.act_open, QKeySequence(QKeySequence.StandardKey.Open))
+        self._set_action_shortcut(self.act_save, QKeySequence(QKeySequence.StandardKey.Save))
+        self._set_action_shortcut(self.act_save_as, QKeySequence(QKeySequence.StandardKey.SaveAs))
+        self.act_quit.triggered.connect(self.close)
+        # DXF import is limited to preview-confirmed sketch linework; STEP
+        # solid import and independent screenshot export remain unavailable.
+        self.act_import.setToolTip("导入 DXF 草图子集；先预览交换报告，再确认写入历史。")
+        self.act_screenshot.setToolTip("独立截图导出尚未实现；可使用系统截图工具。")
+        self.act_screenshot.setEnabled(False)
+        self.act_new.triggered.connect(self._on_new_document)
+        self.act_new_drawing.setEnabled(self._services is not None)
+        self.act_new_drawing.setToolTip("创建独立二维绘图文档；存档会记录文档类型。")
+        self.act_new_drawing.triggered.connect(self._on_new_drawing_document)
+        self.act_open.triggered.connect(self._on_open_document)
+        self.act_save.triggered.connect(self._on_save_document)
+        self.act_save_as.triggered.connect(self._on_save_document_as)
+        self.act_import.triggered.connect(self._on_import_dxf_sketch)
+        self.act_export.triggered.connect(self._on_export_document)
+
+        self.menu_edit = self.menuBar().addMenu("编辑")
+        self.act_undo = self.menu_edit.addAction("撤销")
+        self._set_action_shortcut(self.act_undo, QKeySequence(QKeySequence.StandardKey.Undo))
+        self.act_undo.triggered.connect(self.request_undo)
+        self.act_redo = self.menu_edit.addAction("重做")
+        self._set_action_shortcut(self.act_redo, QKeySequence(QKeySequence.StandardKey.Redo))
+        self.act_redo.triggered.connect(self.request_redo)
+        self.act_delete = self.menu_edit.addAction("删除")
+        self.selection_filter_menu: QMenu = self.menu_edit.addMenu("选择过滤器")
+        self.act_select_filter = self.selection_filter_menu.menuAction()
+        self.selection_filter_group = QActionGroup(self)
+        self.selection_filter_group.setExclusive(True)
+        filter_labels: tuple[tuple[SelectionKind, str], ...] = (
+            ("body", "实体"),
+            ("face", "面"),
+            ("edge", "边"),
+            ("vertex", "顶点"),
+        )
+        self.selection_filter_actions: dict[SelectionKind, QAction] = {}
+        for kind, label in filter_labels:
+            action = self.selection_filter_menu.addAction(label)
+            action.setCheckable(True)
+            action.setEnabled(False)
+            action.setToolTip(f"后续视口点击只选择{label}；当前模型不变")
+            self.selection_filter_group.addAction(action)
+            action.triggered.connect(partial(self._on_selection_filter_selected, kind))
+            self.selection_filter_actions[kind] = action
+        self.selection_filter_actions["body"].setChecked(True)
+        self.act_delete.setEnabled(False)
+        self.act_select_filter.setEnabled(False)
+        self.act_delete.setToolTip("当前版本不支持直接删除实体；可撤销或编辑历史特征。")
+        self.act_select_filter.setToolTip("选择实体、面、边或顶点；只改变视口状态。")
+
+        self.menu_view = self.menuBar().addMenu("视图")
+        self.render_mode_menu = self.menu_view.addMenu("渲染模式")
+        self.render_mode_group = QActionGroup(self)
+        self.render_mode_group.setExclusive(True)
+        mode_labels: tuple[tuple[RenderMode, str], ...] = (
+            ("shaded", "着色"),
+            ("shaded-edges", "着色边线"),
+            ("engineering-wireframe", "工程线框"),
+            ("mesh-diagnostic", "网格诊断"),
+        )
+        self.render_mode_actions: dict[RenderMode, QAction] = {}
+        for mode, label in mode_labels:
+            action = self.render_mode_menu.addAction(label)
+            action.setCheckable(True)
+            action.setEnabled(False)
+            action.setToolTip(f"仅改变视口显示方式：{label}")
+            self.render_mode_group.addAction(action)
+            action.triggered.connect(partial(self._on_render_mode_selected, mode))
+            self.render_mode_actions[mode] = action
+        self.act_shaded_wireframe = self.render_mode_actions["shaded-edges"]
+        self.act_shaded_wireframe.setChecked(True)
+        self.act_fit_view = self.menu_view.addAction("适应窗口")
+        self._set_action_shortcut(
+            self.act_fit_view, QKeySequence("F"), explanation="将当前模型完整显示在画布中"
+        )
+        self.act_fit_view.setEnabled(False)
+        self.act_return_current_model = self.menu_view.addAction("返回当前模型")
+        self.act_return_current_model.setToolTip("退出历史预览并返回当前模型。")
+        self.act_return_current_model.setEnabled(False)
+        self.act_return_current_model.triggered.connect(self._return_current_model)
+        self.orientation_menu: QMenu = self.menu_view.addMenu("标准方向")
+        self.act_standard_orientation = self.orientation_menu.menuAction()
+        self.orientation_group = QActionGroup(self)
+        self.orientation_group.setExclusive(True)
+        orientation_labels: tuple[tuple[ViewOrientation, str], ...] = (
+            ("front", "前视"),
+            ("back", "后视"),
+            ("left", "左视"),
+            ("right", "右视"),
+            ("top", "俯视"),
+            ("bottom", "仰视"),
+            ("isometric", "等轴测"),
+        )
+        self.orientation_actions: dict[ViewOrientation, QAction] = {}
+        for orientation, label in orientation_labels:
+            action = self.orientation_menu.addAction(label)
+            action.setCheckable(True)
+            action.setEnabled(False)
+            self.orientation_group.addAction(action)
+            action.triggered.connect(partial(self._on_orientation_selected, orientation))
+            self.orientation_actions[orientation] = action
+        self.orientation_actions["isometric"].setChecked(True)
+        self.act_standard_orientation.setEnabled(False)
+        self.projection_menu: QMenu = self.menu_view.addMenu("投影方式")
+        self.projection_group = QActionGroup(self)
+        self.projection_group.setExclusive(True)
+        projection_labels: tuple[tuple[ProjectionMode, str], ...] = (
+            ("orthographic", "正交"),
+            ("perspective", "透视"),
+        )
+        self.projection_actions: dict[ProjectionMode, QAction] = {}
+        for mode, label in projection_labels:
+            action = self.projection_menu.addAction(label)
+            action.setCheckable(True)
+            action.setEnabled(False)
+            self.projection_group.addAction(action)
+            action.triggered.connect(partial(self._on_projection_selected, mode))
+            self.projection_actions[mode] = action
+        self.projection_actions["orthographic"].setChecked(True)
+        self.projection_menu.menuAction().setEnabled(False)
+        self.act_show_coordinate_axes = self.menu_view.addAction("全局 XYZ 坐标")
+        self.act_show_coordinate_axes.setCheckable(True)
+        self.act_show_coordinate_axes.setEnabled(False)
+        self.act_show_coordinate_axes.toggled.connect(self._on_coordinate_axes_toggled)
+        self.act_show_xy_grid = self.menu_view.addAction("XY 工作网格")
+        self.act_show_xy_grid.setCheckable(True)
+        self.act_show_xy_grid.setEnabled(False)
+        self.act_show_xy_grid.toggled.connect(self._on_xy_grid_toggled)
+        self.menu_view.addSeparator()
+        self.menu_appearance = self.menu_view.addMenu("外观主题")
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        self.act_theme_light = self.menu_appearance.addAction("明亮")
+        self.act_theme_dark = self.menu_appearance.addAction("暗色")
+        for action in (self.act_theme_light, self.act_theme_dark):
+            action.setCheckable(True)
+            self.theme_action_group.addAction(action)
+        self.act_theme_light.triggered.connect(partial(self._on_theme_action, "light"))
+        self.act_theme_dark.triggered.connect(partial(self._on_theme_action, "dark"))
+        self.act_theme_light.setChecked(True)
+        self.menu_view.addSeparator()
+        self.act_show_cli = self.menu_view.addAction("打开命令行面板")
+        self._set_action_shortcut(
+            self.act_show_cli,
+            QKeySequence("Ctrl+Shift+L"),
+            explanation="显示底部命令行",
+        )
+        self.act_show_cli.triggered.connect(self._show_cli_panel)
+        self.act_show_cli.setEnabled(False)
+        self.act_show_cli.setToolTip("需要可用的应用服务；创建或打开文档后可显示 CLI。")
+        self.act_reset_layout = self.menu_view.addAction("重置工作台布局")
+        self._set_action_shortcut(
+            self.act_reset_layout,
+            QKeySequence("Ctrl+Shift+0"),
+            explanation="恢复命令库、结构属性和顶部工具栏默认布局",
+        )
+        self.act_reset_layout.triggered.connect(self._reset_layout)
+        self.menu_view.addSeparator()
+        self.menu_view.addAction(self.modeling_toolbar.toggleViewAction())
+        self.act_toggle_toolbar = self.menu_view.addAction("显示/隐藏工具栏")
+        self.act_toggle_toolbar.setCheckable(True)
+        self.act_toggle_toolbar.setChecked(True)
+        self.act_toggle_toolbar.toggled.connect(self.main_toolbar.setVisible)
+        self.act_lock_toolbar = self.menu_view.addAction("锁定工具栏")
+        self.act_lock_toolbar.setCheckable(True)
+        self.act_lock_toolbar.toggled.connect(self._apply_toolbar_lock)
+        self.menu_view.addSeparator()
+        self.act_toggle_left_dock = self.menu_view.addAction("命令库面板")
+        self.act_toggle_left_dock.setCheckable(True)
+        self.act_toggle_left_dock.setChecked(True)
+        self.act_toggle_left_dock.toggled.connect(self._on_left_dock_toggled)
+        self.act_toggle_right_dock = self.menu_view.addAction("结构与属性面板")
+        self.act_toggle_right_dock.setCheckable(True)
+        self.act_toggle_right_dock.setChecked(True)
+        self.act_toggle_right_dock.toggled.connect(self.right_dock.setVisible)
+        self.act_toggle_bottom_dock = self.menu_view.addAction("CLI 与计划面板")
+        self.act_toggle_bottom_dock.setCheckable(True)
+        self.act_toggle_bottom_dock.setChecked(False)
+        self.act_toggle_bottom_dock.toggled.connect(self.bottom_dock.setVisible)
+        self.bottom_dock.hide()
+
+        self.menu_feature = self.menuBar().addMenu("特征")
+        self.act_open_palette = self.menu_feature.addAction("打开左栏命令库")
+        self.act_open_palette.triggered.connect(self._open_left_palette)
+        self.act_sketch = self.menu_feature.addAction("草图")
+        self.act_sketch.setEnabled(self._services is not None)
+        self.act_sketch.setToolTip("在选定工作平面上绘制 2D 草图；完成后写入一条可撤销命令。")
+        self.act_sketch.triggered.connect(self._on_sketch_start)
+        self.act_sketch_constraints = self.menu_feature.addAction("草图约束")
+        self.act_sketch_constraints.setEnabled(self._services is not None)
+        self.act_sketch_constraints.setToolTip("为已有草图预览并确认参数化约束。")
+        self.act_sketch_constraints.triggered.connect(self._on_sketch_constraints)
+
+        self.menu_tools = self.menuBar().addMenu("工具")
+        self.act_options = self.menu_tools.addAction("选项")
+        self.act_options.triggered.connect(self._show_options)
+        self.act_units = self.menu_tools.addAction("单位")
+        self.act_units.triggered.connect(self._show_units)
+        self.act_measure = self.menu_tools.addAction("测量")
+        self.act_measure.setEnabled(False)
+        self.act_rebuild = self.menu_tools.addAction("重建")
+        self.act_rebuild.triggered.connect(self.request_rebuild)
+
+        self.menu_agent = self.menuBar().addMenu("智能体")
+        self.act_view_plans = self.menu_agent.addAction("查看待确认计划")
+        self._set_action_shortcut(
+            self.act_view_plans,
+            QKeySequence("Ctrl+Shift+P"),
+            explanation="打开当前计划确认卡片",
+        )
+        self.act_view_plans.triggered.connect(self._show_plan_cards)
+        self.act_view_plans.setEnabled(False)
+        self.act_view_plans.setToolTip("需要可用的计划执行器；创建或打开文档后可查看计划。")
+        self.act_clear_chat = self.menu_agent.addAction("清空对话")
+        self.act_clear_chat.setEnabled(False)
+        self.act_clear_chat.setVisible(False)
+        self.act_clear_chat.setToolTip("AI 对话属于 Phase 3；当前阶段仅提供计划确认卡片。")
+
+        self.menu_help = self.menuBar().addMenu("帮助")
+        self.act_shortcuts = self.menu_help.addAction("快捷键")
+        self.act_shortcuts.triggered.connect(self._show_shortcuts)
+        # Verb <-> command-id lookup needs the registry: disabled until the
+        # services branch below has one.
+        self.act_command_reference = self.menu_help.addAction("命令速查…")
+        self.act_command_reference.setEnabled(False)
+        self.act_command_reference.triggered.connect(self._show_command_reference)
+        self.act_about = self.menu_help.addAction("关于")
+        self.act_about.triggered.connect(self._show_about)
+        self.act_license = self.menu_help.addAction("开源许可说明")
+        self.act_license.triggered.connect(self._show_license)
+
+    def _populate_toolbar(self) -> None:
+        """给工具栏装按钮（UI 初稿 §4.2）。
+
+        菜单动作复用同一批 QAction 对象——菜单与工具栏共用一份状态，
+        勾选/启用不会分叉；建模快捷键走左栏命令库同一条起草路径
+        （草稿 → 确认 → 执行），没有 services 时禁用。
+        """
+        self.main_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.main_toolbar.setIconSize(QSize(24, 24))
+        self._action_icon_names: dict[QAction, str] = {}
+        self.act_view_2d = self.menu_view.addAction("二维绘图")
+        self.act_view_3d = self.menu_view.addAction("三维视图")
+        self.act_view_2d.setCheckable(True)
+        self.act_view_3d.setCheckable(True)
+        self.act_view_3d.setChecked(True)
+        self.act_view_2d.triggered.connect(self._on_sketch_start)
+        self.act_view_3d.triggered.connect(self._show_3d_workspace)
+        groups = (
+            ((self.act_view_2d, "sketch"), (self.act_view_3d, "view-isometric")),
+            ((self.act_new, "new"), (self.act_open, "open"), (self.act_save, "save")),
+            ((self.act_undo, "undo"), (self.act_redo, "redo")),
+            (
+                (self.act_fit_view, "fit"),
+                (self.act_return_current_model, "current-model"),
+                (self.act_shaded_wireframe, "shaded-edges"),
+            ),
+            ((self.act_view_plans, "plan"),),
+        )
+        for group in groups:
+            for action, name in group:
+                self._action_icon_names[action] = name
+                self.main_toolbar.addAction(action)
+            self.main_toolbar.addSeparator()
+        self.menu_feature.addSeparator()
+        for label, command_id in (
+            ("长方体", "feature.box"),
+            ("圆柱体", "feature.cylinder"),
+            ("拉伸", "feature.extrude"),
+            ("旋转", "feature.revolve"),
+            ("孔", "feature.hole"),
+            ("孔阵列", "feature.hole_pattern"),
+            ("圆角", "modify.fillet"),
+            ("差集", "modify.boolean_cut"),
+            ("交集", "modify.boolean_intersect"),
+            ("实体布尔", "modify.boolean_bodies"),
+            ("实体变换", "modify.body_transform"),
+            ("实体阵列", "modify.body_pattern"),
+        ):
+            action = QAction(label, self)
+            shortcut_text = {
+                "feature.extrude": "Ctrl+Shift+E",
+                "feature.revolve": "Ctrl+Shift+R",
+                "feature.hole": "Ctrl+Shift+H",
+                "modify.fillet": "Ctrl+Shift+F",
+            }.get(command_id, "")
+            self._action_icon_names[action] = command_icon_name(command_id)
+            self._set_action_shortcut(
+                action,
+                QKeySequence(shortcut_text),
+                explanation=f"{label}（{command_id}）：选取几何并设置参数，预览后应用执行",
+            )
+            action.setEnabled(self.plan_draft is not None)
+            self._part_only_actions.append(action)
+            if self.plan_draft is None:
+                action.setToolTip(f"{label} 需要可用的应用服务和计划执行器。")
+            action.triggered.connect(partial(self._on_toolbar_modeling, command_id))
+            self.menu_feature.addAction(action)
+            self.modeling_toolbar.addAction(action)
+
+        self._action_icon_names.update(self._menu_icon_names())
+        self._refresh_action_icons()
+
+    def _menu_icon_names(self) -> dict[QAction, str]:
+        icons = {
+            self.act_save_as: "save-as",
+            self.act_import: "import",
+            self.act_export: "export",
+            self.act_screenshot: "camera",
+            self.act_quit: "exit",
+            self.act_delete: "delete",
+            self.act_select_filter: "filter",
+            self.render_mode_menu.menuAction(): "shaded-edges",
+            self.act_standard_orientation: "view-isometric",
+            self.projection_menu.menuAction(): "perspective",
+            self.act_show_coordinate_axes: "axes",
+            self.act_show_xy_grid: "grid",
+            self.menu_appearance.menuAction(): "appearance",
+            self.act_theme_light: "light",
+            self.act_theme_dark: "dark",
+            self.act_show_cli: "console",
+            self.act_reset_layout: "layout",
+            self.act_toggle_toolbar: "panel-top",
+            self.act_lock_toolbar: "lock",
+            self.act_toggle_left_dock: "panel-left",
+            self.act_toggle_right_dock: "panel-right",
+            self.act_toggle_bottom_dock: "panel-bottom",
+            self.act_open_palette: "features",
+            self.act_options: "settings",
+            self.act_units: "units",
+            self.act_measure: "measure",
+            self.act_rebuild: "rebuild",
+            self.act_clear_chat: "delete",
+            self.act_shortcuts: "keyboard",
+            self.act_command_reference: "reference",
+            self.act_about: "info",
+            self.act_license: "license",
+        }
+        icons.update(
+            {
+                action: ("box" if kind == "body" else kind)
+                for kind, action in self.selection_filter_actions.items()
+            }
+        )
+        render_icons = {
+            "shaded": "shaded",
+            "shaded-edges": "shaded-edges",
+            "engineering-wireframe": "wireframe",
+            "mesh-diagnostic": "mesh",
+        }
+        icons.update(
+            {action: render_icons[mode] for mode, action in self.render_mode_actions.items()}
+        )
+        icons.update(
+            {
+                action: f"view-{orientation}"
+                for orientation, action in self.orientation_actions.items()
+            }
+        )
+        icons.update({action: mode for mode, action in self.projection_actions.items()})
+        return icons
+
+    def _refresh_action_icons(self) -> None:
+        for action, name in self._action_icon_names.items():
+            action.setIcon(cad_icon(name, self._theme_name))
+            action.setIconVisibleInMenu(True)
+
+    def _on_toolbar_modeling(self, command_id: str, _checked: bool = False) -> None:
+        """工具栏建模按钮：与左栏命令库双击同一条路径。"""
+        self._on_palette_command(command_id)
+
+    def _apply_toolbar_lock(self, locked: bool) -> None:
+        """锁定工具栏：锁定后既不可拖动也不可悬浮."""
+        for bar in (self.main_toolbar, self.modeling_toolbar):
+            bar.setMovable(not locked)
+            bar.setFloatable(not locked)
+        if self._sketch_dialog is not None:
+            self._sketch_dialog.set_toolbars_locked(locked)
+
+    def _open_left_palette(self) -> None:
+        self.left_dock.show()
+        self.left_dock.raise_()
+
+    def _on_sketch_start(self, _checked: bool = False) -> None:
+        if self._services is None or self._loaded is None:
+            self.status_command.setText("创建或打开文档后才能开始草图。")
+            return
+        if self.execution_unit is not None and self.execution_unit.is_busy:
+            self.status_command.setText("几何工作线程忙碌，请等待当前操作完成后开始草图。")
+            return
+        if self._sketch_dialog is not None:
+            self._show_sketch_workbench(self._sketch_dialog)
+            return
+        attached_frame: WorkPlaneFrame | None = None
+        support_face: SketchSupportFace | None = None
+        selection = self.viewport.selection() if self.viewport is not None else None
+        if (
+            self._loaded.document.document_type == "part"
+            and selection is not None
+            and selection.kind == "face"
+        ):
+            if len(selection.topology_ids) != 1:
+                self.status_command.setText("附着草图需要只选择一个平面。")
+                return
+            try:
+                descriptor = mycad_app.interactive_selectors(
+                    self._services,
+                    "face",
+                    selection.topology_ids,
+                )[0]
+                if descriptor.get("surface") != "plane":
+                    self.status_command.setText("草图只能附着到平面；请重新选择模型面。")
+                    return
+                face_frame = mycad_app.interactive_face_frame(
+                    self._services,
+                    selection.topology_ids[0],
+                )
+                attached_frame = WorkPlaneFrame.from_planar_face(
+                    face_frame.origin,
+                    face_frame.normal,
+                )
+                support_face = SketchSupportFace.from_mapping(descriptor)
+            except (MycadError, ValueError) as err:
+                self.status_command.setText(f"无法将草图附着到所选面：{str(err)[:180]}")
+                return
+        dialog = SketchEditorDialog(
+            self,
+            can_finish=lambda: self.execution_unit is not None and not self.execution_unit.is_busy,
+            drag_preview=self._services.kernel.preview_sketch_drag,
+            attached_frame=attached_frame,
+            support_face=support_face,
+            continuous_lines=True,
+            select_committed_entities=self._loaded.document.document_type == "drawing2d",
+            constraint_preview=self._services.kernel.preview_sketch_constraint,
+            constraint_update_preview=self._services.kernel.preview_sketch_constraint_update,
+        )
+        dialog.document_layer_mode = True
+        dialog.document_undo_requested.connect(self.request_undo)
+        dialog.document_redo_requested.connect(self.request_redo)
+        dialog.layer_change_requested.connect(
+            partial(self._on_drawing_layer_update, dialog, self._session_id)
+        )
+        dialog.set_document_layers(
+            self._services.kernel.drawing_layers, self._services.kernel.dimension_layer
+        )
+        dialog.view_3d_requested.connect(self._show_3d_workspace)
+        dialog.dimensions.committed_requested.connect(
+            partial(self._on_canvas_dimension_commit, dialog, self._session_id)
+        )
+        dialog.dimensions.preview_requested.connect(
+            partial(self._on_canvas_dimension_preview, dialog, self._session_id)
+        )
+        dialog.restore_toolbar_layout(self._drafting_toolbar_state)
+        dialog.set_toolbars_locked(self.act_lock_toolbar.isChecked())
+        self._sketch_dialog = dialog
+        dialog.plane_combo.currentTextChanged.connect(self._sync_camera_status)
+        dialog.set_context_sketches(self._services.kernel.sketches)
+        session_id = self._session_id
+        dialog.finished.connect(partial(self._on_sketch_editor_finished, dialog, session_id))
+        self._show_sketch_workbench(dialog)
+        self.status_command.setText("二维绘图：主工作区内编辑；完成草图提交，取消草稿不写入。")
+
+    def _show_3d_workspace(self, _checked: bool = False) -> None:
+        if self._sketch_dialog is not None:
+            self._hide_sketch_workbench(self._sketch_dialog)
+            self.status_command.setText(
+                "三维视图显示已提交模型；二维草稿已保留，点击“二维绘图”继续。"
+            )
+        self.act_view_3d.setChecked(True)
+        self.act_view_2d.setChecked(False)
+        if self.viewport is not None:
+            self.viewport.setFocus()
+        self._sync_camera_status()
+
+    def _show_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
+        self.act_view_2d.setChecked(True)
+        self.act_view_3d.setChecked(False)
+        if self.centralWidget() is dialog:
+            dialog.show()
+            return
+        previous = self.takeCentralWidget()
+        if previous is not None:
+            previous.setParent(self)
+            previous.hide()
+        if self._sketch_dock_visibility is None:
+            self._modeling_toolbar_was_visible = not self.modeling_toolbar.isHidden()
+            self._sketch_dock_visibility = (self.left_dock.isVisible(), self.right_dock.isVisible())
+        self.left_dock.hide()
+        self.right_dock.hide()
+        self.modeling_toolbar.hide()
+        dialog.setWindowFlags(Qt.WindowType.Widget)
+        self.setCentralWidget(dialog)
+        dialog.show()
+        dialog.canvas.setFocus()
+        self._sync_camera_status()
+
+    def _hide_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
+        self._drafting_toolbar_state = dialog.toolbar_layout_state()
+        if self.centralWidget() is dialog:
+            self.takeCentralWidget()
+            dialog.setParent(self, Qt.WindowType.Widget)
+            dialog.hide()
+            if self.viewport is not None:
+                self.setCentralWidget(self.viewport)
+                self.viewport.show()
+                self.act_view_2d.setChecked(False)
+                self.act_view_3d.setChecked(True)
+        if self._sketch_dock_visibility is not None:
+            left, right = self._sketch_dock_visibility
+            self._sketch_dock_visibility = None
+            self.left_dock.setVisible(left)
+            self.right_dock.setVisible(right)
+            self.modeling_toolbar.setVisible(self._modeling_toolbar_was_visible)
+        self._sync_camera_status()
+
+    def _sync_drawing_layers(self) -> None:
+        editor, services = self._sketch_dialog, self._services
+        if editor is not None and services is not None:
+            editor.set_context_sketches(services.kernel.sketches)
+            editor.set_document_layers(
+                services.kernel.drawing_layers, services.kernel.dimension_layer
+            )
+
+    def _on_drawing_layer_update(
+        self, editor: SketchEditorDialog, session_id: int, payload: object
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            loaded is None
+            or services is None
+            or unit is None
+            or session_id != self._session_id
+            or not isinstance(payload, dict)
+        ):
+            return
+        data = cast("dict[str, object]", payload)
+        params = data.get("params")
+        if not isinstance(params, dict):
+            return
+        params = cast("dict[str, object]", params)
+        migrate_draft = data.get("migrate_draft") is True
+        commands = tuple(loaded.document.commands)
+        editor.setEnabled(False)
+        panel = editor.active_layer_manager
+        if panel is not None:
+            panel.setEnabled(False)
+
+        def update() -> object:
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or tuple(loaded.document.commands) != commands
+            ):
+                raise ValueError("图纸已改变，本次图层修改未应用")
+            return loaded.bus.execute("drawing.layers.set", params, confirmed_by="local")
+
+        def finish(result: ExecutionResult) -> None:
+            editor.setEnabled(True)
+            if panel is not None:
+                panel.setEnabled(True)
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or self._sketch_dialog is not editor
+            ):
+                return
+            self._sync_drawing_layers()
+            if result.error is not None:
+                editor.status_label.setText(f"图层修改失败：{result.error}")
+                return
+            editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            if migrate_draft:
+                editor.apply_draft_dim_migration()
+            if self.viewport is not None:
+                self.viewport.refresh()
+            editor.status_label.setText("图纸图层已更新；草稿和已提交对象同步，可撤销。")
+
+        if not unit.submit(
+            update, operation="drawing-layer-update", session_id=session_id, on_complete=finish
+        ):
+            editor.setEnabled(True)
+            if panel is not None:
+                panel.setEnabled(True)
+            self._sync_drawing_layers()
+            editor.status_label.setText("几何工作线程忙碌，请稍后修改图层。")
+
+    def _on_canvas_dimension_preview(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        sketch: Sketch,
+        constraint: SketchConstraint,
+        generation: int,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            return
+        commands = tuple(loaded.document.commands)
+        updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
+
+        def solve() -> _SketchConstraintPreview:
+            result = (
+                services.kernel.preview_sketch_constraint_update(sketch, constraint)
+                if updating
+                else services.kernel.preview_sketch_constraint(sketch, constraint)
+            )
+            if result.status != "success":
+                return _SketchConstraintPreview(result)
+            snapshot, sketches = mycad_app.preview_command_with_sketches(
+                services,
+                commands,
+                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                result.command_params(sketch, constraint),
+            )
+            return _SketchConstraintPreview(result, snapshot, sketches)
+
+        def finish(value: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            preview = value.value
+            if tuple(loaded.document.commands) != commands:
+                result = SketchConstraintSolveResult(
+                    "failed", None, None, message="模型已改变，请重新拾取尺寸"
+                )
+            elif value.error is not None or not isinstance(preview, _SketchConstraintPreview):
+                result = SketchConstraintSolveResult(
+                    "failed", None, None, message=f"驱动预览失败：{value.error}"
+                )
+            else:
+                result = preview.solve_result
+            editor.dimensions.complete_preview(generation, sketch, constraint, result)
+
+        if not unit.submit(
+            solve, operation="canvas-dimension-preview", session_id=session_id, on_complete=finish
+        ):
+            editor.dimensions.complete_preview(
+                generation,
+                sketch,
+                constraint,
+                SketchConstraintSolveResult(
+                    "failed", None, None, message="几何工作线程忙碌，请重新预览"
+                ),
+            )
+
+    def _on_canvas_dimension_commit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        sketch: Sketch,
+        constraint: SketchConstraint,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            editor.dimensions.complete_commit(
+                sketch,
+                constraint,
+                SketchConstraintSolveResult("failed", None, None, message="草图所属文档已切换"),
+            )
+            return
+        commands = tuple(loaded.document.commands)
+        updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
+
+        def submit() -> SketchConstraintSolveResult:
+            if (
+                session_id != self._session_id
+                or loaded is not self._loaded
+                or editor.dimensions.candidate != constraint
+                or tuple(loaded.document.commands) != commands
+                or next(
+                    (s for s in services.kernel.sketches if s.sketch_id == sketch.sketch_id), None
+                )
+                != sketch
+            ):
+                return SketchConstraintSolveResult(
+                    "failed", None, None, message="模型或尺寸已改变，操作已取消"
+                )
+            result = (
+                services.kernel.preview_sketch_constraint_update(sketch, constraint)
+                if updating
+                else services.kernel.preview_sketch_constraint(sketch, constraint)
+            )
+            if result.status != "success":
+                return result
+            if (
+                session_id != self._session_id
+                or loaded is not self._loaded
+                or editor.dimensions.candidate != constraint
+                or tuple(loaded.document.commands) != commands
+            ):
+                return SketchConstraintSolveResult(
+                    "failed", None, None, message="尺寸求解期间操作已取消或文档已切换"
+                )
+            # An explicit placement/apply gesture authorizes this one replayable command.
+            loaded.bus.execute(
+                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                result.command_params(sketch, constraint),
+                confirmed_by="local",
+            )
+            return result
+
+        def finish(value: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            result = value.value
+            if value.error is not None or not isinstance(result, SketchConstraintSolveResult):
+                result = SketchConstraintSolveResult(
+                    "failed", None, None, message=f"尺寸提交失败：{value.error}"
+                )
+            if result.status == "success":
+                editor.set_context_sketches(services.kernel.sketches)
+                if self.viewport is not None:
+                    self.viewport.refresh()
+            editor.dimensions.complete_commit(sketch, constraint, result)
+            self.status_command.setText(
+                "尺寸已写入命令历史；可撤销、重做和保存重放。"
+                if result.status == "success"
+                else result.message or "尺寸提交失败"
+            )
+
+        if not unit.submit(
+            submit, operation="canvas-dimension-commit", session_id=session_id, on_complete=finish
+        ):
+            editor.dimensions.complete_commit(
+                sketch,
+                constraint,
+                SketchConstraintSolveResult(
+                    "failed", None, None, message="几何工作线程忙碌，请重试"
+                ),
+            )
+
+    def _on_sketch_constraints(
+        self, _checked: bool = False, *, dimensions_only: bool = False
+    ) -> None:
+        if dimensions_only:
+            self._on_sketch_start()
+            if self._sketch_dialog is not None:
+                self._sketch_dialog.dimensions.start("smart")
+            return
+        if self._services is None or self._loaded is None:
+            self.status_command.setText("创建或打开文档后才能编辑草图约束。")
+            return
+        if self._sketch_constraint_dialog is not None:
+            self._sketch_constraint_dialog.raise_()
+            self._sketch_constraint_dialog.activateWindow()
+            return
+        sketches = self._services.kernel.sketches
+        if not sketches:
+            self.status_command.setText("当前文档还没有草图；先使用“草图”创建草图。")
+            return
+        self._cancel_active_modeling_tool()
+        dialog = SketchConstraintDialog(
+            sketches,
+            self._services.kernel.preview_sketch_constraint,
+            self,
+            asynchronous_preview=True,
+            preview_update=self._services.kernel.preview_sketch_constraint_update,
+        )
+        if dimensions_only:
+            dialog.configure_dimensions()
+        self._sketch_constraint_dialog = dialog
+        if self._sketch_dialog is not None:
+            dialog.solved_preview.connect(self._sketch_dialog.show_dimension_preview)
+        session_id = self._session_id
+        dialog.preview_requested.connect(
+            partial(self._on_sketch_constraint_preview, dialog, session_id)
+        )
+        dialog.preview_invalidated.connect(self._clear_sketch_constraint_preview)
+        dialog.commit_requested.connect(
+            partial(self._on_sketch_constraint_commit, dialog, session_id)
+        )
+        dialog.finished.connect(partial(self._on_sketch_constraint_dialog_finished, dialog))
+        dialog.exec()
+
+    def _clear_sketch_constraint_preview(self) -> None:
+        self._sketch_constraint_preview_revision = None
+        if self._sketch_dialog is not None:
+            self._sketch_dialog.clear_dimension_preview()
+        if self.viewport is not None:
+            self.viewport.clear_candidate_preview()
+
+    def _on_sketch_constraint_preview(
+        self,
+        dialog: SketchConstraintDialog,
+        session_id: int,
+        sketch: Sketch,
+        constraint: SketchConstraint,
+        generation: int,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+
+        def fail(message: str) -> None:
+            dialog.complete_preview(
+                generation,
+                sketch,
+                constraint,
+                SketchConstraintSolveResult("failed", None, None, message=message),
+            )
+
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            fail("草图所属文档已切换，请重新打开约束编辑。")
+            return
+        commands = tuple(loaded.document.commands)
+
+        def build_preview() -> _SketchConstraintPreview:
+            updating = any(
+                item.constraint_id == constraint.constraint_id for item in sketch.constraints
+            )
+            solved = (
+                services.kernel.preview_sketch_constraint_update(sketch, constraint)
+                if updating
+                else services.kernel.preview_sketch_constraint(sketch, constraint)
+            )
+            if solved.status != "success":
+                # A failed solve may locate inputs, but never display its partial solution.
+                if solved.conflicting_constraint_ids:
+                    snapshots = services.kernel.viewport_data()
+                    return _SketchConstraintPreview(
+                        solved,
+                        snapshots[-1] if snapshots else None,
+                        services.kernel.sketch_display_data(),
+                    )
+                return _SketchConstraintPreview(solved)
+            snapshot, sketches = mycad_app.preview_command_with_sketches(
+                services,
+                commands,
+                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                solved.command_params(sketch, constraint),
+            )
+            return _SketchConstraintPreview(solved, snapshot, sketches)
+
+        def finish_preview(result: ExecutionResult) -> None:
+            if (
+                self._sketch_constraint_dialog is not dialog
+                or session_id != self._session_id
+                or loaded is not self._loaded
+            ):
+                return
+            if tuple(loaded.document.commands) != commands:
+                fail("模型已改变，预览已过期；请重新打开约束编辑。")
+                return
+            value = result.value
+            if result.error is not None or not isinstance(value, _SketchConstraintPreview):
+                fail(f"预览重建失败：{result.error or '几何服务返回无效结果'}")
+                return
+            accepted = dialog.complete_preview(generation, sketch, constraint, value.solve_result)
+            if accepted and value.solve_result.status == "success":
+                self._sketch_constraint_preview_revision = loaded.document.revision
+            if accepted and value.viewport is not None and self.viewport is not None:
+                affected = {
+                    identity
+                    for change in value.solve_result.branch_changes
+                    for identity in change.entity_ids
+                }
+                conflict_ids = set(value.solve_result.conflicting_constraint_ids)
+                conflicting_entities = {
+                    reference.entity_id
+                    for item in (*sketch.constraints, constraint)
+                    if item.constraint_id in conflict_ids
+                    for reference in item.references
+                }
+                preview_sketches = tuple(
+                    replace(
+                        item,
+                        curves=tuple(
+                            replace(curve, layer=replace(curve.layer, color_rgb=(200, 45, 45)))
+                            if item.sketch_id == sketch.sketch_id
+                            and curve.entity_id in conflicting_entities
+                            else replace(
+                                curve, layer=replace(curve.layer, color_rgb=(230, 126, 34))
+                            )
+                            if item.sketch_id == sketch.sketch_id and curve.entity_id in affected
+                            else curve
+                            for curve in item.curves
+                        ),
+                    )
+                    for item in value.sketches
+                )
+                self.viewport.show_candidate_preview(
+                    value.viewport, preserve_view=True, sketches=preview_sketches
+                )
+
+        if not unit.submit(
+            build_preview,
+            operation="sketch-constraint-preview",
+            session_id=session_id,
+            on_complete=finish_preview,
+        ):
+            fail("几何工作线程忙碌，请稍后重新预览。")
+
+    def _on_sketch_constraint_dialog_finished(
+        self, dialog: SketchConstraintDialog, _result: int
+    ) -> None:
+        if self._sketch_constraint_dialog is dialog:
+            self._sketch_constraint_dialog = None
+            self._clear_sketch_constraint_preview()
+
+    def _on_sketch_constraint_commit(
+        self,
+        dialog: SketchConstraintDialog,
+        session_id: int,
+        sketch: Sketch,
+        constraint: SketchConstraint,
+        result: SketchConstraintSolveResult,
+    ) -> None:
+        loaded = self._loaded
+        unit = self.execution_unit
+        if loaded is None or unit is None or session_id != self._session_id:
+            dialog.submission_failed("草图所属文档已切换")
+            return
+        if result.status != "success":
+            dialog.submission_failed("当前预览不再有效")
+            return
+        if self._sketch_constraint_preview_revision != loaded.document.revision:
+            self._clear_sketch_constraint_preview()
+            dialog.submission_failed("模型已改变，必须重新预览后才能确认", invalidate_preview=True)
+            return
+
+        def submit_constraint() -> object:
+            updating = any(
+                item.constraint_id == constraint.constraint_id for item in sketch.constraints
+            )
+            return loaded.bus.execute(
+                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                result.command_params(sketch, constraint),
+                confirmed_by="local",
+            )
+
+        def finish_submission(result_value: ExecutionResult) -> None:
+            if result_value.error is not None:
+                dialog.submission_failed(str(result_value.error))
+                return
+            if self.viewport is not None:
+                self.viewport.refresh()
+            if self._sketch_dialog is not None and self._services is not None:
+                self._sync_drawing_layers()
+            self.status_command.setText("草图约束已写入命令历史；可撤销、重做和保存重放。")
+            dialog.accept()
+
+        if not unit.submit(
+            submit_constraint,
+            operation="sketch-constraint-add",
+            session_id=session_id,
+            on_complete=finish_submission,
+        ):
+            dialog.submission_failed("应用工作线程忙碌，请稍后重试")
+
+    def _on_sketch_editor_finished(
+        self, dialog: SketchEditorDialog, session_id: int, result: int
+    ) -> None:
+        if self._sketch_dialog is dialog:
+            self._sketch_dialog = None
+        self._hide_sketch_workbench(dialog)
+        sketch = dialog.result_sketch
+        if result != QDialog.DialogCode.Accepted or sketch is None:
+            self.status_command.setText("草图已取消；文档历史未改变。")
+            return
+        loaded = self._loaded
+        unit = self.execution_unit
+        if loaded is None or unit is None or session_id != self._session_id:
+            self.status_command.setText("草图所属文档已切换，草图未提交。")
+            return
+
+        def submit_sketch() -> object:
+            return loaded.bus.execute(
+                "sketch.create",
+                sketch.to_mapping(version=3),
+                confirmed_by="local",
+            )
+
+        def finish_submission(result_value: ExecutionResult) -> None:
+            if result_value.error is not None:
+                self.status_command.setText(f"草图提交失败：{result_value.error}")
+                if self._loaded is loaded and self._session_id == session_id:
+                    self._sketch_dialog = dialog
+                    dialog.result_sketch = None
+                    dialog.setResult(QDialog.DialogCode.Rejected)
+                    self._show_sketch_workbench(dialog)
+                    dialog.status_label.setText(
+                        f"草图提交失败：{result_value.error}。草稿已保留，可修正后重试或取消。"
+                    )
+                return
+            if self.viewport is not None:
+                self.viewport.refresh()
+            self.status_command.setText("草图已提交为一条命令；可撤销、重做和保存重放。")
+            if loaded.document.document_type == "drawing2d":
+                self._on_sketch_start()
+                if self._sketch_dialog is not None:
+                    self._sketch_dialog.continue_workspace_from(dialog)
+
+        if not unit.submit(
+            submit_sketch,
+            operation="sketch-create",
+            session_id=session_id,
+            on_complete=finish_submission,
+        ):
+            self._sketch_dialog = dialog
+            dialog.result_sketch = None
+            dialog.setResult(QDialog.DialogCode.Rejected)
+            self._show_sketch_workbench(dialog)
+            dialog.status_label.setText("应用工作线程忙碌，草图尚未提交；请稍后重试。")
+            self.status_command.setText(dialog.status_label.text())
+
+    def _on_palette_command(self, command_id: str) -> None:
+        if command_id == "drawing.layers.set":
+            self._end_modeling_tool(cancel_editor=True)
+            self._on_sketch_start()
+            if self._sketch_dialog is not None:
+                self._sketch_dialog.open_layer_manager()
+            return
+        if self.plan_draft is None or self.plan_cards is None:
+            return
+        if (
+            self._loaded is not None
+            and self._loaded.document.document_type == "drawing2d"
+            and command_id not in DRAWING2D_COMMAND_IDS
+        ):
+            self.status_command.setText(f"二维图不支持命令 {command_id!r}。")
+            return
+        self._end_modeling_tool(cancel_editor=True)
+        try:
+            step = self.plan_draft.new_draft(command_id)
+        except ValueError as err:
+            self.status_command.setText(str(err))
+            return
+        self._active_modeling_command = command_id
+        self._active_selection_role = None
+        self._previous_selection_filter = (
+            self.viewport.selection_filter() if self.viewport is not None else None
+        )
+        placement_kind_by_command = {
+            "feature.box": "solid",
+            "feature.cylinder": "solid",
+            "feature.revolve": "profile",
+            "modify.boolean_cut": "tool",
+            "modify.boolean_intersect": "tool",
+        }
+        placement_kind = placement_kind_by_command.get(command_id)
+        self._active_placement_kind = placement_kind
+        pick_kind_by_command: dict[str, SelectionKind] = {
+            "feature.extrude": "face",
+            "feature.hole": "face",
+            "feature.hole_pattern": "face",
+            "modify.fillet": "edge",
+            "modify.chamfer": "edge",
+            "modify.boolean_bodies": "body",
+            "modify.body_transform": "body",
+            "modify.body_pattern": "body",
+        }
+        required_kind = pick_kind_by_command.get(command_id)
+        self._active_selection_kind = required_kind
+        if self.viewport is not None:
+            self.viewport.set_modeling_context_active(True)
+            self.viewport.set_placement_context_active(placement_kind is not None)
+
+        if command_id == "modify.fillet":
+            self._start_fillet_interaction()
+            return
+
+        if command_id in {
+            "feature.box",
+            "feature.cylinder",
+            "feature.extrude",
+            "feature.revolve",
+            "feature.hole",
+            "feature.hole_pattern",
+            "modify.boolean_cut",
+            "modify.boolean_intersect",
+            "modify.boolean_bodies",
+            "modify.body_transform",
+            "modify.body_pattern",
+            "modify.chamfer",
+        }:
+            self._modeling_face_selector = None
+            self._modeling_edge_selectors = ()
+            self._modeling_body_selectors = ()
+            self._modeling_body_names = ()
+            self._modeling_face_frame = None
+            self._modeling_params_valid = False
+            self._modeling_source_revision += 1
+            self._extrude_input_valid = True
+            self._modeling_placement_ready = False
+            self._modeling_params = {}
+            self._modeling_preview_generation += 1
+            self._modeling_preview_valid = False
+            self._modeling_preview_pending = False
+            self._modeling_commit_inflight = False
+            if placement_kind is not None:
+                prompt = "单击 XY 工作平面设置位置；再次单击可重定位。"
+            else:
+                prompt = (
+                    "单击模型边选择倒角对象；再次单击可移除选中边。"
+                    if required_kind == "edge"
+                    else "先选目标实体，再按 Ctrl 追加刀具体。"
+                    if command_id == "modify.boolean_bodies"
+                    else "选择一个实体作为操作对象。"
+                    if command_id in {"modify.body_transform", "modify.body_pattern"}
+                    else "单击模型平面选择目标；可继续旋转视图。"
+                )
+                if self.viewport is not None:
+                    current = self.viewport.selection()
+                    if current is None or current.kind != required_kind:
+                        self._set_viewport_selection_filter(required_kind or "face")
+                    else:
+                        self._set_viewport_selection_filter(required_kind or "face", preserve=True)
+            bar = self.modeling_command_bar
+            if bar is None:
+                self._end_modeling_tool()
+                self.status_command.setText("建模命令不可用：命令栏尚未创建。")
+                return
+            sketches = (
+                self._services.kernel.sketches
+                if self._services is not None
+                and command_id in {"feature.extrude", "feature.revolve", "feature.hole"}
+                else ()
+            )
+            sketch_ids = tuple(sketch.sketch_id for sketch in sketches)
+            bar.configure(command_id, prompt, sketch_ids=sketch_ids, sketches=sketches)
+            bar.set_busy(False)
+            bar.set_preview_valid(False)
+            bar.show()
+            bar.raise_()
+            if self.viewport is not None:
+                self.viewport.set_placement_context_active(placement_kind is not None)
+                self.viewport.setFocus(Qt.FocusReason.OtherFocusReason)
+            command_label = (
+                self._services.registry.get(command_id).label_zh
+                if self._services is not None
+                else command_id
+            )
+            if placement_kind is not None:
+                self.status_command.setText(f"{command_label}：{prompt}")
+            else:
+                self.status_command.setText(f"{command_label}：{prompt}")
+                if self.viewport is not None:
+                    current = self.viewport.selection()
+                    if current is not None and current.kind == required_kind:
+                        self._fill_active_modeling_selection(current)
+            return
+
+        if placement_kind is not None:
+            initial_params: Mapping[str, object] = (
+                {
+                    "size_x": 20.0,
+                    "size_y": 20.0,
+                    "size_z": 10.0,
+                    "center": [0.0, 0.0, 0.0],
+                }
+                if placement_kind == "box"
+                else {
+                    "profile": {"type": "circle", "radius": 5.0, "center": [0.0, 0.0]},
+                    "distance": 10.0,
+                    "mode": "new",
+                }
+            )
+            label = "长方体" if placement_kind == "box" else "拉伸截面"
+            prompt = f"{label}：请在视口中单击 XY 工作平面设置放置点；右键打开参数面板。"
+            dialog = self.plan_cards.open_parameter_editor(
+                step,
+                execute_on_apply=True,
+                discard_on_cancel=True,
+                wait_for_selection=True,
+                selection_prompt=prompt,
+                overlay_host=self.viewport,
+                initial_params=initial_params,
+            )
+            self._connect_modeling_editor(command_id, dialog)
+            self.status_command.setText(prompt)
+            return
+
+        if required_kind is None:
+            dialog = self.plan_cards.open_parameter_editor(
+                step,
+                execute_on_apply=True,
+                discard_on_cancel=True,
+                overlay_host=self.viewport,
+            )
+            self._connect_modeling_editor(command_id, dialog)
+            label = (
+                self._services.registry.get(command_id).label_zh
+                if self._services is not None
+                else command_id
+            )
+            self.status_command.setText(f"{label}：设置参数，预览后点击“应用并执行”")
+            return
+
+        pick_labels: dict[SelectionKind, str] = {"face": "面", "edge": "边"}
+        pick_label = pick_labels[required_kind]
+        if self.viewport is not None:
+            current = self.viewport.selection()
+            if current is None or current.kind != required_kind:
+                self._set_viewport_selection_filter(required_kind)
+            else:
+                self._set_viewport_selection_filter(required_kind, preserve=True)
+        command_label = (
+            self._services.registry.get(step.id).label_zh if self._services is not None else step.id
+        )
+        prompt = (
+            f"{command_label}：请在模型上选择一个{pick_label}；选中后出现参数面板，右键可唤回。"
+        )
+        dialog = self.plan_cards.open_parameter_editor(
+            step,
+            execute_on_apply=True,
+            discard_on_cancel=True,
+            wait_for_selection=True,
+            selection_prompt=prompt,
+            overlay_host=self.viewport,
+        )
+        self._connect_modeling_editor(command_id, dialog)
+        self.status_command.setText(prompt)
+        if self.viewport is not None:
+            current = self.viewport.selection()
+            if current is not None and current.kind == required_kind:
+                self._fill_active_modeling_selection(current)
+
+    def _start_fillet_interaction(self) -> None:
+        """Start the compact, continuous source-edge fillet workflow."""
+        viewport = self.viewport
+        bar = self.fillet_command_bar
+        loaded = self._loaded
+        if viewport is None or bar is None or loaded is None or self.plan_draft is None:
+            self._end_modeling_tool()
+            self.status_command.setText("圆角不可用：视口、文档或命令计划尚未就绪。")
+            return
+        self._fillet_edge_selectors = ()
+        self._fillet_preview_generation += 1
+        self._fillet_preview_valid = False
+        self._fillet_preview_pending = False
+        self._fillet_commit_inflight = False
+        self._fillet_radius_value = self._fillet_last_successful_radius
+        bar.set_radius(self._fillet_radius_value)
+        bar.set_selection_count(0)
+        bar.set_preview_valid(False)
+        bar.set_busy(False)
+        bar.show()
+        bar.raise_()
+        viewport.set_fillet_interaction_active(True)
+        viewport.set_fillet_radius_input_valid(True)
+        current = viewport.selection()
+        if current is None or current.kind != "edge":
+            self._set_viewport_selection_filter("edge")
+            current = None
+        else:
+            self._set_viewport_selection_filter("edge", preserve=True)
+        self.status_command.setText(
+            "圆角：单击边加入，重复单击移除；中键旋转，Enter 或短右键完成。"
+        )
+        if current is not None:
+            self._on_fillet_selection_changed(current)
+
+    def _on_fillet_selection_changed(self, selection: SelectionState | None) -> None:
+        """Map current edge identities to replayable selectors and refresh preview."""
+        if self._fillet_commit_inflight or self._active_modeling_command != "modify.fillet":
+            return
+        bar = self.fillet_command_bar
+        viewport = self.viewport
+        services = self._services
+        if bar is None or viewport is None or services is None:
+            return
+        if selection is None or selection.kind != "edge":
+            self._fillet_edge_selectors = ()
+        else:
+            try:
+                self._fillet_edge_selectors = mycad_app.interactive_selectors(
+                    services,
+                    "edge",
+                    selection.topology_ids,
+                )
+            except (MycadError, ValueError) as err:
+                self._fillet_edge_selectors = ()
+                self.status_command.setText(f"选边无法用于圆角：{str(err)[:160]}")
+                bar.setToolTip(str(err))
+        bar.set_selection_count(len(self._fillet_edge_selectors))
+        viewport.extrude_manipulator.clear()
+        frame = viewport.selected_edge_frame()
+        if (
+            frame is not None
+            and self._fillet_radius_value is not None
+            and self._fillet_edge_selectors
+        ):
+            viewport.configure_dimension_handle(
+                DimensionHandle("fillet_radius", "圆角半径", frame), self._fillet_radius_value
+            )
+        self._invalidate_fillet_preview()
+        if not self._fillet_edge_selectors:
+            self.status_command.setText("圆角：选择一条或多条边。")
+            return
+        self.status_command.setText(
+            f"圆角：已选 {len(self._fillet_edge_selectors)} 条边，正在更新预览…"
+        )
+        self._fillet_preview_timer.start()
+
+    def _on_fillet_radius_changed(self, text: str) -> None:
+        """Accept live numeric edits and debounce the isolated geometry preview."""
+        try:
+            radius = float(text)
+        except ValueError:
+            radius = 0.0
+        if not isfinite(radius) or radius <= 0.0:
+            self._fillet_radius_value = None
+            if self.viewport is not None:
+                self.viewport.set_fillet_radius_input_valid(False)
+            self._invalidate_fillet_preview()
+            self.status_command.setText("请输入大于 0 的圆角半径（mm）。")
+            return
+        self._fillet_radius_value = radius
+        if self.viewport is not None:
+            self.viewport.set_fillet_radius_input_valid(True)
+            self.viewport.extrude_manipulator.set_distance(radius)
+        self._invalidate_fillet_preview(keep_candidate=True)
+        if self._fillet_edge_selectors:
+            self.status_command.setText("圆角：正在更新预览…")
+            if not self._fillet_preview_timer.isActive():
+                self._fillet_preview_timer.start(120)
+
+    def _accept_fillet_radius(self) -> None:
+        """Accept a valid edit and return keyboard focus to the viewport."""
+        bar = self.fillet_command_bar
+        if bar is None:
+            return
+        text = bar.radius_text()
+        try:
+            radius = float(text)
+        except ValueError:
+            radius = 0.0
+        if not isfinite(radius) or radius <= 0.0:
+            self.status_command.setText("请输入大于 0 的圆角半径（mm）。")
+            return
+        bar.set_radius(radius)
+        self._on_fillet_radius_changed(bar.radius_text())
+        if self.viewport is not None:
+            self.viewport.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _begin_fillet_radius_edit(self, initial_text: str) -> None:
+        """Let viewport typing edit the same non-obstructing command-bar field."""
+        if self._active_modeling_command != "modify.fillet" or self.fillet_command_bar is None:
+            return
+        self.fillet_command_bar.begin_edit(initial_text or None)
+        self.fillet_command_bar.radius_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _clear_fillet_selection(self) -> None:
+        if self.viewport is not None and self._active_modeling_command == "modify.fillet":
+            self.viewport.clear_selection()
+
+    def _invalidate_fillet_preview(self, *, keep_candidate: bool = False) -> None:
+        """Remove any result tied to old inputs and block confirmation immediately."""
+        self._fillet_preview_generation += 1
+        self._fillet_preview_valid = False
+        self._fillet_preview_document_revision = None
+        if not keep_candidate:
+            self._fillet_preview_timer.stop()
+        if self.fillet_command_bar is not None:
+            self.fillet_command_bar.set_preview_valid(False)
+        if self.viewport is not None and not keep_candidate:
+            self.viewport.clear_candidate_preview()
+
+    def _request_fillet_preview(self) -> None:
+        """Submit only the latest edge/radius pair to the isolated preview builder."""
+        if self._active_modeling_command != "modify.fillet":
+            return
+        if not self._fillet_edge_selectors or self._fillet_radius_value is None:
+            return
+        services = self._services
+        loaded = self._loaded
+        unit = self.execution_unit
+        draft = self.plan_draft
+        if services is None or loaded is None or unit is None or draft is None:
+            self.status_command.setText("圆角预览不可用：几何执行服务尚未就绪。")
+            return
+        if unit.is_busy:
+            self._fillet_preview_pending = True
+            self.status_command.setText("圆角：正在等待几何工作线程空闲，当前不能确认。")
+            return
+        self._fillet_preview_pending = False
+        step = draft.plan().steps[0]
+        params: dict[str, object] = {
+            "edges": list(self._fillet_edge_selectors),
+            "radius": self._fillet_radius_value,
+        }
+        try:
+            validated = draft.set_params(step, params)
+        except (MycadError, ValueError) as err:
+            self.status_command.setText(f"圆角参数无效：{str(err)[:160]}")
+            return
+        commands = tuple(loaded.document.commands)
+        document_revision = loaded.document.revision
+        session_id = self._session_id
+        generation = self._fillet_preview_generation
+        self.status_command.setText("圆角：正在生成预览…")
+
+        def build_preview() -> ViewportData:
+            return mycad_app.preview_command(services, commands, "modify.fillet", validated)
+
+        def finish_preview(result: ExecutionResult) -> None:
+            if (
+                session_id != self._session_id
+                or loaded is not self._loaded
+                or self._active_modeling_command != "modify.fillet"
+            ):
+                return
+            if loaded.document.revision != document_revision:
+                self.status_command.setText("圆角预览已过期：模型已改变，请重新选择。")
+                return
+            value = result.value
+            if generation != self._fillet_preview_generation:
+                if (
+                    self.viewport is not None
+                    and self.viewport.extrude_manipulator.adjusting
+                    and self._fillet_radius_value is not None
+                    and validated.get("edges") == list(self._fillet_edge_selectors)
+                    and result.error is None
+                    and isinstance(value, ViewportData)
+                ):
+                    self.viewport.show_candidate_preview(value, preserve_view=True)
+                return
+            if result.error is not None or not isinstance(value, ViewportData):
+                if self.viewport is not None:
+                    self.viewport.clear_candidate_preview()
+                detail = result.error or "几何服务返回了无效预览。"
+                self.status_command.setText("当前半径无法生成圆角，请减小半径或调整选边。")
+                self.status_command.setToolTip(detail)
+                return
+            if self.viewport is not None:
+                self.viewport.show_candidate_preview(value, preserve_view=True)
+            self._fillet_preview_document_revision = document_revision
+            self._fillet_preview_valid = True
+            if self.fillet_command_bar is not None:
+                self.fillet_command_bar.set_preview_valid(True)
+            self.status_command.setToolTip("")
+            self.status_command.setText(
+                f"圆角预览已更新：{len(self._fillet_edge_selectors)} 条边，R {self._fillet_radius_value:g} mm；按 Enter 或短右键完成。"
+            )
+
+        if not unit.submit(
+            build_preview,
+            operation="fillet-preview",
+            session_id=session_id,
+            on_complete=finish_preview,
+        ):
+            self._fillet_preview_pending = True
+            self.status_command.setText("圆角：几何工作线程忙碌，完成后将更新最新预览。")
+
+    def _commit_fillet_group(self) -> None:
+        """Explicitly confirm exactly the current, still-valid one-step draft."""
+        if (
+            self._active_modeling_command != "modify.fillet"
+            or self._fillet_commit_inflight
+            or not self._fillet_preview_valid
+        ):
+            if self._active_modeling_command == "modify.fillet":
+                self.status_command.setText("圆角预览尚未就绪或已过期，完成操作未提交。")
+            return
+        if (
+            self._loaded is None
+            or self._fillet_preview_document_revision != self._loaded.document.revision
+        ):
+            self._invalidate_fillet_preview()
+            self.status_command.setText("预览已过期：文档已改变，请重新选择或修改参数后预览。")
+            return
+        if self.execution_unit is None or self.execution_unit.is_busy or self.plan_cards is None:
+            self.status_command.setText("圆角预览更新中，完成后再确认。")
+            return
+        self._fillet_commit_inflight = True
+        self._fillet_preview_valid = False
+        self._fillet_preview_timer.stop()
+        if self.viewport is not None:
+            self.viewport.set_modeling_interaction_locked(True)
+        if self.fillet_command_bar is not None:
+            self.fillet_command_bar.set_preview_valid(False)
+            self.fillet_command_bar.set_busy(True)
+        self.status_command.setText("圆角：正在提交此组…")
+        self.plan_cards.execute_plan()
+
+    def _on_fillet_plan_done(self, command_count: int) -> None:
+        if self._active_modeling_command != "modify.fillet":
+            if not self._modeling_commit_inflight:
+                return
+            command_id = self._active_modeling_command
+            self._modeling_commit_inflight = False
+            if self.viewport is not None:
+                self.viewport.set_modeling_interaction_locked(False)
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_busy(False)
+            body_summary = self._body_operation_summary(self._modeling_params)
+            body_count = len(self._services.kernel.body_ids) if self._services is not None else 0
+            self._end_modeling_tool()
+            self.status_command.setText(
+                f"已完成建模操作：{body_summary}；当前模型共 {body_count} 个实体。"
+                if body_summary
+                else f"已完成建模操作：{command_id}（{command_count} 条命令）。"
+            )
+            return
+        if not self._fillet_commit_inflight:
+            return
+        self._fillet_commit_inflight = False
+        self._fillet_last_successful_radius = self._fillet_radius_value or 1.0
+        self._fillet_edge_selectors = ()
+        self._fillet_preview_pending = False
+        if self.fillet_command_bar is not None:
+            self.fillet_command_bar.set_busy(False)
+            self.fillet_command_bar.set_radius(self._fillet_last_successful_radius)
+            self.fillet_command_bar.set_selection_count(0)
+            self.fillet_command_bar.set_preview_valid(False)
+        if self.viewport is not None:
+            self.viewport.set_modeling_interaction_locked(False)
+            self.viewport.clear_candidate_preview()
+            self.viewport.clear_selection()
+            self.viewport.setFocus(Qt.FocusReason.OtherFocusReason)
+            QTimer.singleShot(0, self.viewport.refresh)
+        if self.plan_draft is not None:
+            self.plan_draft.new_draft("modify.fillet")
+        self.status_command.setText(
+            f"已完成本组圆角（{command_count} 条命令）；可继续选边，Esc 退出。"
+        )
+
+    def _on_fillet_plan_failed(self, message: str) -> None:
+        if self._active_modeling_command != "modify.fillet":
+            if not self._modeling_commit_inflight:
+                return
+            self._modeling_commit_inflight = False
+            if self.viewport is not None:
+                self.viewport.set_modeling_interaction_locked(False)
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_busy(False)
+            self.status_command.setText(f"应用失败，参数与选择已保留：{message[:140]}")
+            self.status_command.setToolTip(message)
+            if self.plan_draft is not None and self._active_modeling_command is not None:
+                command_id = self._active_modeling_command
+                try:
+                    step = self.plan_draft.new_draft(command_id)
+                    self._modeling_params = self.plan_draft.set_params(
+                        step, dict(self._modeling_params)
+                    )
+                    self._modeling_preview_valid = False
+                    self._modeling_preview_timer.start(0)
+                except (MycadError, ValueError) as err:
+                    self.status_command.setText(f"应用失败；无法恢复当前草稿：{str(err)[:140]}")
+            return
+        if not self._fillet_commit_inflight:
+            return
+        self._fillet_commit_inflight = False
+        if self.viewport is not None:
+            self.viewport.set_modeling_interaction_locked(False)
+        if self.fillet_command_bar is not None:
+            self.fillet_command_bar.set_busy(False)
+        self.status_command.setText(f"圆角提交失败；已保留选边和参数：{message[:140]}")
+        self.status_command.setToolTip(message)
+        if self.plan_draft is not None and self._fillet_edge_selectors:
+            self.plan_draft.new_draft("modify.fillet")
+            self._fillet_preview_valid = False
+            self._fillet_preview_timer.start(0)
+
+    def _on_fillet_execution_busy_changed(self, busy: bool) -> None:
+        if not busy and self._fillet_preview_pending and not self._fillet_commit_inflight:
+            self._fillet_preview_timer.start(0)
+
+    def _focus_dimension_input(self, text: str) -> None:
+        if self._active_modeling_command == "modify.fillet":
+            self._begin_fillet_radius_edit(text)
+        elif self.modeling_command_bar is not None:
+            self.modeling_command_bar.focus_dimension(text)
+
+    def _on_dimension_value(self, value: float) -> None:
+        if self._active_modeling_command == "modify.fillet":
+            if self.fillet_command_bar is not None:
+                self.fillet_command_bar.set_radius(value)
+            self._on_fillet_radius_changed(str(value))
+        elif self.modeling_command_bar is not None:
+            self.modeling_command_bar.set_dimension_value(value)
+
+    def _sync_dimension_handle(self) -> None:
+        bar, viewport = self.modeling_command_bar, self.viewport
+        if viewport is None or bar is None or self._active_modeling_command is None:
+            return
+        if self._active_modeling_command == "modify.fillet":
+            return
+        if self._active_modeling_command == "modify.chamfer":
+            viewport.extrude_manipulator.clear()
+            return
+        if self._active_modeling_command in {"feature.extrude", "feature.revolve"}:
+            profile = self._modeling_params.get("profile")
+            if (
+                isinstance(profile, Mapping)
+                and cast("Mapping[str, object]", profile).get("type") == "sketch"
+            ):
+                viewport.extrude_manipulator.clear()
+                return
+        if self._active_selection_kind == "face" and self._modeling_face_selector is None:
+            return
+        if self._active_placement_kind is not None and not self._modeling_placement_ready:
+            return
+        dimension = bar.dimension(self._modeling_face_frame)
+        if dimension is not None:
+            viewport.configure_dimension_handle(*dimension)
+
+    def _accept_extrude_distance(self) -> None:
+        if self.viewport is not None:
+            self.viewport.extrude_manipulator.finish_gesture()
+            self.viewport.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _on_extrude_input_validity(self, valid: bool) -> None:
+        if self._active_modeling_command == "modify.fillet":
+            if not valid:
+                self._on_fillet_radius_changed("")
+            return
+        if self._active_modeling_command is None or self._modeling_commit_inflight:
+            return
+        self._extrude_input_valid = valid
+        if not valid:
+            self._invalidate_modeling_preview()
+            self.status_command.setText("尺寸输入尚未完成；当前输入不可确认。")
+        elif self.modeling_command_bar is not None:
+            self._on_modeling_parameters_changed(self.modeling_command_bar.values())
+
+    def _body_operation_summary(self, params: Mapping[str, object]) -> str:
+        names = self._modeling_body_names
+        if not names:
+            return ""
+        command_id = self._active_modeling_command
+        if command_id == "modify.boolean_bodies" and len(names) == 2:
+            operation = {"union": "并集", "difference": "差集", "intersection": "交集"}.get(
+                str(params.get("operation")), "布尔"
+            )
+            tool_mode = "保留刀具体" if params.get("keep_tool") else "消耗刀具体"
+            return f"{operation} · 目标：{names[0]} / 刀具：{names[1]} · {tool_mode}"
+        if command_id == "modify.body_pattern":
+            return f"阵列种子：{names[0]} · 保留种子，数量含种子"
+        if command_id == "modify.body_transform":
+            transform = params.get("transform")
+            operation = (
+                cast("Mapping[str, object]", transform).get("operation")
+                if isinstance(transform, Mapping)
+                else None
+            )
+            action = {"move": "移动", "rotate": "旋转", "mirror": "镜像", "copy": "复制"}.get(
+                str(operation), "变换"
+            )
+            return f"{action}来源：{names[0]} · {'保留源体' if operation == 'copy' else '更新源体'}"
+        return ""
+
+    def _on_modeling_parameters_changed(self, value: object) -> None:
+        """Validate the command-bar values and schedule the latest scratch preview."""
+        command_id = self._active_modeling_command
+        bar = self.modeling_command_bar
+        draft = self.plan_draft
+        if (
+            command_id is None
+            or command_id == "modify.fillet"
+            or self._modeling_commit_inflight
+            or bar is None
+            or draft is None
+            or not isinstance(value, Mapping)
+        ):
+            return
+        self._modeling_params_valid = False
+        self._invalidate_modeling_preview(keep_candidate=True)
+        params = dict(cast("Mapping[str, object]", value))
+        to_face_mode = False
+        if command_id in {"feature.extrude", "feature.revolve"}:
+            profile_value = params.get("profile")
+            profile_type = (
+                cast("Mapping[str, object]", profile_value).get("type")
+                if isinstance(profile_value, Mapping)
+                else None
+            )
+            face_mode = command_id == "feature.extrude" and profile_type == "face"
+            sketch_mode = profile_type == "sketch"
+            to_face_mode = (
+                command_id == "feature.extrude"
+                and sketch_mode
+                and params.get("extent_mode") == "to_face"
+            )
+            new_selection_kind: SelectionKind | None = "face" if face_mode or to_face_mode else None
+            new_selection_role = (
+                "face_extrusion" if face_mode else "sketch_to_face" if to_face_mode else None
+            )
+            new_placement_kind = None if face_mode or sketch_mode else "profile"
+            selection_kind_changed = self._active_selection_kind != new_selection_kind
+            placement_kind_changed = self._active_placement_kind != new_placement_kind
+            switching = (
+                selection_kind_changed
+                or self._active_selection_role != new_selection_role
+                or placement_kind_changed
+            )
+            initializing_selection_role = (
+                switching
+                and self._active_selection_role is None
+                and not selection_kind_changed
+                and not placement_kind_changed
+            )
+            self._active_selection_kind = new_selection_kind
+            self._active_selection_role = new_selection_role
+            self._active_placement_kind = new_placement_kind
+            if self.viewport is not None:
+                self.viewport.set_placement_context_active(new_placement_kind is not None)
+            if switching:
+                self._modeling_source_revision += 1
+                if self.viewport is not None:
+                    self.viewport.extrude_manipulator.clear()
+                    self.viewport.clear_candidate_preview()
+                if not initializing_selection_role:
+                    self._modeling_placement_ready = False
+                    self._modeling_face_selector = None
+                    self._modeling_face_frame = None
+                if face_mode or to_face_mode:
+                    self._set_viewport_selection_filter(
+                        "face", preserve=initializing_selection_role
+                    )
+                elif sketch_mode and self.viewport is not None:
+                    self.viewport.set_selection_filter("body")
+                prompt = (
+                    "单击选择到面终止平面"
+                    if to_face_mode
+                    else "单击选择目标平面"
+                    if face_mode
+                    else "选择已提交草图"
+                    if sketch_mode
+                    else "单击 XY 工作平面放置截面"
+                )
+                bar.set_selection_status(prompt)
+            if sketch_mode:
+                profile = cast("Mapping[str, object]", profile_value)
+                sketch_id = profile.get("sketch_id")
+                available_sketch_ids: set[str] = (
+                    {sketch.sketch_id for sketch in self._services.kernel.sketches}
+                    if self._services is not None
+                    else set()
+                )
+                if not isinstance(sketch_id, str) or sketch_id not in available_sketch_ids:
+                    self.status_command.setText("请选择一张已提交的闭合草图。")
+                    return
+        if command_id == "modify.chamfer":
+            if not self._modeling_edge_selectors:
+                self.status_command.setText("请先在模型上选择一条或多条边。")
+                bar.set_selection_status("请选择模型边")
+                return
+            params["edges"] = list(self._modeling_edge_selectors)
+        if command_id in {
+            "modify.boolean_bodies",
+            "modify.body_transform",
+            "modify.body_pattern",
+        }:
+            if self._active_selection_kind != "body":
+                self.status_command.setText("当前操作需要实体选择上下文。")
+                return
+            required_bodies = 2 if command_id == "modify.boolean_bodies" else 1
+            if len(self._modeling_body_selectors) != required_bodies:
+                self.status_command.setText(
+                    f"此操作需要选择 {required_bodies} 个不同实体；当前已选 {len(self._modeling_body_selectors)} 个。"
+                )
+                bar.set_selection_status(
+                    "先选目标体，再按 Ctrl 选择刀具体"
+                    if command_id == "modify.boolean_bodies"
+                    else "请选择一个实体"
+                )
+                return
+            if command_id == "modify.boolean_bodies":
+                params["target_body"] = self._modeling_body_selectors[0]
+                params["tool_body"] = self._modeling_body_selectors[1]
+            elif command_id == "modify.body_transform":
+                params["body"] = self._modeling_body_selectors[0]
+            else:
+                params["seed_body"] = self._modeling_body_selectors[0]
+            bar.set_selection_status(self._body_operation_summary(params))
+        if command_id == "feature.hole":
+            profile_value = params.get("profile")
+            if isinstance(profile_value, Mapping):
+                hole_profile = cast("Mapping[str, object]", profile_value)
+                if hole_profile.get("type") == "sketch":
+                    sketch_id = hole_profile.get("sketch_id")
+                    hole_sketch_ids: set[str] = (
+                        {sketch.sketch_id for sketch in self._services.kernel.sketches}
+                        if self._services is not None
+                        else set()
+                    )
+                    if not isinstance(sketch_id, str) or sketch_id not in hole_sketch_ids:
+                        self.status_command.setText("请选择包含圆孔的已提交草图。")
+                        return
+        if self._active_placement_kind is not None:
+            if not self._modeling_placement_ready:
+                self.status_command.setText("请先在 XY 工作平面单击放置点。")
+                return
+        elif self._active_selection_kind == "face":
+            selector = self._modeling_face_selector
+            if selector is None:
+                self.status_command.setText(
+                    "请先选择到面终止平面。"
+                    if self._active_selection_role == "sketch_to_face"
+                    else "请先在模型上选择一个平面。"
+                )
+                return
+            if command_id == "feature.extrude":
+                if self._active_selection_role == "sketch_to_face":
+                    params["target_face"] = selector
+                else:
+                    params["profile"] = {"type": "face", "target_face": selector}
+            elif command_id == "feature.hole":
+                params["target_face"] = selector
+                profile_value = params.get("profile")
+                sketch_hole = (
+                    isinstance(profile_value, Mapping)
+                    and cast("Mapping[str, object]", profile_value).get("type") == "sketch"
+                )
+                if not sketch_hole and self._modeling_face_frame is not None:
+                    params["position"] = {
+                        "kind": "point",
+                        "point": list(self._modeling_face_frame.origin),
+                    }
+            elif command_id == "feature.hole_pattern":
+                base_hole = params.get("base_hole")
+                if not isinstance(base_hole, dict):
+                    self.status_command.setText("孔阵列参数结构无效。")
+                    return
+                base_hole["target_face"] = selector
+                use_face_center = bar.hole_pattern_uses_face_center()
+                bar.set_selection_status(
+                    "已选平面 · 面形心定位" if use_face_center else "已选平面 · 点击处定位"
+                )
+                if not use_face_center and self._modeling_face_frame is not None:
+                    base_hole["position"] = {
+                        "kind": "point",
+                        "point": list(self._modeling_face_frame.origin),
+                    }
+        try:
+            step = draft.plan().steps[0]
+            self._modeling_params = draft.set_params(step, params)
+        except (MycadError, ValueError, IndexError) as err:
+            self._invalidate_modeling_preview()
+            self.status_command.setText(f"参数无效：{str(err)[:180]}")
+            return
+        self._sync_dimension_handle()
+        if (
+            not self._extrude_input_valid
+            or not bar.input_valid()
+            or (
+                command_id == "feature.extrude" and not to_face_mode and bar.extrude_distance() == 0
+            )
+        ):
+            self._invalidate_modeling_preview()
+            self.status_command.setText("请输入有效尺寸；当前输入不能确认。")
+            return
+        self._modeling_params_valid = True
+        self.status_command.setText("参数已更新，正在准备模型预览…")
+        if not self._modeling_preview_timer.isActive():
+            self._modeling_preview_timer.start(120)
+
+    def _invalidate_modeling_preview(self, *, keep_candidate: bool = False) -> None:
+        """Expire any candidate tied to a previous selection or parameter value."""
+        self._modeling_preview_generation += 1
+        self._modeling_preview_valid = False
+        self._modeling_preview_document_revision = None
+        if not keep_candidate:
+            self._modeling_preview_timer.stop()
+        if self.modeling_command_bar is not None:
+            self.modeling_command_bar.set_preview_valid(False)
+        if self.viewport is not None and not keep_candidate:
+            self.viewport.clear_candidate_preview()
+
+    def _request_modeling_preview(self) -> None:
+        """Build an isolated candidate from the current command-bar draft."""
+        command_id = self._active_modeling_command
+        if command_id is None or command_id == "modify.fillet" or not self._modeling_params_valid:
+            return
+        if self.viewport is not None and (
+            not self._extrude_input_valid
+            or not self.viewport.extrude_manipulator.input_valid
+            or (
+                self.modeling_command_bar is not None
+                and not self.modeling_command_bar.input_valid()
+            )
+            or (
+                self._modeling_params.get("distance") == 0
+                and self._modeling_params.get("extent_mode") != "to_face"
+            )
+        ):
+            return
+        if self._active_placement_kind is not None and not self._modeling_placement_ready:
+            return
+        if self._active_selection_kind == "face" and self._modeling_face_selector is None:
+            return
+        if self._active_selection_kind == "edge" and not self._modeling_edge_selectors:
+            return
+        if self._active_selection_kind == "body" and not self._modeling_body_selectors:
+            return
+        services = self._services
+        loaded = self._loaded
+        unit = self.execution_unit
+        draft = self.plan_draft
+        if services is None or loaded is None or unit is None or draft is None:
+            self.status_command.setText("预览不可用：几何执行服务尚未就绪。")
+            return
+        if unit.is_busy:
+            self._modeling_preview_pending = True
+            self.status_command.setText("正在等待几何工作线程空闲，当前不能确认。")
+            return
+        self._modeling_preview_pending = False
+        generation = self._modeling_preview_generation
+        session_id = self._session_id
+        commands = tuple(loaded.document.commands)
+        document_revision = loaded.document.revision
+        params = dict(self._modeling_params)
+        source_revision = self._modeling_source_revision
+        dimension = (
+            self.viewport.extrude_manipulator.dimension if self.viewport is not None else None
+        )
+        self.status_command.setText("正在生成模型预览…")
+
+        def build_preview() -> ViewportData:
+            return mycad_app.preview_command(services, commands, command_id, params)
+
+        def finish_preview(result: ExecutionResult) -> None:
+            if (
+                session_id != self._session_id
+                or loaded is not self._loaded
+                or self._active_modeling_command != command_id
+            ):
+                return
+            if loaded.document.revision != document_revision:
+                self.status_command.setText("预览已过期：模型已改变，请重新选择。")
+                return
+            value = result.value
+            if generation != self._modeling_preview_generation:
+                if (
+                    self.viewport is not None
+                    and self._modeling_params_valid
+                    and source_revision == self._modeling_source_revision
+                    and dimension is not None
+                    and dimension == self.viewport.extrude_manipulator.dimension
+                    and self.viewport.extrude_manipulator.adjusting
+                    and self.viewport.extrude_manipulator.input_valid
+                    and self._extrude_input_valid
+                    and result.error is None
+                    and isinstance(value, ViewportData)
+                ):
+                    self.viewport.show_candidate_preview(value, preserve_view=True)
+                return
+            if result.error is not None or not isinstance(value, ViewportData):
+                if self.viewport is not None:
+                    self.viewport.clear_candidate_preview()
+                detail = result.error or "几何服务返回了无效预览。"
+                self.status_command.setText(f"预览失败：{str(detail)[:180]}；可修改参数后重试。")
+                self.status_command.setToolTip(str(detail))
+                return
+            if self.viewport is not None:
+                self.viewport.show_candidate_preview(value, preserve_view=True)
+            self._modeling_preview_document_revision = document_revision
+            self._modeling_preview_valid = True
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_preview_valid(True)
+            self.status_command.setToolTip("")
+            body_summary = self._body_operation_summary(self._modeling_params)
+            body_count = len(set(value.triangle_body_ids))
+            self.status_command.setText(
+                f"{body_summary}；预览当前模型共 {body_count} 个实体，确认后应用。"
+                if body_summary
+                else "模型预览已更新；确认后写入命令历史。"
+            )
+
+        if not unit.submit(
+            build_preview,
+            operation=f"{command_id}-preview",
+            session_id=session_id,
+            on_complete=finish_preview,
+        ):
+            self._modeling_preview_pending = True
+            self.status_command.setText("几何工作线程忙碌，空闲后将更新最新预览。")
+
+    def _commit_modeling_operation(self) -> None:
+        """Commit one current non-fillet draft only after its preview succeeds."""
+        command_id = self._active_modeling_command
+        if command_id is None or command_id == "modify.fillet":
+            return
+        if not self._extrude_input_valid or (
+            self.modeling_command_bar is not None and not self.modeling_command_bar.input_valid()
+        ):
+            self.status_command.setText("尺寸输入尚未完成，不能提交。")
+            return
+        if self._modeling_commit_inflight or not self._modeling_preview_valid:
+            self.status_command.setText("当前预览尚未就绪或已过期，操作未提交。")
+            return
+        if (
+            self._loaded is None
+            or self._modeling_preview_document_revision != self._loaded.document.revision
+        ):
+            self._invalidate_modeling_preview()
+            self.status_command.setText("预览已过期：文档已改变，请重新选择或修改参数后预览。")
+            return
+        if self.execution_unit is None or self.execution_unit.is_busy or self.plan_cards is None:
+            self.status_command.setText("预览更新中，请稍后确认。")
+            return
+        self._modeling_commit_inflight = True
+        self._modeling_preview_valid = False
+        self._modeling_preview_timer.stop()
+        if self.viewport is not None:
+            self.viewport.set_modeling_interaction_locked(True)
+        if self.modeling_command_bar is not None:
+            self.modeling_command_bar.set_preview_valid(False)
+            self.modeling_command_bar.set_busy(True)
+        self.status_command.setText("正在应用当前建模操作…")
+        self.plan_cards.execute_plan()
+
+    def _on_modeling_execution_busy_changed(self, busy: bool) -> None:
+        if not busy and self._modeling_preview_pending and not self._modeling_commit_inflight:
+            self._modeling_preview_timer.start(0)
+
+    def _connect_modeling_editor(self, command_id: str, dialog: QDialog) -> None:
+        def on_finished(result: int) -> None:
+            self._on_modeling_editor_finished(command_id, result)
+
+        dialog.finished.connect(on_finished)
+
+    def _on_workplane_point_picked(self, value: object, _position: QPoint) -> None:
+        if (
+            self._active_placement_kind is None
+            or self.modeling_command_bar is None
+            or not isinstance(value, tuple)
+        ):
+            return
+        x, y, z = cast("tuple[float, float, float]", value)
+        self._modeling_source_revision += 1
+        self._modeling_placement_ready = True
+        self.modeling_command_bar.set_placement_point((x, y, z))
+        self._sync_dimension_handle()
+        command_id = self._active_modeling_command or "建模命令"
+        label = (
+            self._services.registry.get(command_id).label_zh
+            if self._services is not None and command_id != "建模命令"
+            else command_id
+        )
+        self.modeling_command_bar.set_selection_status(f"位置 X{x:.2f} Y{y:.2f}")
+        self.status_command.setText(f"{label}放置点：X {x:.2f} mm，Y {y:.2f} mm；正在更新预览。")
+
+    def _on_workplane_point_rejected(self) -> None:
+        self.status_command.setText("当前视角无法与 XY 工作平面相交；请调整视角后再单击。")
+
+    def _set_viewport_selection_filter(
+        self, kind: SelectionKind, *, preserve: bool = False
+    ) -> None:
+        viewport = self.viewport
+        if viewport is None:
+            return
+        current = viewport.selection()
+        if not preserve and current is not None:
+            viewport.clear_selection()
+        viewport.set_selection_filter(kind)
+        action = self.selection_filter_actions.get(kind)
+        if action is not None:
+            action.setChecked(True)
+
+    def _fill_active_modeling_selection(self, selection: SelectionState) -> None:
+        command_id = self._active_modeling_command
+        expected_kind = self._active_selection_kind
+        services = self._services
+        if command_id is None or expected_kind is None or services is None:
+            return
+        if command_id == "modify.chamfer":
+            self._modeling_source_revision += 1
+            self._modeling_params_valid = False
+            self._modeling_edge_selectors = ()
+            self._invalidate_modeling_preview()
+            if selection.kind != "edge" or not selection.topology_ids:
+                self.status_command.setText("倒角需要选择一条或多条模型边。")
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status("请选择模型边")
+                return
+            try:
+                self._modeling_edge_selectors = tuple(
+                    mycad_app.interactive_selectors(
+                        services,
+                        "edge",
+                        selection.topology_ids,
+                    )
+                )
+            except (MycadError, ValueError) as err:
+                self.status_command.setText(f"选边无法用于倒角：{str(err)[:180]}")
+                return
+            if not self._modeling_edge_selectors:
+                self.status_command.setText("倒角需要选择一条或多条模型边。")
+                return
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_selection_status(
+                    f"已选 {len(self._modeling_edge_selectors)} 条边 · 等距倒角"
+                )
+                self._on_modeling_parameters_changed(self.modeling_command_bar.values())
+            return
+        if command_id in {
+            "modify.boolean_bodies",
+            "modify.body_transform",
+            "modify.body_pattern",
+        }:
+            self._modeling_source_revision += 1
+            self._modeling_params_valid = False
+            self._modeling_body_selectors = ()
+            self._modeling_body_names = ()
+            self._invalidate_modeling_preview()
+            if selection.kind != "body":
+                self.status_command.setText("当前操作需要选择模型实体。")
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status("请选择模型实体")
+                return
+            required_count = 2 if command_id == "modify.boolean_bodies" else 1
+            if len(selection.body_ids) != required_count:
+                self.status_command.setText(
+                    f"当前操作需要恰好选择 {required_count} 个实体；请调整选择后继续。"
+                )
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status(
+                        "先选择目标体，再按 Ctrl 追加刀具体"
+                        if command_id == "modify.boolean_bodies"
+                        else "请选择一个实体"
+                    )
+                return
+            if selection.geometry_revision != services.kernel.geometry_revision:
+                self.status_command.setText("实体选择已过期；模型发生变化，请重新选择。")
+                return
+            try:
+                self._modeling_body_selectors = mycad_app.interactive_body_selectors(
+                    services,
+                    selection.body_ids,
+                )
+                if self.right_panel is not None:
+                    self._modeling_body_names = tuple(
+                        self.right_panel.body_name(identity) for identity in selection.body_ids
+                    )
+            except (MycadError, ValueError) as err:
+                self.status_command.setText(f"实体选择无法用于当前操作：{str(err)[:180]}")
+                return
+            if self.modeling_command_bar is not None:
+                selection_labels = {
+                    "modify.boolean_bodies": "已选目标体和刀具体",
+                    "modify.body_transform": "已选变换实体",
+                    "modify.body_pattern": "已选阵列种子",
+                }
+                self.modeling_command_bar.set_selection_status(selection_labels[command_id])
+                self._on_modeling_parameters_changed(self.modeling_command_bar.values())
+            return
+        if command_id not in {"feature.extrude", "feature.hole", "feature.hole_pattern"}:
+            return
+        self._modeling_source_revision += 1
+        self._modeling_params_valid = False
+        self._modeling_face_selector = None
+        self._invalidate_modeling_preview()
+        self._modeling_face_frame = None
+        if self.viewport is not None:
+            self.viewport.extrude_manipulator.clear()
+        if selection.kind != expected_kind:
+            self.status_command.setText("此操作需要选择模型平面，请切换到面选择。")
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_selection_status("请选择一个平面")
+            return
+        if len(selection.topology_ids) != 1:
+            self.status_command.setText("此操作需要一个目标面；请只选择单个面。")
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_selection_status("请只选择一个面")
+            return
+        try:
+            selectors = mycad_app.interactive_selectors(
+                services,
+                selection.kind,
+                selection.topology_ids,
+            )
+        except (MycadError, ValueError) as err:
+            self.status_command.setText(f"选择无法用于命令：{str(err)[:180]}")
+            return
+        if selectors[0].get("surface") != "plane":
+            self.status_command.setText("请选择平面；当前操作不支持曲面。")
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_selection_status("曲面不适用，请重选平面")
+            return
+        self._modeling_face_selector = selectors[0]
+        self._extrude_input_valid = True
+        if self.viewport is not None:
+            try:
+                frame = mycad_app.interactive_face_frame(services, selection.topology_ids[0])
+            except (MycadError, ValueError) as err:
+                self._modeling_face_selector = None
+                self.status_command.setText(f"无法确定平面方向：{err}")
+                return
+            self._modeling_face_frame = self.viewport.picked_face_frame(frame)
+        if self.modeling_command_bar is not None:
+            self.modeling_command_bar.set_selection_status(
+                "已选终止平面 · 预览到面范围"
+                if self._active_selection_role == "sketch_to_face"
+                else "完整面 · 正值外拉 / 负值内推"
+                if command_id == "feature.extrude"
+                else "已选平面 · 点击处定位"
+            )
+            self._on_modeling_parameters_changed(self.modeling_command_bar.values())
+
+    def _on_viewport_context_requested(self, position: QPoint) -> None:
+        if self._active_modeling_command is not None and self.plan_cards is not None:
+            self.plan_cards.show_parameter_editor_at(position)
+
+    def _on_modeling_editor_finished(self, command_id: str, result: int) -> None:
+        if command_id != self._active_modeling_command:
+            return
+        if result == QDialog.DialogCode.Accepted:
+            self.status_command.setText(f"已提交：{command_id}（正在生成模型）")
+            self._end_modeling_tool()
+        else:
+            self.status_command.setText(f"已取消：{command_id}")
+            self._end_modeling_tool()
+
+    def _cancel_active_modeling_tool(self) -> None:
+        if self._active_modeling_command is None:
+            return
+        if self._fillet_commit_inflight or self._modeling_commit_inflight:
+            self.status_command.setText("建模操作正在提交；请等待完成后再退出。")
+            return
+        command_id = self._active_modeling_command
+        self._end_modeling_tool(cancel_editor=True)
+        if self.plan_cards is not None:
+            self.plan_cards.cancel_parameter_editor()
+        self.status_command.setText(f"已取消：{command_id}")
+
+    def _end_modeling_tool(self, *, cancel_editor: bool = False) -> None:
+        command_id = self._active_modeling_command
+        self._active_modeling_command = None
+        self._active_selection_kind = None
+        self._active_selection_role = None
+        self._active_placement_kind = None
+        if command_id == "modify.fillet":
+            self._fillet_preview_timer.stop()
+            self._fillet_preview_generation += 1
+            self._fillet_preview_valid = False
+            self._fillet_preview_pending = False
+            self._fillet_commit_inflight = False
+            self._fillet_edge_selectors = ()
+            if self.fillet_command_bar is not None:
+                self.fillet_command_bar.set_busy(False)
+                self.fillet_command_bar.hide()
+        elif command_id is not None:
+            self._modeling_preview_timer.stop()
+            self._modeling_preview_generation += 1
+            self._modeling_preview_valid = False
+            self._modeling_preview_pending = False
+            self._modeling_commit_inflight = False
+            self._modeling_face_selector = None
+            self._modeling_edge_selectors = ()
+            self._modeling_body_selectors = ()
+            self._modeling_body_names = ()
+            self._modeling_placement_ready = False
+            self._modeling_params = {}
+            if self.modeling_command_bar is not None:
+                self.modeling_command_bar.set_preview_valid(False)
+                self.modeling_command_bar.set_busy(False)
+                self.modeling_command_bar.hide()
+        viewport = self.viewport
+        if viewport is not None:
+            viewport.set_modeling_context_active(False)
+            viewport.set_fillet_interaction_active(False)
+            viewport.set_placement_context_active(False)
+            viewport.clear_candidate_preview()
+            previous_filter = self._previous_selection_filter
+            if previous_filter is not None:
+                viewport.set_selection_filter(previous_filter)
+                action = self.selection_filter_actions.get(previous_filter)
+                if action is not None:
+                    action.setChecked(True)
+        self._previous_selection_filter = None
+        if cancel_editor and self.plan_cards is not None and command_id is not None:
+            self.plan_cards.cancel_parameter_editor()
+        if (
+            cancel_editor
+            and command_id is not None
+            and self.plan_draft is not None
+            and self.plan_draft.plan().status == "draft"
+        ):
+            self.plan_draft.replace_plan(Plan(steps=[]))
+
+    def _on_body_visibility_requested(self, identity: object, visible: bool) -> None:
+        if self.viewport is not None and isinstance(identity, BodyId):
+            self.viewport.set_body_visible(identity, visible)
+            self._sync_body_display()
+
+    def _on_current_snapshot_changed(self, snapshot: object) -> None:
+        if self.viewport is not None and self.right_panel is not None:
+            self.right_panel.set_current_snapshot(
+                snapshot, state_ids=self.viewport.history_state_ids()
+            )
+
+    def _sync_body_display(self) -> None:
+        if self.viewport is not None and self.right_panel is not None:
+            self.right_panel.set_body_display(
+                self.viewport.hidden_body_ids(),
+                editable=self.viewport.body_visibility_editable(),
+                hint=self.viewport.body_display_hint(),
+            )
+
+    def _on_render_mode_selected(self, mode: RenderMode, _checked: bool = False) -> None:
+        if self.viewport is not None:
+            self.viewport.set_render_mode(mode)
+
+    def _on_orientation_selected(
+        self, orientation: ViewOrientation, _checked: bool = False
+    ) -> None:
+        if self.viewport is not None:
+            self.viewport.set_orientation(orientation)
+
+    def _on_projection_selected(self, mode: ProjectionMode, _checked: bool = False) -> None:
+        if self.viewport is not None:
+            self.viewport.set_projection_mode(mode)
+
+    def _on_selection_filter_selected(self, kind: SelectionKind, _checked: bool = False) -> None:
+        if self.viewport is not None:
+            self.viewport.set_selection_filter(kind)
+
+    def _on_coordinate_axes_toggled(self, visible: bool) -> None:
+        if self.viewport is not None:
+            self.viewport.set_coordinate_axes_visible(visible)
+
+    def _on_fit_view(self) -> None:
+        if self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog:
+            self._sketch_dialog.canvas.fit_view()
+        elif self.viewport is not None:
+            self.viewport.fit_view()
+
+    def _sync_camera_status(self) -> None:
+        if self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog:
+            self.status_camera.setText(
+                f"二维 · {self._sketch_dialog.plane_combo.currentText()} · UCS"
+            )
+            return
+        view = self.viewport
+        if view is None:
+            return
+        orientation = view.orientation()
+        label = "自由" if orientation is None else self.orientation_actions[orientation].text()
+        projection = "正交" if view.projection_mode() == "orthographic" else "透视"
+        self.status_camera.setText(f"{label} · {projection}")
+        self.orientation_group.setExclusive(False)
+        for name, action in self.orientation_actions.items():
+            action.setChecked(name == orientation)
+        self.orientation_group.setExclusive(True)
+        self.projection_actions[view.projection_mode()].setChecked(True)
+
+    def _on_xy_grid_toggled(self, visible: bool) -> None:
+        if self.viewport is not None:
+            self.viewport.set_xy_grid_visible(visible)
+
+    def _on_selection_changed(self, selection: object) -> None:
+        if selection is not None and not isinstance(selection, SelectionState):
+            return
+        if self.right_panel is not None:
+            self.right_panel.set_view_selection(selection)
+        if selection is None:
+            self.status_selection.setText("选择 0")
+            if self._active_modeling_command == "modify.fillet":
+                self._on_fillet_selection_changed(None)
+            elif self._active_selection_kind == "face":
+                if self.viewport is not None:
+                    self.viewport.extrude_manipulator.clear()
+                self._modeling_face_selector = None
+                self._invalidate_modeling_preview()
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status("单击选择目标平面")
+            elif self._active_selection_kind == "edge":
+                self._modeling_edge_selectors = ()
+                self._invalidate_modeling_preview()
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status("单击选择模型边")
+            elif self._active_selection_kind == "body":
+                self._modeling_body_selectors = ()
+                self._modeling_body_names = ()
+                self._invalidate_modeling_preview()
+                if self.modeling_command_bar is not None:
+                    self.modeling_command_bar.set_selection_status("请选择模型实体")
+            return
+        labels: dict[SelectionKind, str] = {
+            "body": "实体",
+            "face": "面",
+            "edge": "边",
+            "vertex": "顶点",
+        }
+        count = len(selection.body_ids) if selection.kind == "body" else len(selection.topology_ids)
+        self.status_selection.setText(f"选择 {labels[selection.kind]} {count}")
+        if self._active_modeling_command == "modify.fillet":
+            self._on_fillet_selection_changed(selection)
+            return
+        if self._active_modeling_command == "modify.chamfer":
+            self._fill_active_modeling_selection(selection)
+            return
+        self._fill_active_modeling_selection(selection)
+
+    def _show_plan_cards(self) -> None:
+        if self.bottom_tabs is not None and self.plan_cards is not None:
+            self.bottom_tabs.setCurrentWidget(self.plan_cards)
+        self.act_toggle_bottom_dock.setChecked(True)
+        self.bottom_dock.show()
+        self.bottom_dock.raise_()
+
+    def _show_cli_panel(self) -> None:
+        if self.bottom_tabs is not None and self.cli_tab is not None:
+            self.bottom_tabs.setCurrentWidget(self.cli_tab)
+        self.act_toggle_bottom_dock.setChecked(True)
+        self.bottom_dock.show()
+        self.bottom_dock.raise_()
+
+    def _reset_layout(self) -> None:
+        """Restore the named five-zone layout without changing document state."""
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.left_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.right_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.main_toolbar)
+        self.removeToolBarBreak(self.modeling_toolbar)
+        self.removeToolBar(self.modeling_toolbar)
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.modeling_toolbar)
+        self._modeling_toolbar_was_visible = True
+        self.modeling_toolbar.setVisible(
+            self._sketch_dialog is None or self.centralWidget() is not self._sketch_dialog
+        )
+        if self._sketch_dialog is not None:
+            self._sketch_dialog.reset_toolbar_layout()
+        self._drafting_toolbar_state = None
+        self._arrange_command_toolbars()
+        self.main_toolbar.setMovable(True)
+        self.main_toolbar.setFloatable(True)
+        self.act_lock_toolbar.setChecked(False)
+        self.act_toggle_toolbar.setChecked(True)
+        self.act_toggle_left_dock.setChecked(True)
+        self.act_toggle_right_dock.setChecked(True)
+        self.act_toggle_bottom_dock.setChecked(False)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry().size()
+        self.resize(min(1400, available.width()), min(900, available.height()))
+        self.resizeDocks(
+            [self.left_dock, self.right_dock],
+            [194, 278],
+            Qt.Orientation.Horizontal,
+        )
+        self.store_window_state()
+
+    def current_theme(self) -> ThemeName:
+        """Return the theme currently applied to the application."""
+        return self._theme_name
+
+    def _apply_theme_setting(self, theme: ThemeName, *, persist: bool) -> None:
+        self._theme_name = theme
+        self.act_theme_light.setChecked(theme == "light")
+        self.act_theme_dark.setChecked(theme == "dark")
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_theme(app, theme)
+        self._refresh_action_icons()
+        if self.command_palette is not None:
+            self.command_palette.set_icon_theme(theme)
+        if self.right_panel is not None:
+            self.right_panel.set_icon_theme(theme)
+        if self.viewport is not None:
+            self.viewport.set_theme(theme)
+        refresh_button_icons(self, theme)
+        if persist:
+            settings = QSettings(ORG_NAME, APP_NAME)
+            settings.setValue(SETTINGS_KEY_THEME, theme)
+            settings.sync()
+
+    def _on_theme_action(self, theme: ThemeName, _checked: bool = False) -> None:
+        self._apply_theme_setting(theme, persist=True)
+
+    def _on_left_dock_toggled(self, visible: bool) -> None:
+        if self._compact_layout_active and not self._compact_policy_change:
+            self._compact_left_was_visible = visible
+        self.left_dock.setVisible(visible)
+
+    def _apply_compact_layout_policy(self) -> None:
+        compact = self.width() < 1000
+        if compact and not self._compact_layout_active:
+            self._compact_left_was_visible = not self.left_dock.isHidden()
+            self._compact_layout_active = True
+            self._compact_policy_change = True
+            self.act_toggle_left_dock.setChecked(False)
+            self._compact_policy_change = False
+        elif not compact and self._compact_layout_active:
+            self._compact_layout_active = False
+            if self._compact_left_was_visible:
+                self._compact_policy_change = True
+                self.act_toggle_left_dock.setChecked(True)
+                self._compact_policy_change = False
+
+    @override
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._compact_policy_ready:
+            self._apply_compact_layout_policy()
+
+    def _show_options(self) -> None:
+        QMessageBox.information(
+            self,
+            "选项",
+            "窗口布局记忆保存在 QSettings（org=MyCAD, app=MyCAD）。",
+        )
+
+    def _show_units(self) -> None:
+        QMessageBox.information(self, "单位", "单位：mm（只读）。")
+
+    def _show_shortcuts(self) -> None:
+        QMessageBox.information(
+            self,
+            "快捷键",
+            "新建 Ctrl+N · 打开 Ctrl+O · 保存 Ctrl+S · 撤销 Ctrl+Z · 重做 Ctrl+Y\n"
+            "适应窗口 F · 打开 CLI Ctrl+Shift+L · 查看计划 Ctrl+Shift+P\n"
+            "重置布局 Ctrl+Shift+0 · 拉伸 Ctrl+Shift+E · 旋转 Ctrl+Shift+R · "
+            "孔 Ctrl+Shift+H · 圆角 Ctrl+Shift+F",
+        )
+
+    def _show_command_reference(self) -> None:
+        """Open the verb <-> command-id lookup table (needs the registry)."""
+        if self._registry is None:
+            return
+        dialog = CommandReferenceDialog(self._registry, self)
+        dialog.exec()
+
+    def _show_about(self) -> None:
+        QMessageBox.about(self, "关于", f"MyCAD v{APP_VERSION}")
+
+    def _show_license(self) -> None:
+        QMessageBox.information(
+            self,
+            "开源许可说明",
+            "MyCAD 以 Apache-2.0 释出；第三方依赖条目见仓库 NOTICE 文件。",
+        )
+
+    # ------------------------------------------------------------------
+    # Document binding and core-signal wiring
+    # ------------------------------------------------------------------
+
+    def loaded_document(self) -> LoadedDocument | None:
+        """当前绑定的 LoadedDocument；测试与后续计划确认流的同源读取入口。"""
+        return self._loaded
+
+    def active_sketch_dialog(self) -> SketchEditorDialog | None:
+        """当前仍打开的草图编辑器；未打开时返回 ``None``。"""
+        return self._sketch_dialog
+
+    def active_sketch_constraint_dialog(self) -> SketchConstraintDialog | None:
+        """当前仍打开的草图约束编辑器；未打开时返回 ``None``。"""
+        return self._sketch_constraint_dialog
+
+    def bind_document(self, loaded: LoadedDocument) -> None:
+        """Bind the app-provided LoadedDocument and subscribe the status fields.
+
+        The bus holds callbacks weakly, so each subscription goes through a
+        ``functools.partial`` adapter that keeps the signal name, and this
+        window holds the strong references until unbind.
+        """
+        if self._sketch_dialog is not None:
+            self._sketch_dialog.reject()
+        if self._active_modeling_command is not None:
+            self._end_modeling_tool(cancel_editor=True)
+        self._bus = loaded.bus
+        self._fillet_last_successful_radius = 1.0
+        self._fillet_radius_value = 1.0
+        self._session_id += 1
+        if self.execution_unit is not None:
+            self.execution_unit.set_session(self._session_id)
+        # Replacement semantics: dropping our strong adapter list unsubscribes
+        # the previous document—its bus only holds subscribers weakly.
+        self._signal_adapters.clear()
+        self._loaded = loaded
+        if self.command_palette is not None:
+            self.command_palette.set_document_type(loaded.document.document_type)
+        for action in self._part_only_actions:
+            action.setEnabled(
+                loaded.document.document_type == "part" and self.plan_draft is not None
+            )
+        self.status_dirty.setText("已修改" if loaded.document.is_dirty else "未修改")
+        events = loaded.document.events
+        for name in dict.fromkeys((*STATUS_SIGNALS, *STRUCTURE_REFRESH_SIGNALS)):
+            adapter = partial(self._queue_core_event, self._session_id, name)
+            self._signal_adapters.append(adapter)
+            events.subscribe(name, adapter)
+        if self.right_panel is not None and self._registry is not None:
+            self.right_panel.bind_document(
+                loaded,
+                self._registry,
+                kernel=None if self._services is None else self._services.kernel,
+            )
+        if self.plan_cards is not None:
+            self.plan_cards.bind_document(loaded)
+        if self.viewport is not None:
+            self.viewport.bind_document(loaded)
+        if self.cli_tab is not None:
+            self.cli_tab.bind_document(loaded)
+
+    def _queue_core_event(
+        self, session_id: int, name: SignalName, payload: Mapping[str, object]
+    ) -> None:
+        """Queue signal payloads so worker callbacks never touch Qt widgets."""
+        self._core_event_queued.emit(session_id, name, dict(payload))
+
+    @Slot(int, str, object)
+    def _dispatch_core_event(self, session_id: int, name: str, value: object) -> None:
+        """Apply only current-session core events from the UI thread."""
+        if session_id != self._session_id or not isinstance(value, Mapping):
+            return
+        payload = cast("Mapping[str, object]", value)
+        self.handle_core_signal(cast("SignalName", name), payload)
+        if name in MODIFYING_SIGNALS:
+            if self.right_panel is not None:
+                self.right_panel.invalidate_measurement()
+            if self._active_modeling_command == "modify.fillet":
+                if not self._fillet_commit_inflight:
+                    self._fillet_preview_pending = False
+                    self._invalidate_fillet_preview()
+            elif self._active_modeling_command is not None and not self._modeling_commit_inflight:
+                self._modeling_preview_pending = False
+                self._invalidate_modeling_preview()
+        if name in STRUCTURE_REFRESH_SIGNALS:
+            self._on_structure_signal(name, payload)
+
+    def _on_structure_pick(self, ordinal: int) -> None:
+        """Load a clicked historical mesh on the serialized worker, then render it."""
+        viewport = self.viewport
+        if viewport is None:
+            return
+        state_id = viewport.history_state_id_for_ordinal(ordinal)
+        if state_id is None:
+            return
+        unit = self.execution_unit
+        services = self._services
+        if unit is None or services is None:
+            viewport.preview_history_feature(ordinal)
+            return
+
+        def load_history_mesh() -> ViewportData | None:
+            return services.kernel.historical_viewport_data(state_id)
+
+        def finish_history_preview(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self.status_command.setText(f"历史预览失败：{result.error[:200]}")
+                return
+            value = result.value
+            if not isinstance(value, ViewportData):
+                self.status_command.setText("历史预览失败：返回结果无效")
+                return
+            if not viewport.preview_history_snapshot(state_id, value):
+                self.status_command.setText("历史状态已失效，请重新选择")
+
+        if not unit.submit(
+            load_history_mesh,
+            operation="history-preview",
+            session_id=self._session_id,
+            on_complete=finish_history_preview,
+        ):
+            self.status_command.setText("当前有操作正在执行，历史预览稍后可重试")
+
+    def _on_history_edit_requested(
+        self, ordinal: int, params: object, actor: str, reason: str
+    ) -> None:
+        """Run a confirmed history edit through the serialized document worker."""
+
+        loaded = self._loaded
+        unit = self.execution_unit
+        if loaded is None or unit is None or not isinstance(params, Mapping):
+            self.status_command.setText("历史编辑失败：当前文档或规范化参数不可用")
+            return
+        normalized = cast("Mapping[str, object]", params)
+
+        def edit_and_replay() -> None:
+            loaded.bus.edit_and_replay(ordinal, normalized, actor, reason)
+
+        def finish_edit(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self.status_command.setText(f"历史编辑失败：{result.error[:240]}")
+                return
+            self.status_command.setText(f"已更新历史命令 #{ordinal}；模型与下游命令已重建")
+            if self.rebuild_hook is not None:
+                self.request_rebuild()
+
+        if not unit.submit(
+            edit_and_replay,
+            operation="history-edit",
+            session_id=self._session_id,
+            on_complete=finish_edit,
+        ):
+            self.status_command.setText("当前有操作正在执行，历史编辑未提交")
+
+    def _on_current_entity_pick(self, selected: bool) -> None:
+        """Current-result selection has no inferred feature-source ordinal."""
+        if self.right_panel is not None:
+            self.right_panel.select_feature_ordinal(None)
+        self.status_selection.setText("当前模型已选中" if selected else "选择 0")
+
+    def _on_body_pick(self, identity: object) -> None:
+        if not isinstance(identity, BodyId) or self.viewport is None:
+            return
+        if identity in self.viewport.hidden_body_ids():
+            self.status_command.setText("此实体已隐藏；请先勾选显示后再选择。")
+            if self.right_panel is not None:
+                self.right_panel.set_view_selection(self.viewport.selection())
+            return
+        if self._active_modeling_command is not None:
+            self.status_command.setText(
+                "请在视口选择当前命令所需的面或边；Esc 退出命令后可选实体。"
+            )
+            if self.right_panel is not None:
+                self.right_panel.set_view_selection(self.viewport.selection())
+            return
+        self._set_viewport_selection_filter("body")
+        self.viewport.select_body(identity)
+
+    def _on_history_preview_changed(self, active: bool) -> None:
+        """Keep the preview exit action, status and tree in the same state."""
+        self.act_return_current_model.setEnabled(active)
+        if self.right_panel is not None:
+            self.right_panel.set_view_selection(None)
+        if active and self.viewport is not None:
+            ordinal = self.viewport.history_preview_ordinal()
+            suffix = "" if ordinal is None else f" #{ordinal}"
+            self.status_selection.setText(f"历史预览{suffix}")
+        else:
+            self.status_selection.setText("选择 0")
+            if self.right_panel is not None:
+                self.right_panel.select_feature_ordinal(None)
+
+    def _return_current_model(self) -> None:
+        if self.viewport is not None:
+            self.viewport.show_current_model()
+
+    def _on_cli_document_replace(self, loaded: LoadedDocument | None) -> None:
+        if loaded is None:
+            return
+        self._replace_document(loaded, None)
+
+    def _on_structure_signal(self, name: str, payload: Mapping[str, object] | None) -> None:
+        if self.right_panel is not None:
+            self.right_panel.refresh_structure()
+
+    def handle_core_signal(self, name: str, payload: Mapping[str, object]) -> None:
+        """Map one signal name + payload onto the five status fields."""
+        if name == "post_command":
+            command_id = payload.get("command_id", "?")
+            ordinal = payload.get("ordinal", "?")
+            self.status_command.setText(f"当前：{command_id}（#{ordinal}）")
+        if name == "geometry_rebuilt":
+            self.status_rebuild.setText("重建状态：就绪")
+        elif name in PENDING_REBUILD_SIGNALS:
+            running = self.execution_unit is not None and self.execution_unit.is_busy
+            self.status_rebuild.setText("重建状态：执行中" if running else "重建状态：就绪")
+        if name == "document_saved":
+            self.status_dirty.setText("未修改")
+        elif name in MODIFYING_SIGNALS:
+            self.status_dirty.setText("已修改")
+
+    def request_rebuild(self) -> None:
+        """Rebuild action slot; todo 9 sets ``_rebuild_hook`` on the viewport."""
+        unit = self.execution_unit
+        services = self._services
+        if unit is None or services is None or self.rebuild_hook is None:
+            if self.rebuild_hook is not None:
+                self.rebuild_hook()
+            return
+
+        def prepare_mesh() -> None:
+            services.kernel.viewport_data()
+
+        def finish_refresh(result: ExecutionResult) -> None:
+            self._finish_worker_action(result, "重建")
+            if result.error is None and self.rebuild_hook is not None:
+                self.rebuild_hook()
+
+        unit.submit(
+            prepare_mesh,
+            operation="viewport-refresh",
+            session_id=self._session_id,
+            on_complete=finish_refresh,
+        )
+
+    def _on_execution_busy_changed(self, busy: bool) -> None:
+        """Show busy feedback and keep Qt interactions out of worker time."""
+        if self._sketch_dialog is not None:
+            self._sketch_dialog.setEnabled(not busy)
+        if self.right_panel is not None:
+            self.right_panel.set_measurement_busy(busy)
+        if self.viewport is not None:
+            self.viewport.set_execution_busy(busy)
+        if busy:
+            self._busy_action_states = {}
+            interactive_actions: set[QAction] = set()
+            if (
+                self.execution_unit is not None
+                and self.execution_unit.operation is not None
+                and self.execution_unit.operation.endswith("-preview")
+                and self._active_modeling_command is not None
+            ):
+                if self.modeling_command_bar is not None:
+                    interactive_actions.update(self.modeling_command_bar.actions())
+                if self.fillet_command_bar is not None:
+                    interactive_actions.update(self.fillet_command_bar.actions())
+                interactive_actions.update(self.orientation_actions.values())
+                interactive_actions.update(self.projection_actions.values())
+                interactive_actions.update(self.render_mode_actions.values())
+                interactive_actions.add(self.act_fit_view)
+                interactive_actions.update(
+                    (
+                        self.menu_view.menuAction(),
+                        self.act_standard_orientation,
+                        self.projection_menu.menuAction(),
+                        self.render_mode_menu.menuAction(),
+                    )
+                )
+            for action in self.findChildren(QAction):
+                if action is self.act_quit or action in interactive_actions:
+                    continue
+                self._busy_action_states[action] = action.isEnabled()
+                action.setEnabled(False)
+            self.status_rebuild.setText("重建状态：执行中")
+            return
+        for action, enabled in self._busy_action_states.items():
+            action.setEnabled(enabled)
+        self._busy_action_states.clear()
+        self.status_rebuild.setText("重建状态：就绪")
+        if self._sketch_dialog is not None and self._services is not None:
+            self._sync_drawing_layers()
+
+    def _finish_worker_action(self, result: ExecutionResult, label: str) -> None:
+        if result.error is not None:
+            self.status_command.setText(f"{label}失败：{result.error}")
+        elif self._sketch_dialog is not None and self._services is not None:
+            self._sync_drawing_layers()
+
+    def request_undo(self) -> None:
+        draft = self._sketch_dialog
+        layer_undo = (
+            draft is not None
+            and self._loaded is not None
+            and draft.layer_history_boundaries.get(len(self._loaded.document.commands))
+            == draft.canvas.history_position
+            and not draft.canvas.has_pending_geometry
+            and not draft.canvas.has_active_edit_gesture
+            and bool(self._loaded.document.commands)
+            and self._loaded.document.commands[-1].id == "drawing.layers.set"
+        )
+        boundary = (
+            (len(self._loaded.document.commands), draft.canvas.history_position)
+            if layer_undo and draft is not None and self._loaded is not None
+            else None
+        )
+        if (
+            not layer_undo
+            and draft is not None
+            and self.centralWidget() is draft
+            and (
+                draft.canvas.entities
+                or draft.canvas.has_pending_geometry
+                or draft.canvas.can_undo
+                or draft.canvas.can_redo
+            )
+        ):
+            draft.canvas.undo_last_operation()
+            return
+        if self._bus is None:
+            self.status_command.setText("未绑定文档，无法撤销")
+            return
+        unit = self.execution_unit
+        services = self._services
+        if unit is not None and services is not None:
+            bus = self._bus
+
+            def undo() -> None:
+                bus.undo()
+                services.kernel.viewport_data()
+
+            def finished(result: ExecutionResult) -> None:
+                if (
+                    result.error is None
+                    and boundary is not None
+                    and draft is not None
+                    and draft is self._sketch_dialog
+                ):
+                    draft.layer_history_redo.append(boundary)
+                self._finish_worker_action(result, "撤销")
+
+            unit.submit(
+                undo,
+                operation="undo",
+                session_id=self._session_id,
+                on_complete=finished,
+            )
+            return
+        try:
+            self._bus.undo()
+        except InvalidHistoryError as err:
+            self.status_command.setText(f"撤销失败：{err}")
+
+    def request_redo(self) -> None:
+        draft = self._sketch_dialog
+        layer_redo = (
+            draft is not None
+            and self._loaded is not None
+            and bool(draft.layer_history_redo)
+            and draft.layer_history_redo[-1]
+            == (len(self._loaded.document.commands) + 1, draft.canvas.history_position)
+            and not draft.canvas.has_pending_geometry
+            and not draft.canvas.has_active_edit_gesture
+        )
+        if (
+            not layer_redo
+            and draft is not None
+            and self.centralWidget() is draft
+            and (
+                draft.canvas.entities
+                or draft.canvas.has_pending_geometry
+                or draft.canvas.can_undo
+                or draft.canvas.can_redo
+            )
+        ):
+            draft.canvas.redo_last_operation()
+            return
+        if self._bus is None:
+            self.status_command.setText("未绑定文档，无法重做")
+            return
+        unit = self.execution_unit
+        services = self._services
+        if unit is not None and services is not None:
+            bus = self._bus
+
+            def redo() -> None:
+                bus.redo()
+                services.kernel.viewport_data()
+
+            def finished(result: ExecutionResult) -> None:
+                if (
+                    result.error is None
+                    and layer_redo
+                    and draft is not None
+                    and draft is self._sketch_dialog
+                ):
+                    draft.layer_history_redo.pop()
+                self._finish_worker_action(result, "重做")
+
+            unit.submit(
+                redo,
+                operation="redo",
+                session_id=self._session_id,
+                on_complete=finished,
+            )
+            return
+        try:
+            self._bus.redo()
+        except InvalidHistoryError as err:
+            self.status_command.setText(f"重做失败：{err}")
+
+    # ------------------------------------------------------------------
+    # Layout memory (UI draft §4.1)
+    # ------------------------------------------------------------------
+
+    def _arrange_command_toolbars(self) -> None:
+        """Reserve a separate row for the active command, below main actions."""
+        bars = (self.fillet_command_bar, self.modeling_command_bar)
+        for bar in bars:
+            if bar is not None:
+                self.removeToolBarBreak(bar)
+                self.removeToolBar(bar)
+        if self.toolBarArea(self.main_toolbar) == Qt.ToolBarArea.TopToolBarArea:
+            self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        for bar in bars:
+            if bar is None:
+                continue
+            self.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
+            active = self._active_modeling_command
+            bar.setVisible(
+                active == "modify.fillet"
+                if bar is self.fillet_command_bar
+                else active is not None and active != "modify.fillet"
+            )
+
+    def restore_window_state(self) -> None:
+        settings = QSettings(ORG_NAME, APP_NAME)
+        theme_value = settings.value(SETTINGS_KEY_THEME, "light")
+        theme: ThemeName = (
+            cast("ThemeName", theme_value)
+            if isinstance(theme_value, str) and theme_value in {"light", "dark"}
+            else "light"
+        )
+        self._apply_theme_setting(theme, persist=False)
+        geometry = settings.value(SETTINGS_KEY_GEOMETRY)
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        state = settings.value(SETTINGS_KEY_STATE)
+        if state is not None:
+            self.restoreState(state)
+        # Separate preference survives old versions writing their saved dock layout.
+        area_value = settings.value(
+            SETTINGS_KEY_TOOLBAR_AREA, Qt.ToolBarArea.TopToolBarArea.value, type=int
+        )
+        areas = {
+            area.value: area
+            for area in (
+                Qt.ToolBarArea.TopToolBarArea,
+                Qt.ToolBarArea.BottomToolBarArea,
+                Qt.ToolBarArea.LeftToolBarArea,
+                Qt.ToolBarArea.RightToolBarArea,
+            )
+        }
+        preferred_area = (
+            areas.get(area_value, Qt.ToolBarArea.TopToolBarArea)
+            if isinstance(area_value, int)
+            else Qt.ToolBarArea.TopToolBarArea
+        )
+        if self.toolBarArea(self.main_toolbar) != preferred_area:
+            self.addToolBar(preferred_area, self.main_toolbar)
+        self._arrange_command_toolbars()
+        locked = settings.value(SETTINGS_KEY_TOOLBAR_LOCKED, False)
+        if isinstance(locked, bool) and locked:
+            self.act_lock_toolbar.setChecked(True)
+        self.act_toggle_toolbar.setChecked(not self.main_toolbar.isHidden())
+        self.act_toggle_left_dock.setChecked(not self.left_dock.isHidden())
+        self.act_toggle_right_dock.setChecked(not self.right_dock.isHidden())
+        # Startup gives the canvas priority even if the previous session left CLI open.
+        self.bottom_dock.hide()
+        self.act_toggle_bottom_dock.setChecked(False)
+        drafting_state = settings.value("layout/draftingToolbars")
+        self._drafting_toolbar_state = (
+            drafting_state if isinstance(drafting_state, QByteArray) else None
+        )
+        self._modeling_toolbar_was_visible = bool(
+            settings.value("toolbar/modelingVisible", True, type=bool)
+        )
+        self.modeling_toolbar.setVisible(self._modeling_toolbar_was_visible)
+        self._compact_policy_ready = True
+        self._apply_compact_layout_policy()
+
+    def store_window_state(self) -> None:
+        settings = QSettings(ORG_NAME, APP_NAME)
+        settings.setValue(SETTINGS_KEY_GEOMETRY, self.saveGeometry())
+        settings.setValue(SETTINGS_KEY_STATE, self.saveState())
+        if self._sketch_dialog is not None:
+            self._drafting_toolbar_state = self._sketch_dialog.toolbar_layout_state()
+        if self._drafting_toolbar_state is not None:
+            settings.setValue("layout/draftingToolbars", self._drafting_toolbar_state)
+        else:
+            settings.remove("layout/draftingToolbars")
+        in_drawing = self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog
+        settings.setValue(
+            "toolbar/modelingVisible",
+            self._modeling_toolbar_was_visible
+            if in_drawing
+            else not self.modeling_toolbar.isHidden(),
+        )
+        area = self.toolBarArea(self.main_toolbar)
+        if area != Qt.ToolBarArea.NoToolBarArea:
+            settings.setValue(SETTINGS_KEY_TOOLBAR_AREA, area.value)
+        settings.setValue(SETTINGS_KEY_TOOLBAR_LOCKED, self.act_lock_toolbar.isChecked())
+        settings.setValue(SETTINGS_KEY_THEME, self._theme_name)
+        settings.sync()
+
+    # ------------------------------------------------------------------
+    # Document lifecycle (todo 8)
+    # ------------------------------------------------------------------
+
+    def _on_new_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法新建")
+            return
+        if self._has_unsubmitted_sketch():
+            return
+        if self.new_document_dialog is not None:
+            self.new_document_dialog.raise_()
+            return
+        initial = self._loaded.document.document_type if self._loaded is not None else "part"
+        dialog = NewDocumentDialog(self, initial=initial)
+        self.new_document_dialog = dialog
+        result = dialog.exec()
+        self.new_document_dialog = None
+        if result == QDialog.DialogCode.Accepted:
+            self._create_document(dialog.document_type)
+        dialog.deleteLater()
+
+    def _on_new_drawing_document(self) -> None:
+        previous = self._loaded
+        self._create_document("drawing2d")
+        if self._loaded is not previous:
+            self._on_sketch_start()
+
+    def _create_document(self, document_type: DocumentType) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法新建")
+            return
+        if not self._confirm_unsaved_changes():
+            return
+        self._replace_document(
+            mycad_app.new_document(self._services, document_type=document_type), None
+        )
+
+    def _on_import_dxf_sketch(self) -> None:
+        if self._services is None or self._loaded is None:
+            self.status_command.setText("请先打开或新建文档，再导入 DXF 草图。")
+            return
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self, "导入 DXF 草图", "", "DXF 草图 (*.dxf)"
+        )
+        if selected:
+            self._queue_dxf_sketch_import(Path(selected), unit_override=None)
+
+    def _queue_dxf_sketch_import(self, path: Path, *, unit_override: str | None) -> None:
+        loaded = self._loaded
+        unit = self.execution_unit
+        if loaded is None or unit is None:
+            self.status_command.setText("当前文档不可用，DXF 未导入。")
+            return
+        session_id = self._session_id
+
+        def read_sketch() -> DxfSketchImport | _DxfUnitPrompt:
+            try:
+                return DXF_PROVIDER.read_sketch(path, unit_override=unit_override)
+            except DxfUnitOverrideRequired as exc:
+                return _DxfUnitPrompt(str(exc))
+
+        def finish_read(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self._show_error(f"无法读取 DXF 草图：{result.error[:240]}")
+                return
+            if isinstance(result.value, _DxfUnitPrompt):
+                units = ("mm", "cm", "m", "inch", "ft", "mil", "micron")
+                selected_unit, accepted = QInputDialog.getItem(
+                    self,
+                    "DXF 单位未声明",
+                    f"{result.value.message}\n请选择文件中的长度单位：",
+                    list(units),
+                    0,
+                    False,
+                )
+                if accepted and selected_unit:
+                    self._queue_dxf_sketch_import(path, unit_override=selected_unit)
+                else:
+                    self.status_command.setText("DXF 未声明单位；导入已取消，文档历史未改变。")
+                return
+            if not isinstance(result.value, DxfSketchImport):
+                self._show_error("无法读取 DXF 草图：返回结果无效。")
+                return
+            imported = result.value
+            if not imported.sketch.entities:
+                self._show_error(f"DXF 中没有可导入的支持图元：{imported.report}")
+                return
+            existing_sketch_ids = {
+                command.params.get("sketch_id")
+                for command in loaded.document.commands
+                if command.id == "sketch.create"
+            }
+            report = imported.report
+            sketch = imported.sketch
+            if sketch.sketch_id in existing_sketch_ids:
+                sketch = Sketch(
+                    uuid4().hex,
+                    sketch.frame,
+                    sketch.entities,
+                    constraints=sketch.constraints,
+                    layers=sketch.layers,
+                    support_face=sketch.support_face,
+                )
+                report = DxfExchangeReport(
+                    report.action,
+                    report.dxf_version,
+                    report.unit,
+                    report.entity_count,
+                    (*report.warnings, "草图身份与当前文档重复，已分配新的 MyCAD 草图身份"),
+                )
+            preview = (
+                f"{report}\n\n将把 {len(sketch.entities)} 个支持图元作为一张 XY 草图追加到当前文档。"
+                f"\n恢复关联尺寸 {len(sketch.constraints)} 个。"
+                "\n确认前不会修改命令历史或模型。"
+            )
+            choice = QMessageBox.question(
+                self,
+                "导入 DXF 草图预览",
+                preview,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                self.status_command.setText("DXF 草图导入已取消；文档历史未改变。")
+                return
+
+            def submit_sketch() -> object:
+                return loaded.bus.execute(
+                    "sketch.create",
+                    sketch.to_mapping(version=3),
+                    confirmed_by="local",
+                )
+
+            def finish_submit(submit_result: ExecutionResult) -> None:
+                if submit_result.error is not None:
+                    self._show_error(f"DXF 草图提交失败：{submit_result.error[:240]}")
+                    return
+                if self.viewport is not None:
+                    self.viewport.refresh()
+                self.status_command.setText(
+                    f"DXF 草图已导入并写入命令历史：{len(sketch.entities)} 个图元，"
+                    f"{len(sketch.constraints)} 个关联尺寸；可撤销、重做和保存重放。"
+                )
+
+            if not unit.submit(
+                submit_sketch,
+                operation="dxf-sketch-import-commit",
+                session_id=session_id,
+                on_complete=finish_submit,
+            ):
+                self.status_command.setText("应用工作线程忙碌，DXF 草图尚未提交；请稍后重试。")
+
+        if not unit.submit(
+            read_sketch,
+            operation="dxf-sketch-import-preview",
+            session_id=session_id,
+            on_complete=finish_read,
+        ):
+            self.status_command.setText("应用工作线程忙碌，DXF 尚未读取；请稍后重试。")
+
+    def _on_open_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法打开")
+            return
+        if not self._confirm_unsaved_changes():
+            return
+        selected, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "打开存档",
+            str(self._document_directory()),
+            "MyCAD 存档 (*.my2d *.my3d *.mc.json);;"
+            "二维图 (*.my2d);;三维零件 (*.my3d);;旧版存档 (*.mc.json);;所有文件 (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected).absolute()
+
+        unit = self.execution_unit
+        services = self._services
+        if unit is not None:
+            session_id = self._session_id
+
+            def open_document() -> LoadedDocument:
+                loaded = mycad_app.open_app_document(services, path)
+                services.kernel.viewport_data()
+                return loaded
+
+            def finish_open(result: ExecutionResult) -> None:
+                if result.error is not None:
+                    self._show_error(f"无法打开存档：{result.error[:200]}")
+                    return
+                if isinstance(result.value, LoadedDocument):
+                    self._replace_document(result.value, path)
+                else:
+                    self._show_error("无法打开存档：返回结果无效")
+
+            if not unit.submit(
+                open_document,
+                operation="open-document",
+                session_id=session_id,
+                on_complete=finish_open,
+            ):
+                self.status_command.setText("操作正在执行，请稍候再打开文档")
+            return
+        try:
+            loaded = mycad_app.open_app_document(self._services, path)
+        except ValidationError as exc:
+            self._show_error(f"存档格式无效：{str(exc)[:200]}")
+            return
+        except MycadError as exc:
+            self._show_error(f"无法重建存档：{str(exc)[:200]}")
+            return
+        except OSError as exc:
+            self._show_error(f"无法读取存档：{exc}")
+            return
+        self._replace_document(loaded, path)
+
+    def _on_save_document(self) -> None:
+        if self._has_unsubmitted_sketch():
+            return
+        if self._loaded is None:
+            self.status_command.setText("未绑定文档")
+            return
+        if self._document_path is None:
+            self._on_save_document_as()
+            return
+        self._store_document(self._document_path)
+
+    def _on_save_document_as(self) -> None:
+        if self._has_unsubmitted_sketch():
+            return
+        if self._loaded is None:
+            self.status_command.setText("未绑定文档")
+            return
+        drawing2d = self._loaded.document.document_type == "drawing2d"
+        suffix = ".my2d" if drawing2d else ".my3d"
+        default_name = "untitled-drawing.my2d" if drawing2d else "untitled.my3d"
+        default_path = self._document_path or self._document_directory() / default_name
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "保存存档",
+            str(default_path),
+            ("MyCAD 二维图 (*.my2d)" if drawing2d else "MyCAD 三维零件 (*.my3d)")
+            + ";;旧版存档 (*.mc.json)",
+        )
+        if not selected:
+            return
+        path = Path(selected).absolute()
+        if path.suffix.lower() == ".masm":
+            self._show_error(".masm 为装配图预留；当前请保存为二维图或三维零件。")
+            return
+        if not path.name.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
+            extension = ".mc.json" if "*.mc.json" in _selected_filter else suffix
+            path = path.with_name(path.name + extension)
+            # Qt confirmed only the entered name, not this completed target.
+            if (
+                path.exists()
+                and QMessageBox.question(
+                    self,
+                    "覆盖存档",
+                    f"文件已存在：{path}\n是否覆盖？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                != QMessageBox.StandardButton.Yes
+            ):
+                return
+        if self._store_document(path):
+            self._document_path = path
+
+    def _document_directory(self) -> Path:
+        if self._document_path is not None and self._document_path.parent.is_dir():
+            return self._document_path.parent
+        saved = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_DOCUMENT_DIRECTORY, "")
+        if isinstance(saved, str) and saved and Path(saved).is_dir():
+            return Path(saved).absolute()
+        documents = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DocumentsLocation
+        )
+        return Path(documents) if documents and Path(documents).is_dir() else Path.home()
+
+    def _show_document_path(self, path: Path | None) -> None:
+        self.setWindowFilePath(str(path) if path is not None else "")
+        self.setWindowTitle(f"{path.name} — MyCAD" if path is not None else "MyCAD")
+        self.status_dirty.setToolTip(str(path) if path is not None else "尚未保存")
+        if path is not None:
+            QSettings(ORG_NAME, APP_NAME).setValue(
+                SETTINGS_KEY_DOCUMENT_DIRECTORY, str(path.parent)
+            )
+
+    def _store_document(self, path: Path) -> bool:
+        if self._has_unsubmitted_sketch():
+            return False
+        if self._loaded is None:
+            return False
+        try:
+            save_document(
+                self._loaded.document,
+                path,
+                plugin_identities=(
+                    mycad_app.archive_plugin_identities(self._services)
+                    if self._services is not None
+                    else {}
+                ),
+            )
+        except OSError as exc:
+            self._show_error(f"写入失败：{exc}")
+            return False
+        # persistence 不清脏；保存成功后显式 mark_clean（document.py 约定）。
+        self._loaded.document.mark_clean()
+        self.status_dirty.setText("未修改")
+        self._show_document_path(path)
+        self.status_command.setText(f"已保存：{path}")
+        return True
+
+    def _on_export_document(self) -> None:
+        if self._services is None:
+            self.status_command.setText("未组合应用服务，无法导出")
+            return
+        drawing2d = self._loaded is not None and self._loaded.document.document_type == "drawing2d"
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出 DXF 草图" if drawing2d else "导出（STEP/STL/DXF）",
+            "",
+            "DXF 草图 (*.dxf)"
+            if drawing2d
+            else "STEP 文件 (*.step *.stp);;STL 文件 (*.stl);;DXF 草图 (*.dxf)",
+        )
+        if not selected:
+            return
+        target = Path(selected)
+        if drawing2d and target.suffix.lower() != ".dxf":
+            self._show_error("独立二维图只支持导出 DXF。")
+            return
+        try:
+            provider = self._services.formats.resolve(target)
+            if cast("object", provider) is DXF_PROVIDER:
+                self._queue_dxf_output_preview(target)
+                return
+            report = provider.write(self._services.kernel, target)
+        except UnknownFormatError as exc:
+            self._show_error(f"不支持的导出格式：{exc}")
+            return
+        except MycadError as exc:
+            self._show_error(f"导出失败：{exc}")
+            return
+        except OSError as exc:
+            self._show_error(f"写入失败：{exc}")
+            return
+        suffix = f"；{report}" if report is not None else ""
+        self.status_command.setText(f"已导出：{target}{suffix}")
+
+    def _queue_dxf_output_preview(self, target: Path) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None:
+            self.status_command.setText("当前文档不可用，DXF 未导出。")
+            return
+        session_id, revision = self._session_id, loaded.document.revision
+
+        def is_current() -> bool:
+            return (
+                self._loaded is loaded
+                and self._session_id == session_id
+                and loaded.document.revision == revision
+            )
+
+        def finish_preview(result: ExecutionResult) -> None:
+            if not is_current():
+                self.status_command.setText("DXF 输出预览已过期，请从当前文档重新导出。")
+                return
+            preview = result.value
+            if result.error is not None or not isinstance(preview, DxfOutputPreview):
+                self._show_error(f"DXF 输出预览失败：{result.error or '返回结果无效'}")
+                return
+            try:
+                dialog = DxfOutputPreviewDialog(preview, target.name, self)
+            except ValueError as exc:
+                self._show_error(str(exc))
+                return
+            accepted = dialog.exec() == int(dialog.DialogCode.Accepted)
+            dialog.deleteLater()
+            if not accepted:
+                self.status_command.setText("DXF 导出已取消；目标文件未改变。")
+                return
+            if not is_current():
+                self.status_command.setText("DXF 输出预览已过期，请从当前文档重新导出。")
+                return
+            try:
+                preview.write(target)
+            except OSError as exc:
+                self._show_error(f"DXF 写入失败，原文件未改变：{exc}")
+                return
+            self.status_command.setText(f"已导出：{target}；{preview.report}")
+
+        if unit.submit(
+            lambda: prepare_dxf_output_preview(services.kernel),
+            operation="dxf-output-preview",
+            session_id=session_id,
+            on_complete=finish_preview,
+        ):
+            self.status_command.setText("正在生成 DXF 输出预览…")
+        else:
+            self.status_command.setText("应用工作线程忙碌，DXF 尚未导出；请稍后重试。")
+
+    def _has_unsubmitted_sketch(self) -> bool:
+        draft = self._sketch_dialog
+        if draft is None:
+            return False
+        if not (draft.canvas.entities or draft.canvas.has_pending_geometry):
+            return False
+        self.status_command.setText(
+            "草图尚未提交：请先完成草图或取消草稿，再保存、切换或关闭文档。"
+        )
+        draft.status_label.setText(self.status_command.text())
+        return True
+
+    def _confirm_unsaved_changes(self) -> bool:
+        """True 放行（无文档/未脏/用户放弃），False 一律不动当前文档。"""
+        if self._has_unsubmitted_sketch():
+            return False
+        if self._loaded is None or not self._loaded.document.is_dirty:
+            return True
+        choice = self._ask_save_dialog()
+        if choice == "save":
+            self._on_save_document()
+            return not self._loaded.document.is_dirty
+        return choice == "discard"
+
+    def _ask_save_dialog(self) -> str:
+        """三选弹窗：save/discard/cancel；exec 阻塞至用户选择。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("未保存的修改")
+        box.setText("当前文档有未保存的修改。")
+        save_button = box.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("放弃修改", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_button:
+            return "save"
+        if clicked is cancel_button:
+            return "cancel"
+        return "discard"
+
+    def _show_error(self, message: str) -> None:
+        box = QMessageBox(self)
+        box.setObjectName("errorMessage")
+        box.setWindowTitle("错误")
+        box.setText(message)
+        box.show()
+
+    def _replace_document(self, loaded: LoadedDocument, path: Path | None) -> None:
+        """单文档替换语义（A4）：整面重绑 + 重置草稿 + 记住存档路径。"""
+        self._document_path = path
+        self.bind_document(loaded)
+        self._show_document_path(path)
+        if self._services is not None:
+            self.plan_draft = PlanDraftController(self._services.registry)
+            if self.right_panel is not None:
+                self.right_panel.bind_draft(self.plan_draft)
+            if self.plan_cards is not None:
+                self.plan_cards.bind_draft(self.plan_draft)
+        if loaded.document.document_type == "drawing2d":
+            self._on_sketch_start()
+
+    @override
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.execution_unit is not None and self.execution_unit.is_busy:
+            self.status_command.setText("操作完成前无法关闭窗口")
+            event.ignore()
+            return
+        if not self._confirm_unsaved_changes():
+            event.ignore()
+            return
+        if self.execution_unit is not None:
+            self.execution_unit.shutdown()
+        if self.viewport is not None:
+            self.viewport.dispose()
+        self.store_window_state()
+        super().closeEvent(event)

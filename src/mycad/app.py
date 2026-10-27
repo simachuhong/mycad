@@ -13,16 +13,21 @@ kernel sessions are a Phase 1 direction.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from mycad.builtin_commands import BUILTIN_COMMAND_SPECS, COMMAND_SCHEMA_DEFS
 from mycad.commands.registry import CommandRegistry
 from mycad.core.bus import CommandBus
-from mycad.core.document import Document
+from mycad.core.document import Document, ExecutedCommand
+from mycad.core.document_kinds import DocumentType
 from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
+from mycad.core.identity import BodyId, TopologyId
 from mycad.core.persistence import LoadedDocument
-from mycad.formats.providers import STEP_PROVIDER, STL_PROVIDER
+from mycad.core.persistence import open_document as _open_document
+from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
+from mycad.formats.providers import DXF_PROVIDER, STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
 from mycad.geom.kernel import BuildKernel
 from mycad.plugins.discovery import EntryPointDiscoverer
@@ -30,7 +35,17 @@ from mycad.plugins.loader import register_plugins
 from mycad.plugins.manager import PluginManager
 from mycad.plugins.types import DiscoveredPlugin, PluginDiscoverer
 
-__all__ = ["AppServices", "build_app", "new_document"]
+__all__ = [
+    "AppServices",
+    "build_app",
+    "new_document",
+    "open_app_document",
+    "archive_plugin_identities",
+    "preview_command",
+    "preview_command_with_sketches",
+    "interactive_selectors",
+    "interactive_body_selectors",
+]
 
 
 @dataclass(frozen=True)
@@ -66,7 +81,7 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
     for spec in BUILTIN_COMMAND_SPECS:
         registry.register(spec)
     kernel = BuildKernel()
-    formats = FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER])
+    formats = FormatProviderRegistry([STEP_PROVIDER, STL_PROVIDER, DXF_PROVIDER])
     discovered: tuple[DiscoveredPlugin, ...] = ()
     for discoverer in discoverers:
         discovered += tuple(discoverer.discover())
@@ -75,7 +90,7 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
     return AppServices(registry=registry, kernel=kernel, formats=formats, plugins=plugins)
 
 
-def handlers_for(services: AppServices) -> dict[str, CommandHandler]:
+def handlers_for(services: AppServices) -> dict[tuple[str, int], CommandHandler]:
     """Public forwarding entry for ``_handler_map`` (phase-1 UI same-source consumption).
 
     The private bridge is consumed by the CLI via getattr (with an acknowledgment
@@ -85,7 +100,28 @@ def handlers_for(services: AppServices) -> dict[str, CommandHandler]:
     return _handler_map(services.registry, services.plugins)
 
 
-def _handler_map(registry: CommandRegistry, plugins: PluginManager) -> dict[str, CommandHandler]:
+def archive_plugin_identities(
+    services: AppServices,
+) -> dict[tuple[str, int], dict[str, str]]:
+    """Return package/API provenance for commands contributed by loaded plugins."""
+    identities: dict[tuple[str, int], dict[str, str]] = {}
+    for plugin in services.plugins.loaded():
+        manifest = plugin.manifest
+        if manifest is None:
+            continue
+        for contribution in plugin.commands:
+            identities[(contribution.spec.id, contribution.spec.version)] = {
+                "distribution": plugin.distribution_name or "unavailable",
+                "plugin_id": manifest.id or "unavailable",
+                "plugin_version": manifest.version or "unavailable",
+                "api_version": manifest.api_version or "unavailable",
+            }
+    return identities
+
+
+def _handler_map(
+    registry: CommandRegistry, plugins: PluginManager
+) -> dict[tuple[str, int], CommandHandler]:
     """Assemble the per-document handler map from the registry and plugins.
 
     Every registered builtin gets one ``BuiltinModelingHandler`` per
@@ -95,20 +131,25 @@ def _handler_map(registry: CommandRegistry, plugins: PluginManager) -> dict[str,
     ``BuiltinModelingHandler`` — third-party-declared ordinary modeling
     commands execute through the builtin path.
     """
-    handlers: dict[str, CommandHandler] = {
-        spec.id: BuiltinModelingHandler(spec.id)
-        for group in registry.list_by_category().values()
-        for spec in group
+    handlers: dict[tuple[str, int], CommandHandler] = {
+        (spec.id, spec.version): BuiltinModelingHandler(spec.id, spec.version)
+        for spec in registry.all_specs()
     }
     for contribution in plugins.command_contributions():
+        key = (contribution.spec.id, contribution.spec.version)
         if contribution.handler_factory is not None:
-            handlers[contribution.spec.id] = contribution.handler_factory()
+            handlers[key] = contribution.handler_factory()
         else:
-            handlers[contribution.spec.id] = BuiltinModelingHandler(contribution.spec.id)
+            handlers[key] = BuiltinModelingHandler(*key)
     return handlers
 
 
-def new_document(services: AppServices, *, confirmed_by: str | None = None) -> LoadedDocument:
+def new_document(
+    services: AppServices,
+    *,
+    confirmed_by: str | None = None,
+    document_type: DocumentType = "part",
+) -> LoadedDocument:
     """Build a fresh ``Document``/``CommandBus`` pair from shared services.
 
     The handler map is assembled here (not in ``build_app``) so plugin
@@ -121,7 +162,119 @@ def new_document(services: AppServices, *, confirmed_by: str | None = None) -> L
     accepted and unused until a later phase wires it.
     """
     handlers = _handler_map(services.registry, services.plugins)
-    document = Document(services.registry)
+    document = Document(
+        services.registry,
+        archive_version=3 if document_type == "drawing2d" else 1,
+        document_type=document_type,
+    )
     bus = CommandBus(document, services.registry, services.kernel, handlers)
     services.kernel.reset()
     return LoadedDocument(document=document, bus=bus)
+
+
+def open_app_document(services: AppServices, path: Path) -> LoadedDocument:
+    """Open an archive with isolated replay, then commit its geometry once.
+
+    ``core.persistence.open_document`` deliberately operates on the kernel it
+    receives. Give it a fresh candidate so malformed or unreplayable archives
+    cannot reset or partially overwrite the currently bound application
+    kernel. Only after parsing, validation, and full replay succeed do we
+    prepare the active bus and transfer the finished geometry into the stable
+    service kernel.
+    """
+    handlers = _handler_map(services.registry, services.plugins)
+    candidate_kernel = BuildKernel()
+    candidate = _open_document(
+        path,
+        registry=services.registry,
+        kernel=candidate_kernel,
+        handlers=handlers,
+    )
+    active_bus = CommandBus(candidate.document, services.registry, services.kernel, handlers)
+    services.kernel.replace_state_from(candidate_kernel)
+    return LoadedDocument(document=candidate.document, bus=active_bus)
+
+
+def interactive_selectors(
+    services: AppServices,
+    kind: str,
+    topology_ids: Sequence[TopologyId],
+) -> tuple[dict[str, object], ...]:
+    """Translate runtime viewport picks into backend-neutral command locators."""
+
+    if kind == "face":
+        return tuple(
+            services.kernel.interactive_face_selector(identity) for identity in topology_ids
+        )
+    if kind == "edge":
+        return tuple(
+            services.kernel.interactive_edge_selector(identity) for identity in topology_ids
+        )
+    raise ValueError(f"interactive modeling does not accept {kind!r} selections")
+
+
+def interactive_body_selectors(
+    services: AppServices, body_ids: Sequence[BodyId]
+) -> tuple[dict[str, object], ...]:
+    """Convert viewport body picks into replayable geometric selectors."""
+
+    return tuple(services.kernel.interactive_body_selector(identity) for identity in body_ids)
+
+
+def interactive_face_frame(services: AppServices, identity: TopologyId) -> PlanarFaceFrame:
+    """Supply a neutral axis for the selected current face's pull handle."""
+    return services.kernel.interactive_face_frame(identity)
+
+
+def preview_command(
+    services: AppServices,
+    commands: Sequence[ExecutedCommand],
+    command_id: str,
+    params: Mapping[str, object],
+) -> ViewportData:
+    """Return the solid snapshot of an isolated candidate command."""
+    return preview_command_with_sketches(services, commands, command_id, params)[0]
+
+
+def preview_command_with_sketches(
+    services: AppServices,
+    commands: Sequence[ExecutedCommand],
+    command_id: str,
+    params: Mapping[str, object],
+) -> tuple[ViewportData, tuple[ViewportSketchData, ...]]:
+    """Replay a candidate command on an isolated document and kernel.
+
+    The active application's kernel, Document, and CommandBus are never
+    touched. The normal Bus pipeline validates parameters and calls only
+    built-in handlers here; plugin handlers are excluded so a preview cannot
+    run arbitrary extension code. All writes remain confined to the scratch
+    document.
+    """
+    scratch_kernel = BuildKernel()
+    scratch_document = Document(services.registry)
+    builtin_handlers = {
+        (spec.id, spec.version): BuiltinModelingHandler(spec.id, spec.version)
+        for spec in BUILTIN_COMMAND_SPECS
+    }
+    scratch_bus = CommandBus(
+        scratch_document,
+        services.registry,
+        scratch_kernel,
+        builtin_handlers,
+    )
+    for command in commands:
+        if (command.id, command.version) not in builtin_handlers:
+            raise ValueError(
+                f"临时预览暂不支持重放非内置命令 {command.id!r}（历史序号 {command.ordinal}）"
+            )
+        scratch_bus.execute(
+            command.id,
+            command.params,
+            command.confirmed_by,
+            version=command.version,
+        )
+    scratch_bus.execute(command_id, params, confirmed_by="preview")
+    snapshots = scratch_kernel.viewport_data()
+    if not snapshots:
+        raise ValueError("candidate command produced no viewport geometry")
+    return snapshots[-1], scratch_kernel.sketch_display_data()

@@ -42,9 +42,9 @@ class FormatProvider:
     can_read: bool
     can_write: bool
     target: Literal["shape", "xcaf"]
-    _writer: Callable[[ExportableKernel, Path], None]
+    _writer: Callable[[ExportableKernel, Path], object | None]
 
-    def write(self, geometry: ExportableKernel, path: Path) -> None:
-        """Write the kernel's model to ``path`` in this format."""
+    def write(self, geometry: ExportableKernel, path: Path) -> object | None:
+        """Write the kernel's model and return a provider-specific report, if any."""
 
-        self._writer(geometry, path)
+        return self._writer(geometry, path)

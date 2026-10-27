@@ -25,16 +25,27 @@ from mycad.builtin_commands.defs import COMMAND_SCHEMA_DEFS
 REPO = Path(__file__).resolve().parents[2]
 
 EXPECTED_DEF_NAMES: tuple[str, ...] = (
+    "BodySelector",
+    "BodyPattern",
+    "BodyTransform",
     "Center3",
     "Depth",
     "EdgeSelector",
+    "ExtrudeProfile",
     "FaceSelector",
     "Hole",
+    "InteractiveEdgeSelector",
+    "InteractiveFaceSelector",
     "Mode",
     "Pattern",
+    "PlanarFaceSelector",
     "Position",
     "Positive",
     "Profile",
+    "SketchExtrudeProfile",
+    "SketchHole",
+    "SketchProfileReference",
+    "SketchRevolveProfile",
     "Tool",
 )
 
@@ -77,6 +88,33 @@ EXPECTED_FACE_SELECTOR: dict[str, object] = {
         "（越界 TopologyReferenceError），省略时候选必须恰好 1 个面，"
         "0 或多个均 TopologyReferenceError(no-match/ambiguous)。禁止裸拓扑索引。"
     ),
+}
+
+EXPECTED_PLANAR_FACE_SELECTOR: dict[str, object] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "required": ["surface", "axis"],
+            "additionalProperties": False,
+            "properties": {
+                "surface": {"const": "plane"},
+                "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]},
+                "rank": {"type": "integer", "minimum": 0},
+            },
+        },
+        {
+            "type": "object",
+            "required": ["surface", "center_mm"],
+            "additionalProperties": False,
+            "properties": {
+                "surface": {"const": "plane"},
+                "axis": {"type": "string", "enum": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]},
+                "rank": {"type": "integer", "minimum": 0},
+                "center_mm": {"$ref": "#/$defs/Center3"},
+            },
+        },
+    ],
+    "description": "到面终止只接受稳定或鼠标选择得到的平面面定位器。",
 }
 
 EXPECTED_DEPTH: dict[str, object] = {
@@ -188,7 +226,7 @@ EXPECTED_TOOL: dict[str, object] = {
             "additionalProperties": False,
         },
     ],
-    "description": "仅 modify.boolean_cut 使用；内联工具体，v1 不支持具名引用。",
+    "description": "modify.boolean_cut/boolean_intersect 共享；内联盒/圆柱工具体，v1 不支持具名引用。",
 }
 
 EXPECTED_HOLE: dict[str, object] = {
@@ -196,7 +234,12 @@ EXPECTED_HOLE: dict[str, object] = {
     "required": ["target_face", "position", "diameter", "depth"],
     "additionalProperties": False,
     "properties": {
-        "target_face": {"$ref": "#/$defs/FaceSelector"},
+        "target_face": {
+            "oneOf": [
+                {"$ref": "#/$defs/FaceSelector"},
+                {"$ref": "#/$defs/InteractiveFaceSelector"},
+            ]
+        },
         "position": {"$ref": "#/$defs/Position"},
         "diameter": {"$ref": "#/$defs/Positive"},
         "depth": {"$ref": "#/$defs/Depth"},
@@ -214,13 +257,23 @@ EXPECTED_HOLE: dict[str, object] = {
 # ---------------------------------------------------------------------------
 
 
-def test_defs_key_set_is_exactly_the_eleven_names() -> None:
+def test_defs_key_set_includes_interactive_and_face_extrusion_variants() -> None:
     assert sorted(COMMAND_SCHEMA_DEFS) == sorted(EXPECTED_DEF_NAMES)
-    assert len(COMMAND_SCHEMA_DEFS) == 11
+    assert len(COMMAND_SCHEMA_DEFS) == len(EXPECTED_DEF_NAMES)
 
 
 def test_face_selector_matches_independent_transcription() -> None:
     assert COMMAND_SCHEMA_DEFS["FaceSelector"] == EXPECTED_FACE_SELECTOR
+
+
+def test_planar_face_selector_matches_independent_transcription() -> None:
+    assert COMMAND_SCHEMA_DEFS["PlanarFaceSelector"] == EXPECTED_PLANAR_FACE_SELECTOR
+
+
+def test_body_selector_uses_only_persistent_geometric_identity() -> None:
+    body_selector = COMMAND_SCHEMA_DEFS["BodySelector"]
+    assert body_selector["required"] == ["volume_mm3", "center_mm", "bounds_mm"]
+    assert body_selector["additionalProperties"] is False
 
 
 def test_depth_matches_independent_transcription() -> None:
@@ -243,6 +296,25 @@ def test_hole_matches_independent_transcription() -> None:
     assert COMMAND_SCHEMA_DEFS["Hole"] == EXPECTED_HOLE
 
 
+def test_sketch_hole_references_share_the_profile_face_and_depth_contracts() -> None:
+    assert COMMAND_SCHEMA_DEFS["SketchHole"] == {
+        "type": "object",
+        "required": ["profile", "target_face", "depth"],
+        "additionalProperties": False,
+        "properties": {
+            "profile": {"$ref": "#/$defs/SketchProfileReference"},
+            "target_face": {
+                "oneOf": [
+                    {"$ref": "#/$defs/FaceSelector"},
+                    {"$ref": "#/$defs/InteractiveFaceSelector"},
+                ]
+            },
+            "depth": {"$ref": "#/$defs/Depth"},
+        },
+        "description": ("草图中的非构造圆图元作为孔中心和直径；支撑面与草图平面必须重合。"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # key-field assertions for the remaining five defs
 # ---------------------------------------------------------------------------
@@ -263,12 +335,19 @@ def test_edge_selector_key_fields() -> None:
 
 def test_position_key_fields() -> None:
     branches = COMMAND_SCHEMA_DEFS["Position"]["oneOf"]
-    assert len(branches) == 1
-    branch = branches[0]
-    assert branch["type"] == "object"
-    assert branch["properties"] == {"kind": {"const": "center"}}
-    assert branch["required"] == ["kind"]
-    assert branch["additionalProperties"] is False
+    assert len(branches) == 2
+    center_branch, point_branch = branches
+    assert center_branch["type"] == "object"
+    assert center_branch["properties"] == {"kind": {"const": "center"}}
+    assert center_branch["required"] == ["kind"]
+    assert center_branch["additionalProperties"] is False
+    assert point_branch["type"] == "object"
+    assert point_branch["properties"] == {
+        "kind": {"const": "point"},
+        "point": {"$ref": "#/$defs/Center3"},
+    }
+    assert point_branch["required"] == ["kind", "point"]
+    assert point_branch["additionalProperties"] is False
 
 
 def test_mode_key_fields() -> None:
@@ -298,9 +377,14 @@ def test_positive_key_fields() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_hole_properties_are_pure_refs() -> None:
+def test_hole_properties_reuse_shared_refs_and_interactive_face_selector() -> None:
     assert COMMAND_SCHEMA_DEFS["Hole"]["properties"] == {
-        "target_face": {"$ref": "#/$defs/FaceSelector"},
+        "target_face": {
+            "oneOf": [
+                {"$ref": "#/$defs/FaceSelector"},
+                {"$ref": "#/$defs/InteractiveFaceSelector"},
+            ]
+        },
         "position": {"$ref": "#/$defs/Position"},
         "diameter": {"$ref": "#/$defs/Positive"},
         "depth": {"$ref": "#/$defs/Depth"},
@@ -318,11 +402,6 @@ def test_tool_branches_use_refs_for_positive_and_center3() -> None:
 
 
 def test_no_duplicated_positive_constraint_substructure() -> None:
-    """Only Positive, Depth.blind.value and Pattern.radius spell the bound inline.
-
-    The T7a task spec announced a count of 2 (assuming Pattern.radius also
-    went through ``$ref``); A.0 and the task spec's own Pattern clause keep
-    it inline, so the adjusted — still meaningful — guard is 3 (deviation D2).
-    """
+    """Shared dimensions use Positive; selectors and pattern keep explicit bounds."""
     source = (REPO / "src" / "mycad" / "builtin_commands" / "defs.py").read_text("utf-8")
-    assert source.count('"exclusiveMinimum": 0.0') == 3
+    assert source.count('"exclusiveMinimum": 0.0') == 7

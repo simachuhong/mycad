@@ -1,0 +1,28 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_off_dimension_extents_are_included_until_layer_is_frozen _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7b30264e0080>
+
+    def test_off_dimension_extents_are_included_until_layer_is_frozen(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        place(editor)
+        editor.canvas.constraints = [replace(editor.canvas.constraints[0], position_mm=(15, 1000))]
+        table = editor.layer_table.replace(replace(editor.layer_table.get("DIM"), visible=False))
+        editor.set_document_layers(table, "DIM")
+        editor.canvas.fit_view()
+        off_scale = editor.canvas.view_scale
+        editor.set_document_layers(table.replace(replace(table.get("DIM"), frozen=True)), "DIM")
+        editor.canvas.fit_view()
+>       assert editor.canvas.view_scale > off_scale * 5
+E       assert 31.733333333333334 > (31.733333333333334 * 5)
+E        +  where 31.733333333333334 = <mycad.ui.sketch_editor.SketchCanvas(0x216d8fd0) at 0x7b30264e7e40>.view_scale
+E        +    where <mycad.ui.sketch_editor.SketchCanvas(0x216d8fd0) at 0x7b30264e7e40> = <mycad.ui.sketch_editor.SketchEditorDialog(0x1d37c390) at 0x7b30264d7a40>.canvas
+
+tests/ui/test_dim_layers.py:219: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_dim_layers.py::test_off_dimension_extents_are_included_until_layer_is_frozen
+1 failed in 15.27s

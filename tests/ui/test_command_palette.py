@@ -27,8 +27,9 @@ if TYPE_CHECKING:
     from mycad.app import AppServices
     from mycad.core.plan import Plan
 
-EIGHT_BUILTIN_IDS: frozenset[str] = frozenset(
+RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
+        "drawing.layers.set",
         "feature.box",
         "feature.cylinder",
         "feature.extrude",
@@ -37,6 +38,14 @@ EIGHT_BUILTIN_IDS: frozenset[str] = frozenset(
         "feature.hole_pattern",
         "modify.fillet",
         "modify.boolean_cut",
+        "modify.boolean_intersect",
+        "modify.boolean_bodies",
+        "modify.body_transform",
+        "modify.body_pattern",
+        "modify.chamfer",
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
     }
 )
 
@@ -75,20 +84,41 @@ def _group_titles(palette: CommandPalette) -> set[str]:
     return titles
 
 
-def test_all_eight_builtins_appear_grouped(palette: CommandPalette) -> None:
-    assert palette.tree.topLevelItemCount() == 2
-    assert _group_titles(palette) == {"feature", "modify"}
+def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
+    assert palette.tree.topLevelItemCount() == 4
+    assert _group_titles(palette) == {"图纸", "创建特征", "修改", "草图"}
     ids = _all_leaf_ids(palette)
-    assert len(ids) == 8
-    assert set(ids) == EIGHT_BUILTIN_IDS
+    assert len(ids) == len(RELEASED_BUILTIN_IDS)
+    assert set(ids) == RELEASED_BUILTIN_IDS
+
+
+def test_independent_drawing_palette_only_shows_drawing_commands(
+    palette: CommandPalette,
+) -> None:
+    palette.set_document_type("drawing2d")
+    assert set(_all_leaf_ids(palette)) == {
+        "drawing.layers.set",
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+    }
+    palette.set_document_type("part")
+    assert set(_all_leaf_ids(palette)) == RELEASED_BUILTIN_IDS
 
 
 def test_leaf_labels_are_zh_with_id(palette: CommandPalette) -> None:
-    root = palette.tree.topLevelItem(0)
+    root = None
+    for index in range(palette.tree.topLevelItemCount()):
+        group = palette.tree.topLevelItem(index)
+        if group is not None and group.toolTip(0) == "feature":
+            root = group
+            break
     assert root is not None
     box = root.child(0)
     assert box is not None
-    assert box.text(0) == "长方体（feature.box）"
+    assert box.text(0) == "长方体"
+    assert "feature.box" in box.toolTip(0)
+    assert root.isExpanded()
 
 
 def test_search_matches_id_and_zh_label(
@@ -101,7 +131,7 @@ def test_search_matches_id_and_zh_label(
     # The zh query hits the same pair through label_zh (register.search
     # excludes zh by design — the palette is the reason it must work).
     assert palette.apply_filter("孔") == 2
-    assert palette.apply_filter("") == 8
+    assert palette.apply_filter("") == len(RELEASED_BUILTIN_IDS)
     assert not any(_leaf_is_hidden(palette, id_) for id_ in _all_leaf_ids(palette))
 
 
@@ -203,7 +233,7 @@ def test_plugin_command_appears_via_discovery(qapp: object) -> None:
     services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
     palette = CommandPalette(services.registry)
     assert "demo.widget" in _all_leaf_ids(palette)
-    assert _group_titles(palette) == {"demo", "feature", "modify"}
+    assert _group_titles(palette) == {"demo", "图纸", "创建特征", "修改", "草图"}
 
 
 def test_refresh_pickups_later_registration(
@@ -242,7 +272,7 @@ def test_main_window_binds_palette_and_draft(qapp: object) -> None:
     controller = window.plan_draft
     steps = controller.steps()
     assert [s.id for s in steps] == ["feature.box"]
-    assert window.status_command.text() == "草稿：feature.box"
+    assert "XY 工作平面" in window.status_command.text()
 
     window.command_palette.command_activated.emit("demo.widget")
     assert "cannot be planned" in window.status_command.text()

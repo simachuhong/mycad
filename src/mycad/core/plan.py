@@ -17,6 +17,22 @@ from mycad.core.document import PlannedCommand
 from mycad.core.exceptions import InvalidPlanTransition
 
 PlanStatus = Literal["draft", "confirmed", "executing", "done", "failed", "cancelled"]
+ConfirmationScope = Literal["gui", "cli"]
+
+
+@dataclass(frozen=True, slots=True)
+class PlanConfirmation:
+    """Runtime-only, Bus-authenticated capability bound to one plan snapshot."""
+
+    plan_id: str
+    actor: str
+    scope: ConfirmationScope
+    document_id: str
+    document_revision: int
+    content_digest: str
+    nonce: str
+    signature: str
+
 
 # The sole transition authority: exactly six legal edges. Every (status,
 # action) pair outside this table — including anything from the terminal
@@ -45,6 +61,10 @@ class Plan:
     plan_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     confirmed_by: str | None = None
 
+    def __post_init__(self) -> None:
+        """Keep the authorization out of the public dataclass constructor/schema."""
+        self._authorization: PlanConfirmation | None = None
+
     def __setattr__(self, name: str, value: object) -> None:
         if name == "plan_id" and "plan_id" in self.__dict__:
             raise AttributeError("plan_id is read-only after construction")
@@ -55,12 +75,18 @@ class Plan:
             raise InvalidPlanTransition(self.status, action)
         self.status = _LEGAL[(self.status, action)]
 
-    def confirm(self, actor: str) -> None:
-        """Edge 1: draft -> confirmed; requires a non-empty ``actor``."""
+    def confirm(self, actor: str, *, authorization: PlanConfirmation | None = None) -> None:
+        """Edge 1: draft -> confirmed; a Bus grant is needed for execution."""
         if not actor:
             raise ValueError("confirm requires a non-empty actor")
         self._transition("confirm")
         self.confirmed_by = actor
+        self._authorization = authorization
+
+    @property
+    def authorization(self) -> PlanConfirmation | None:
+        """Opaque runtime grant attached by ``CommandBus.confirm_plan``."""
+        return self._authorization
 
     def mark_executing(self) -> None:
         """Edge 3: confirmed -> executing."""
@@ -77,3 +103,4 @@ class Plan:
     def cancel(self) -> None:
         """Edges 2 and 4: draft or confirmed -> cancelled."""
         self._transition("cancel")
+        self._authorization = None

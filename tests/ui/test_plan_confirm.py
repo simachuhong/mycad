@@ -9,6 +9,7 @@ and the options-tab / card param sync through the shared controller.
 
 from __future__ import annotations
 
+import threading
 from typing import cast
 
 import pytest
@@ -16,7 +17,9 @@ from pytestqt.qtbot import QtBot
 
 from mycad.app import AppServices, build_app, new_document
 from mycad.core.document import AFFECTED_OBJECTS, AffectedObject, PlannedCommand
+from mycad.core.exceptions import ValidationError
 from mycad.core.plan import Plan
+from mycad.ui.execution import SerializedExecutionUnit
 from mycad.ui.plan_cards import PlanCards
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import RightPanel
@@ -60,18 +63,16 @@ def _two_command_plan(services: AppServices) -> Plan:
 
 
 def _fail_second_plan(services: AppServices) -> Plan:
-    """box then a hole with an illegal diameter -> step 0 rolls back."""
+    """box then a fillet that passes schema validation but fails geometry."""
     return Plan(
         [
             _step(services, "feature.box", {"size_x": 30.0, "size_y": 30.0, "size_z": 10.0}),
             _step(
                 services,
-                "feature.hole",
+                "modify.fillet",
                 {
-                    "target_face": {"surface": "plane", "axis": "+Z", "rank": 0},
-                    "position": {"kind": "center"},
-                    "diameter": 0.0,
-                    "depth": {"kind": "through_all"},
+                    "edges": [{"parent_faces": [{"surface": "plane", "axis": "+Z"}]}],
+                    "radius": 999.0,
                 },
             ),
         ]
@@ -93,6 +94,8 @@ def test_six_state_sequence_reaches_done(services: AppServices, qtbot: QtBot) ->
     cards.execute_plan()
     assert plan.status == "done"
     assert len(loaded.document.commands) == 2
+    assert loaded.document.revision == 1
+    assert all(command.confirmed_by == "gui" for command in loaded.document.commands)
     assert "2 条命令" in cards.status_text()
     # Terminal state: the buttons cannot trigger an illegal transition.
     assert cards.execute_enabled() is False
@@ -160,6 +163,72 @@ def test_normal_plan_executes_two_commands(services: AppServices, qtbot: QtBot) 
     assert len(loaded.document.commands) == 2
 
 
+def test_plan_card_submission_is_serialized_and_duplicate_click_is_ignored(
+    services: AppServices, qtbot: QtBot
+) -> None:
+    unit = SerializedExecutionUnit()
+    unit.set_session(3)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def prepare_geometry() -> None:
+        entered.set()
+        assert release.wait(5.0)
+        services.kernel.viewport_data()
+
+    draft = PlanDraftController(services.registry)
+    cards = PlanCards()
+    qtbot.addWidget(cards)
+    loaded = new_document(services)
+    cards.bind_draft(draft)
+    cards.bind_document(loaded)
+    try:
+        cards.configure_execution(
+            unit,
+            session_id=lambda: 3,
+            prepare_geometry=prepare_geometry,
+        )
+        plan = _two_command_plan(services)
+        draft.replace_plan(plan)
+
+        cards.execute_plan()
+        assert unit.is_busy
+        assert cards.execute_enabled() is False
+        assert entered.wait(5.0)
+        cards.execute_plan()
+        assert plan.status == "done"
+        assert len(loaded.document.commands) == 2
+        release.set()
+        qtbot.waitUntil(lambda: not unit.is_busy)
+        assert "2 条命令" in cards.status_text()
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: not unit.is_busy)
+        assert unit.shutdown()
+
+
+def test_plan_card_revokes_confirmation_when_worker_rejects_submission(
+    services: AppServices, qtbot: QtBot
+) -> None:
+    unit = SerializedExecutionUnit()
+    assert unit.shutdown()
+    draft = PlanDraftController(services.registry)
+    cards = PlanCards()
+    qtbot.addWidget(cards)
+    loaded = new_document(services)
+    cards.bind_draft(draft)
+    cards.bind_document(loaded)
+    cards.configure_execution(unit, session_id=lambda: 1, prepare_geometry=lambda: None)
+    plan = _two_command_plan(services)
+    draft.replace_plan(plan)
+
+    cards.execute_plan()
+
+    assert plan.status == "cancelled"
+    assert loaded.document.commands == ()
+    assert "确认已撤销" in cards.status_text()
+
+
 def test_param_edit_syncs_cards_and_options(services: AppServices, qtbot: QtBot) -> None:
     draft = PlanDraftController(services.registry)
     cards = PlanCards()
@@ -184,3 +253,25 @@ def test_param_edit_syncs_cards_and_options(services: AppServices, qtbot: QtBot)
     item.setText("10.0")
     assert steps[0].params.get("radius") == pytest.approx(10.0)
     assert any("radius=10.0" in text for text in cards.card_texts())
+
+
+def test_confirmed_plan_freezes_controller_parameter_edits(
+    services: AppServices, qtbot: QtBot
+) -> None:
+    draft = PlanDraftController(services.registry)
+    cards = PlanCards()
+    qtbot.addWidget(cards)
+    loaded = new_document(services)
+    cards.bind_draft(draft)
+    cards.bind_document(loaded)
+    plan = _two_command_plan(services)
+    draft.replace_plan(plan)
+    step = plan.steps[0]
+    before = dict(step.params)
+    loaded.bus.confirm_plan(plan, "gui", scope="gui")
+
+    with pytest.raises(ValidationError, match="confirmed"):
+        draft.set_params(step, {"radius": 99.0, "height": 8.0})
+
+    assert plan.steps[0].params == before
+    assert loaded.document.commands == ()

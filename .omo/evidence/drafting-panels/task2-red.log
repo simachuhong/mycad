@@ -1,0 +1,204 @@
+...FFFFFFFFF                                                             [100%]
+=================================== FAILURES ===================================
+_________ test_navigation_selection_is_bidirectional_and_history_free __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492eb15d730>
+
+    def test_navigation_selection_is_bidirectional_and_history_free(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        line = editor.canvas.entities[0]
+>       assert editor.toolbar_host.dockWidgetArea(editor.navigation_dock) == Qt.DockWidgetArea.LeftDockWidgetArea
+                                                  ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'navigation_dock'
+
+tests/ui/test_drafting_panels.py:134: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_________ test_navigation_constraints_highlight_and_open_inline_editor _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492eada1160>
+
+    def test_navigation_constraints_highlight_and_open_inline_editor(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        constraint = editor.canvas.constraints[0]
+>       tree = editor.navigator.tree
+               ^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'navigator'
+
+tests/ui/test_drafting_panels.py:154: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+______ test_navigation_does_not_cancel_pending_geometry_or_dimension_edit ______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492eb15ff20>
+
+    def test_navigation_does_not_cancel_pending_geometry_or_dimension_edit(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        editor.canvas.add_coordinate_point((80, 50))
+>       item = leaf(editor, editor.canvas.entities[0].entity_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_panels.py:173: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+editor = <mycad.ui.sketch_editor.SketchEditorDialog(0x2387dfc0) at 0x7492e81b5180>
+identity = '182d4b167f864ba6a87b793c48ddae6f'
+
+    def leaf(editor: SketchEditorDialog, identity: str) -> QTreeWidgetItem:
+>       from mycad.ui.sketch_navigation import ID_ROLE
+E       ModuleNotFoundError: No module named 'mycad.ui.sketch_navigation'
+
+tests/ui/test_drafting_panels.py:109: ModuleNotFoundError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_______ test_navigation_keeps_groups_and_selection_when_contents_update ________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492e81b9190>
+
+    def test_navigation_keeps_groups_and_selection_when_contents_update(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+>       tree = editor.navigator.tree
+               ^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'navigator'
+
+tests/ui/test_drafting_panels.py:187: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____ test_navigation_respects_canvas_visibility_and_reference_scope[hidden] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492eada0dd0>, mode = 'hidden'
+
+    @pytest.mark.parametrize('mode', ['hidden', 'frozen', 'offplane', 'reference'])
+    def test_navigation_respects_canvas_visibility_and_reference_scope(qtbot: QtBot, mode: str) -> None:
+        editor = populated_editor(qtbot, committed=mode != 'reference')
+        line = LineEntity(uuid4().hex, (0, 20), (30, 20), layer_name='Other')
+        layer = SketchLayer('Other', visible=mode != 'hidden', frozen=mode == 'frozen')
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xz() if mode == 'offplane' else WorkPlaneFrame.xy(), (line,), layers=SketchLayerTable().add(layer))
+        editor.set_context_sketches((sketch,))
+>       item = leaf(editor, line.entity_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_panels.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+editor = <mycad.ui.sketch_editor.SketchEditorDialog(0x23d7c460) at 0x7492eadafe00>
+identity = '6a0d26b11c824d9eb90b59bbe770281d'
+
+    def leaf(editor: SketchEditorDialog, identity: str) -> QTreeWidgetItem:
+>       from mycad.ui.sketch_navigation import ID_ROLE
+E       ModuleNotFoundError: No module named 'mycad.ui.sketch_navigation'
+
+tests/ui/test_drafting_panels.py:109: ModuleNotFoundError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____ test_navigation_respects_canvas_visibility_and_reference_scope[frozen] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492e81f8e30>, mode = 'frozen'
+
+    @pytest.mark.parametrize('mode', ['hidden', 'frozen', 'offplane', 'reference'])
+    def test_navigation_respects_canvas_visibility_and_reference_scope(qtbot: QtBot, mode: str) -> None:
+        editor = populated_editor(qtbot, committed=mode != 'reference')
+        line = LineEntity(uuid4().hex, (0, 20), (30, 20), layer_name='Other')
+        layer = SketchLayer('Other', visible=mode != 'hidden', frozen=mode == 'frozen')
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xz() if mode == 'offplane' else WorkPlaneFrame.xy(), (line,), layers=SketchLayerTable().add(layer))
+        editor.set_context_sketches((sketch,))
+>       item = leaf(editor, line.entity_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_panels.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+editor = <mycad.ui.sketch_editor.SketchEditorDialog(0x23ff5de0) at 0x7492e8241f40>
+identity = 'c1af68834ceb400f992a6f7b8df9b002'
+
+    def leaf(editor: SketchEditorDialog, identity: str) -> QTreeWidgetItem:
+>       from mycad.ui.sketch_navigation import ID_ROLE
+E       ModuleNotFoundError: No module named 'mycad.ui.sketch_navigation'
+
+tests/ui/test_drafting_panels.py:109: ModuleNotFoundError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___ test_navigation_respects_canvas_visibility_and_reference_scope[offplane] ___
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492e81bacc0>, mode = 'offplane'
+
+    @pytest.mark.parametrize('mode', ['hidden', 'frozen', 'offplane', 'reference'])
+    def test_navigation_respects_canvas_visibility_and_reference_scope(qtbot: QtBot, mode: str) -> None:
+        editor = populated_editor(qtbot, committed=mode != 'reference')
+        line = LineEntity(uuid4().hex, (0, 20), (30, 20), layer_name='Other')
+        layer = SketchLayer('Other', visible=mode != 'hidden', frozen=mode == 'frozen')
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xz() if mode == 'offplane' else WorkPlaneFrame.xy(), (line,), layers=SketchLayerTable().add(layer))
+        editor.set_context_sketches((sketch,))
+>       item = leaf(editor, line.entity_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_panels.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+editor = <mycad.ui.sketch_editor.SketchEditorDialog(0x2426db60) at 0x7492e81b4ec0>
+identity = '4ad64e4deede47f48b268823a6de88bd'
+
+    def leaf(editor: SketchEditorDialog, identity: str) -> QTreeWidgetItem:
+>       from mycad.ui.sketch_navigation import ID_ROLE
+E       ModuleNotFoundError: No module named 'mycad.ui.sketch_navigation'
+
+tests/ui/test_drafting_panels.py:109: ModuleNotFoundError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+__ test_navigation_respects_canvas_visibility_and_reference_scope[reference] ___
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492eada2e10>, mode = 'reference'
+
+    @pytest.mark.parametrize('mode', ['hidden', 'frozen', 'offplane', 'reference'])
+    def test_navigation_respects_canvas_visibility_and_reference_scope(qtbot: QtBot, mode: str) -> None:
+        editor = populated_editor(qtbot, committed=mode != 'reference')
+        line = LineEntity(uuid4().hex, (0, 20), (30, 20), layer_name='Other')
+        layer = SketchLayer('Other', visible=mode != 'hidden', frozen=mode == 'frozen')
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xz() if mode == 'offplane' else WorkPlaneFrame.xy(), (line,), layers=SketchLayerTable().add(layer))
+        editor.set_context_sketches((sketch,))
+>       item = leaf(editor, line.entity_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/ui/test_drafting_panels.py:211: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+editor = <mycad.ui.sketch_editor.SketchEditorDialog(0x244f68e0) at 0x7492e8216ec0>
+identity = '46c5fbca4ab443a4b552c2e643e7eab0'
+
+    def leaf(editor: SketchEditorDialog, identity: str) -> QTreeWidgetItem:
+>       from mycad.ui.sketch_navigation import ID_ROLE
+E       ModuleNotFoundError: No module named 'mycad.ui.sketch_navigation'
+
+tests/ui/test_drafting_panels.py:109: ModuleNotFoundError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_________________ test_both_floating_docks_suspend_and_restore _________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7492e81fa6f0>
+
+    def test_both_floating_docks_suspend_and_restore(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        for dock in editor.drafting_docks:
+            dock.setFloating(True)
+>       editor.navigation_dock.close()
+        ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SketchEditorDialog' object has no attribute 'navigation_dock'
+
+tests/ui/test_drafting_panels.py:221: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support raise()
+--------------------------- Captured stderr teardown ---------------------------
+This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_navigation_selection_is_bidirectional_and_history_free
+FAILED tests/ui/test_drafting_panels.py::test_navigation_constraints_highlight_and_open_inline_editor
+FAILED tests/ui/test_drafting_panels.py::test_navigation_does_not_cancel_pending_geometry_or_dimension_edit
+FAILED tests/ui/test_drafting_panels.py::test_navigation_keeps_groups_and_selection_when_contents_update
+FAILED tests/ui/test_drafting_panels.py::test_navigation_respects_canvas_visibility_and_reference_scope[hidden]
+FAILED tests/ui/test_drafting_panels.py::test_navigation_respects_canvas_visibility_and_reference_scope[frozen]
+FAILED tests/ui/test_drafting_panels.py::test_navigation_respects_canvas_visibility_and_reference_scope[offplane]
+FAILED tests/ui/test_drafting_panels.py::test_navigation_respects_canvas_visibility_and_reference_scope[reference]
+FAILED tests/ui/test_drafting_panels.py::test_both_floating_docks_suspend_and_restore
+9 failed, 3 passed in 10.79s

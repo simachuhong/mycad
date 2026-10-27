@@ -1,0 +1,130 @@
+FFFFF.FF                                                                 [100%]
+=================================== FAILURES ===================================
+___ test_new_dimension_drives_inline_by_default_and_cancels_without_history ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77426ad13a10>
+
+    def test_new_dimension_drives_inline_by_default_and_cancels_without_history(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+>       assert editor.dimensions.driving_check.isChecked()
+E       assert False
+E        +  where False = <built-in method isChecked of PySide6.QtWidgets.QCheckBox object at 0x77426ad4f440>()
+E        +    where <built-in method isChecked of PySide6.QtWidgets.QCheckBox object at 0x77426ad4f440> = <PySide6.QtWidgets.QCheckBox(0x3a0c0ab0) at 0x77426ad4f440>.isChecked
+E        +      where <PySide6.QtWidgets.QCheckBox(0x3a0c0ab0) at 0x77426ad4f440> = <mycad.ui.dimension_tools.DimensionTools(0x3a05e7d0) at 0x77426ad47800>.driving_check
+E        +        where <mycad.ui.dimension_tools.DimensionTools(0x3a05e7d0) at 0x77426ad47800> = <mycad.ui.sketch_editor.SketchEditorDialog(0x35a67f50) at 0x77426ad2a340>.dimensions
+
+tests/ui/test_driving_dimensions.py:41: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+____ test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77426ad41820>, mode = 'auto'
+start = 0, end = 40
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(qtbot: QtBot, mode: str, start: int, end: int) -> None:
+        editor = drawing(qtbot)
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:58: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77426ad42630>, mode = 'start'
+start = 0, end = 40
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(qtbot: QtBot, mode: str, start: int, end: int) -> None:
+        editor = drawing(qtbot)
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:58: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___ test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77426ad42510>, mode = 'end'
+start = -10, end = 30
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(qtbot: QtBot, mode: str, start: int, end: int) -> None:
+        editor = drawing(qtbot)
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:58: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_ test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35] _
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77426a975d60>, mode = 'symmetric'
+start = -5, end = 35
+
+    @pytest.mark.parametrize("mode,start,end", [("auto", 0, 40), ("start", 0, 40), ("end", -10, 30), ("symmetric", -5, 35)])
+    def test_anchor_control_drives_geometry_and_preserves_dim_layer(qtbot: QtBot, mode: str, start: int, end: int) -> None:
+        editor = drawing(qtbot)
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData(mode))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:58: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+________ test_anchor_conflict_highlights_canvas_without_changing_draft _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x774266834aa0>
+
+    def test_anchor_conflict_highlights_canvas_without_changing_draft(qtbot: QtBot) -> None:
+        editor = drawing(qtbot)
+        line = editor.canvas.entities[0]
+        fixed = SketchConstraint(uuid4().hex, "fixed", (SketchGeometryReference(line.entity_id, "end"),))
+        editor.canvas.constraints = [fixed]
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData("start"))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:106: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+_________ test_committed_anchor_edit_is_bus_backed_and_survives_reopen _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7742668361b0>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-1/test_committed_anchor_edit_is_0')
+
+    def test_committed_anchor_edit_is_bus_backed_and_survives_reopen(qtbot: QtBot, tmp_path: Path) -> None:
+        services = build_app(discoverers=())
+        loaded = new_document(services, document_type="drawing2d")
+        line = LineEntity(uuid4().hex, (0, 0), (30, 0))
+        dimension = SketchConstraint(uuid4().hex, "length", (SketchGeometryReference(line.entity_id, "geometry"),), 30, "mm", driving=False, axis="horizontal", layer_name="DIM", position_mm=(15, -15))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dimension,))
+        loaded.bus.execute("sketch.create", sketch.to_mapping(version=3), confirmed_by="local")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.show()
+        window.bind_document(loaded)
+        window.act_view_2d.trigger()
+        editor = window.active_sketch_dialog()
+        assert editor is not None
+        editor.dimensions.edit(services.kernel.sketches[0], dimension)
+>       editor.dimensions.anchor_combo.setCurrentIndex(editor.dimensions.anchor_combo.findData("end"))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DimensionTools' object has no attribute 'anchor_combo'
+
+tests/ui/test_driving_dimensions.py:133: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_driving_dimensions.py::test_new_dimension_drives_inline_by_default_and_cancels_without_history
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[auto-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[start-0-40]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[end--10-30]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_control_drives_geometry_and_preserves_dim_layer[symmetric--5-35]
+FAILED tests/ui/test_driving_dimensions.py::test_anchor_conflict_highlights_canvas_without_changing_draft
+FAILED tests/ui/test_driving_dimensions.py::test_committed_anchor_edit_is_bus_backed_and_survives_reopen
+7 failed, 1 passed in 13.31s

@@ -21,11 +21,13 @@ from mycad.app import AppServices, build_app, new_document
 from mycad.core.document import METADATA_KEYS
 from mycad.core.groups import NamedGroup
 from mycad.core.persistence import LoadedDocument
+from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
 from mycad.ui.main_window import MainWindow
 from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.right_panel import (
     EMPTY_PROMPT,
     FEATURE_GROUP_TITLE,
+    ORDINAL_ROLE,
     RIGHT_TAB_TITLES,
     SOLIDS_GROUP_TITLE,
     STRUCTURE_GROUP_TITLES,
@@ -113,12 +115,52 @@ def test_structure_tree_built_from_feature_history(qapp: object) -> None:
     first = features.child(0)
     assert first is not None
     assert first.text(0).startswith("#0")
-    assert "feature.box" in first.text(0)
+    assert "长方体" in first.text(0)
+    assert "feature.box" in first.toolTip(0)
     solids = _group_item(panel, SOLIDS_GROUP_TITLE)
     assert solids.childCount() == 1
     placeholder = solids.child(0)
     assert placeholder is not None
     assert placeholder.text(0) == EMPTY_PROMPT
+
+
+def test_sketch_commands_are_grouped_separately_from_solid_features(qapp: object) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    sketch_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+    loaded.bus.execute(
+        "sketch.create",
+        Sketch(
+            sketch_id,
+            WorkPlaneFrame.xy(),
+            (CircleEntity("1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b", (0.0, 0.0), 5.0),),
+        ).to_mapping(),
+        confirmed_by="test",
+    )
+    loaded.bus.execute(
+        "feature.extrude",
+        {
+            "profile": {"type": "sketch", "sketch_id": sketch_id},
+            "distance": 10.0,
+            "mode": "new",
+        },
+        confirmed_by="test",
+        version=2,
+    )
+    panel = RightPanel()
+    panel.bind_document(loaded, services.registry)
+
+    sketches = _group_item(panel, "草图")
+    features = _group_item(panel, FEATURE_GROUP_TITLE)
+    sketch_node = sketches.child(0)
+    feature_node = features.child(0)
+    assert sketch_node is not None and feature_node is not None
+    assert sketches.childCount() == 1
+    assert sketch_node.text(0) == f"草图 #{loaded.document.commands[0].ordinal} · 0a0a0a0a"
+    assert sketch_node.data(0, ORDINAL_ROLE) == 0
+    assert features.childCount() == 1
+    assert feature_node.text(0).startswith("#1")
+    assert "拉伸" in feature_node.text(0)
 
 
 def test_empty_document_groups_show_placeholders(qapp: object) -> None:
@@ -244,9 +286,12 @@ def test_window_binds_right_panel_and_refreshes_structure_on_signals(qapp: objec
     assert features.childCount() == 3
     loaded.document.add_named_group(NamedGroup(name="top"))
     solids = _group_item(panel, SOLIDS_GROUP_TITLE)
-    assert solids.childCount() == 1
-    leaf = solids.child(0)
-    assert leaf is not None
-    assert leaf.text(0) == "top"
+    assert solids.childCount() == 2
+    labels: set[str] = set()
+    for index in range(2):
+        child = solids.child(index)
+        assert child is not None
+        labels.add(child.text(0))
+    assert labels == {"实体 1", "top"}
     loaded.bus.execute("feature.box", {"size_x": 12.0, "size_y": 6.0, "size_z": 3.0}, "test")
     assert _group_item(panel, FEATURE_GROUP_TITLE).childCount() == 4

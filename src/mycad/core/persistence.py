@@ -13,25 +13,30 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import platform
+import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from mycad.core.bus import CommandBus
 from mycad.core.document import CommandAmendment, Document, ExecutedCommand
+from mycad.core.document_kinds import DocumentType
 from mycad.core.exceptions import ArchiveVersionError, UnknownCommandError, ValidationError
 from mycad.core.groups import NamedGroup
-from mycad.core.handlers import CommandHandler
+from mycad.core.handlers import CommandHandler, resolve_handler
 from mycad.core.kernel_protocol import Kernel
-from mycad.core.migrations import migrate
 from mycad.core.schema_v1 import (
     ARCHIVE_FORMAT,
     ARCHIVE_VERSION,
     selector_from_json,
     validate_archive,
 )
+from mycad.core.schema_v2 import ARCHIVE_VERSION_V2, validate_archive_v2
+from mycad.core.schema_v3 import ARCHIVE_VERSION_V3, validate_archive_v3
 from mycad.core.selectors import EdgeSelector, FaceSelector
 
 if TYPE_CHECKING:
@@ -68,7 +73,7 @@ def _edge_to_json(selector: EdgeSelector) -> dict[str, object]:
     return data
 
 
-def _archive_payload(document: Document) -> dict[str, object]:
+def _archive_payload_v1(document: Document) -> dict[str, object]:
     """Assemble the v1 archive dict (stable key order; empty lists explicit)."""
     commands: list[dict[str, object]] = []
     for cmd in document.commands:
@@ -108,23 +113,123 @@ def _archive_payload(document: Document) -> dict[str, object]:
     }
 
 
-def save_document(document: Document, path: Path) -> None:
-    """Atomically write ``document`` as a v1 JSON archive to ``path``.
+def _distribution_version(name: str) -> str:
+    try:
+        return importlib_metadata.version(name)
+    except importlib_metadata.PackageNotFoundError:
+        return "unavailable"
+
+
+def _capture_provenance(
+    plugin_identities: Mapping[tuple[str, int], Mapping[str, str]],
+    commands: list[dict[str, object]],
+) -> dict[str, object]:
+    """Capture runtime facts without importing the CAD backend into core."""
+    plugin_records: list[dict[str, object]] = []
+    for command in commands:
+        command_id = cast("str", command["id"])
+        command_version = cast("int", command["version"])
+        identity = plugin_identities.get((command_id, command_version))
+        if identity is None:
+            continue
+        plugin_records.append(
+            {
+                "command_id": command_id,
+                "command_version": command_version,
+                "distribution": identity.get("distribution", "unavailable"),
+                "plugin_id": identity.get("plugin_id", "unavailable"),
+                "plugin_version": identity.get("plugin_version", "unavailable"),
+                "api_version": identity.get("api_version", "unavailable"),
+            }
+        )
+    plugin_records.sort(
+        key=lambda item: (cast("str", item["command_id"]), cast("int", item["command_version"]))
+    )
+    source_revision = os.environ.get("MYCAD_SOURCE_REVISION", "unavailable") or "unavailable"
+    return {
+        "mycad": {
+            "version": _distribution_version("mycad"),
+            "source_revision": source_revision,
+        },
+        "python": {
+            "implementation": platform.python_implementation() or "unavailable",
+            "version": sys.version.split()[0] or "unavailable",
+        },
+        "dependencies": {
+            "build123d": _distribution_version("build123d"),
+            "ocp": _distribution_version("cadquery-ocp-novtk"),
+            "occt": "unavailable",
+            "planegcs": _distribution_version("planegcs"),
+        },
+        "units": {"length": "mm", "angle": "deg"},
+        "geometry_policy_version": "1",
+        "plugins": plugin_records,
+    }
+
+
+def _migrate_v1_to_v2(
+    payload: dict[str, object], provenance: dict[str, object]
+) -> dict[str, object]:
+    """Pure v1→v2 data migration; validation brackets this single version hop."""
+    validate_archive(payload)
+    migrated = {**payload, "version": ARCHIVE_VERSION_V2, "provenance": provenance}
+    validate_archive_v2(migrated)
+    return migrated
+
+
+def _migrate_v2_to_v3(payload: dict[str, object], document_type: DocumentType) -> dict[str, object]:
+    """Pure v2→v3 migration that records the explicit document kind."""
+    validate_archive_v2(payload)
+    migrated = {
+        **payload,
+        "version": ARCHIVE_VERSION_V3,
+        "document_type": document_type,
+    }
+    validate_archive_v3(migrated)
+    return migrated
+
+
+def save_document(
+    document: Document,
+    path: Path,
+    *,
+    plugin_identities: Mapping[tuple[str, int], Mapping[str, str]] | None = None,
+) -> None:
+    """Atomically write the document using its current archive schema version.
 
     Emits ``document_saving`` before and ``document_saved`` after the write.
     Atomicity is a same-directory temp file plus ``os.replace``; a missing
     parent directory propagates as ``OSError`` (never auto-created).
     """
+    payload = _archive_payload_v1(document)
+    if document.archive_version == ARCHIVE_VERSION:
+        validate_archive(payload)
+    elif document.archive_version == ARCHIVE_VERSION_V2:
+        provenance = _capture_provenance(
+            plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
+        )
+        payload = _migrate_v1_to_v2(payload, provenance)
+    elif document.archive_version == ARCHIVE_VERSION_V3:
+        provenance = _capture_provenance(
+            plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
+        )
+        payload = _migrate_v2_to_v3(_migrate_v1_to_v2(payload, provenance), document.document_type)
+    else:
+        raise ArchiveVersionError(
+            f"document archive version {document.archive_version} is not supported",
+            found=str(document.archive_version),
+            supported=ARCHIVE_VERSION_V3,
+        )
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
     document.events.emit("document_saving", {"path": str(path)})
-    text = json.dumps(_archive_payload(document), ensure_ascii=False, indent=2)
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             "w", suffix=".tmp", delete=False, dir=path.parent, encoding="utf-8"
         ) as handle:
+            tmp_path = Path(handle.name)
             handle.write(text)
             handle.flush()
-            tmp_path = Path(handle.name)
         os.replace(tmp_path, path)
     except BaseException:
         if tmp_path is not None and tmp_path.exists():
@@ -138,7 +243,7 @@ def save_document(document: Document, path: Path) -> None:
 def _require_command(
     entry: Mapping[str, object],
     registry: CommandRegistry,
-    handlers: Mapping[str, CommandHandler],
+    handlers: Mapping[str, CommandHandler] | Mapping[tuple[str, int], CommandHandler],
 ) -> None:
     """Pre-flight one archive command against the registry and handlers."""
     command_id = entry["id"]
@@ -152,9 +257,17 @@ def _require_command(
             f"(version {version})",
             identifier=cast("str", command_id),
         ) from None
-    if command_id not in handlers:
+    if (
+        resolve_handler(
+            handlers,
+            cast("str", command_id),
+            cast("int", version),
+            registry.versions(cast("str", command_id)),
+        )
+        is None
+    ):
         raise UnknownCommandError(
-            f"archive command at ordinal {ordinal} ({command_id!r}) has no handler",
+            f"archive command at ordinal {ordinal} ({command_id!r} version {version}) has no handler",
             identifier=cast("str", command_id),
         )
 
@@ -183,7 +296,13 @@ def _command_from_json(entry: Mapping[str, object]) -> ExecutedCommand:
     )
 
 
-def _build_document(data: dict[str, object], registry: CommandRegistry) -> Document:
+def _build_document(
+    data: dict[str, object],
+    registry: CommandRegistry,
+    *,
+    archive_version: int,
+    document_type: DocumentType = "part",
+) -> Document:
     """Construct the Document aggregate from a validated archive dict."""
     commands = [
         _command_from_json(cast("Mapping[str, object]", entry))
@@ -207,6 +326,8 @@ def _build_document(data: dict[str, object], registry: CommandRegistry) -> Docum
         metadata=cast("Mapping[str, str]", data["metadata"]),
         commands=commands,
         named_groups=groups,
+        archive_version=archive_version,
+        document_type=document_type,
     )
 
 
@@ -215,12 +336,12 @@ def open_document(
     *,
     registry: CommandRegistry,
     kernel: Kernel,
-    handlers: Mapping[str, CommandHandler],
+    handlers: Mapping[str, CommandHandler] | Mapping[tuple[str, int], CommandHandler],
 ) -> LoadedDocument:
     """Read, validate, rebuild and assemble a document from ``path``.
 
     Pipeline (fixed order): read text -> parse JSON -> format check ->
-    version check -> migrate (v1 identity) -> structural validation ->
+    explicit version check -> version-specific structural validation ->
     per-command registry/handler pre-flight -> Document construction ->
     CommandBus assembly -> ONE full ``_rebuild()``. Replay never rewrites
     timestamps/ordinals/confirmed_by/amendments; a failing rebuild leaves
@@ -245,17 +366,45 @@ def open_document(
             supported=ARCHIVE_FORMAT,
         )
     version = root.get("version")
-    if version != ARCHIVE_VERSION:
-        raise ArchiveVersionError(
-            f"archive version {version!r} is not supported (expected {ARCHIVE_VERSION})",
-            found=str(version),
-            supported=ARCHIVE_VERSION,
+    if (
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version
+        not in (
+            ARCHIVE_VERSION,
+            ARCHIVE_VERSION_V2,
+            ARCHIVE_VERSION_V3,
         )
-    migrated = cast("dict[str, object]", migrate(root))
-    validate_archive(migrated)
-    for entry in cast("list[object]", migrated["commands"]):
+    ):
+        raise ArchiveVersionError(
+            f"archive version {version!r} is not supported (supported: 1, 2, {ARCHIVE_VERSION_V3})",
+            found=str(version),
+            supported=ARCHIVE_VERSION_V3,
+        )
+    archive_version = cast("int", version)
+    document_type: DocumentType = "part"
+    if archive_version == ARCHIVE_VERSION:
+        validate_archive(root)
+        replay_data = root
+    elif archive_version == ARCHIVE_VERSION_V2:
+        validate_archive_v2(root)
+        replay_data = {key: value for key, value in root.items() if key != "provenance"}
+        replay_data["version"] = ARCHIVE_VERSION
+    else:
+        validate_archive_v3(root)
+        document_type = cast("DocumentType", root["document_type"])
+        replay_data = {
+            key: value for key, value in root.items() if key not in ("provenance", "document_type")
+        }
+        replay_data["version"] = ARCHIVE_VERSION
+    for entry in cast("list[object]", replay_data["commands"]):
         _require_command(cast("Mapping[str, object]", entry), registry, handlers)
-    document = _build_document(migrated, registry)
+    document = _build_document(
+        replay_data,
+        registry,
+        archive_version=archive_version,
+        document_type=document_type,
+    )
     bus = CommandBus(document, registry, kernel, handlers)
     # Spec-mandated one-shot rebuild on open; the getattr bridge mirrors
     # bus.py's pattern for crossing pyright-protected members.

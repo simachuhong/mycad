@@ -10,14 +10,14 @@ CAD 格式互操作横跨免费开源与商业授权两界，必须在第一天�
 
 1. **注册表模型**：FormatProvider 注册表对齐 OCCT 7.8 DE_Wrapper 的 name×vendor provider 模型（E10），provider 声明 can_read/can_write 与目标（`target="shape"`；"xcaf" 仅为阶段 1 装配导入预留字面量）。另加 `priority` 整数：默认 100；同一扩展名存在多个 provider 时取最小值者胜出；priority 相同且扩展名重叠的两个 provider 注册时抛 `ProviderConflictError(extension, provider1, provider2)`——冲突必须显式暴露，不做隐式覆盖。
 2. **导入三级枚举**：DUMB_SOLID（哑实体）/ ASSEMBLY_WITH_ATTRS（带装配属性：颜色、名称、材料）/ EDITABLE_FEATURES（可编辑特征）——任何外部格式永远到不了第三级：导入件以哑实体或装配属性形态进入文档，可编辑性只能由 MyCAD 自身的命令历史产生。
-3. **免费序列（产品化顺序）**：STEP AP242 / STL / BREP → IGES / glTF / OBJ → 3MF（lib3mf）/ DXF（ezdxf）。阶段 0 的产品化范围：STEP 只写产品化；STEP 读仅是测试辅助路径（`tests/helpers/`，用于导出件往返断言），F-DOC-03 的产品化导入在阶段 1；STL 只写；BREP/IGES/glTF/OBJ/3MF/DXF 按上列顺序在后续阶段推进。阶段 1 读路径的线程安全纪律：每个 STEP reader 持有独立的参数实例（对齐 OCCT DE_Wrapper 的每-reader 独立 DE 参数纪律，E10）。
+3. **免费序列（产品化顺序）**：STEP AP242 / STL / BREP → IGES / glTF / OBJ → 3MF（lib3mf）/ DXF（ezdxf）。STEP 读仍为测试辅助路径（`tests/helpers/`）；STL 只写。P2-35 的受限 DXF 子集写出 R2010（AC1024）、mm、LINE/LWPOLYLINE/CIRCLE/ARC 及标准 DIMENSION 标注；读入可读 DXF 版本中的 LINE/LWPOLYLINE/CIRCLE/ARC，并能还原 MyCAD 导出的、带稳定几何引用数据的长度/点距/角度/半径/直径标注。图层表/颜色/线型/线宽/显隐/锁定和 MyCAD 构造线语义在支持子集中交换。单位必须已声明或由用户显式指定。没有 MyCAD 关联数据的外部 DIMENSION 仅报告并跳过其语义；未知字体、自定义标注样式、其他图元和非模型空间内容须通过交换报告披露，不能宣称完整往返。其他 BREP/IGES/glTF/OBJ/3MF 仍按原序列后续推进。STEP reader 线程安全纪律不变：每个 reader 持有独立参数实例（对齐 OCCT DE_Wrapper 的每-reader 独立 DE 参数纪律，E10）。
 4. **商业墙**：JT / Parasolid（x_t）/ ACIS（sat）/ sldprt / NX / CATIA 仅经外部持证第三方插件（E5：ODA 会员制无席位费 vs CAD Exchanger 按席位季度计费，两者的授权均不可随 Apache 核心再分发，集成商/最终用户持证自装）。核心不为商业格式承诺任何时间表。
 5. **DWG 不碰**：无免费合规写路径（R11），不引入逆向库；ODA 转换器（若用户需要）属用户自装的外部工具，不进核心依赖。
 
 ## Consequences
 
 - 正面：授权风险被结构性隔离（核心永远只含 OCCT 开源 DataExchange 与自带免费依赖的格式）；DE_Wrapper 对齐使注册表语义有上游经验背书；priority + 冲突显式报错使多 provider 共存可预测。
-- 负面/边界：外部格式导入件不可编辑是永久性限制（用户预期管理要在文档中明确）；STEP 读的产品化（F-DOC-03，含 `document.import_step` 历史节点形态，见 ADR-002）推迟到阶段 1，阶段 0 的 STEP 读只存在于测试辅助路径；商业格式须用户自行持证装插件。
+- 负面/边界：外部格式导入件不可编辑是永久性限制（用户预期管理要在文档中明确）；DXF 子集读入的几何需由 `sketch.create` 进入可编辑历史，输入时不自动执行命令或猜测未知单位；STEP 读的产品化（F-DOC-03，含 `document.import_step` 历史节点形态，见 ADR-002）仍推迟到阶段 1，阶段 0 的 STEP 读只存在于测试辅助路径；商业格式须用户自行持证装插件。
 - 3MF/DXF 无新原生依赖：lib3mf 与 ezdxf 由 build123d 依赖树自带（E10；aarch64 自动切 py-lib3mf）。
 
 ## References

@@ -1,0 +1,142 @@
+{
+  "qt_platform": "xcb",
+  "qt_scale_factor": 1.0,
+  "qsettings_isolated": true,
+  "captures": [
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "fullscreen": false,
+      "logical_window_size": [
+        1366,
+        768
+      ],
+      "captured_image_size": [
+        1366,
+        768
+      ],
+      "device_pixel_ratio": 1.0,
+      "state": "empty",
+      "viewport_logical_size": [
+        882,
+        678
+      ],
+      "viewport_share_of_window": 0.57,
+      "rendered_scene_item_count": 0,
+      "current_solid_count": 0,
+      "bottom_panel_visible": false,
+      "left_panel_visible": true,
+      "toolbar_overflow_actions": [],
+      "screenshot": "scale-1/1366x768/empty.png"
+    },
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "fullscreen": false,
+      "logical_window_size": [
+        1366,
+        768
+      ],
+      "captured_image_size": [
+        1366,
+        768
+      ],
+      "device_pixel_ratio": 1.0,
+      "state": "current-3d",
+      "viewport_logical_size": [
+        882,
+        678
+      ],
+      "viewport_share_of_window": 0.57,
+      "rendered_scene_item_count": 2,
+      "current_solid_count": 1,
+      "bottom_panel_visible": false,
+      "left_panel_visible": true,
+      "toolbar_overflow_actions": [],
+      "screenshot": "scale-1/1366x768/current-3d.png"
+    },
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "fullscreen": false,
+      "logical_window_size": [
+        1366,
+        768
+      ],
+      "captured_image_size": [
+        1366,
+        768
+      ],
+      "device_pixel_ratio": 1.0,
+      "state": "selected-feature",
+      "viewport_logical_size": [
+        882,
+        678
+      ],
+      "viewport_share_of_window": 0.57,
+      "rendered_scene_item_count": 2,
+      "current_solid_count": 1,
+      "bottom_panel_visible": false,
+      "left_panel_visible": true,
+      "toolbar_overflow_actions": [],
+      "screenshot": "scale-1/1366x768/selected-feature.png"
+    },
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "fullscreen": false,
+      "logical_window_size": [
+        1366,
+        768
+      ],
+      "captured_image_size": [
+        1366,
+        768
+      ],
+      "device_pixel_ratio": 1.0,
+      "state": "plan-confirmation",
+      "viewport_logical_size": [
+        882,
+        370
+      ],
+      "viewport_share_of_window": 0.3111,
+      "rendered_scene_item_count": 2,
+      "current_solid_count": 1,
+      "bottom_panel_visible": true,
+      "left_panel_visible": true,
+      "toolbar_overflow_actions": [],
+      "screenshot": "scale-1/1366x768/plan-confirmation.png"
+    },
+    {
+      "scale_factor": 1.0,
+      "physical_target": "1366x768",
+      "fullscreen": false,
+      "logical_window_size": [
+        1366,
+        768
+      ],
+      "captured_image_size": [
+        1366,
+        768
+      ],
+      "device_pixel_ratio": 1.0,
+      "state": "error-recovery",
+      "viewport_logical_size": [
+        882,
+        678
+      ],
+      "viewport_share_of_window": 0.57,
+      "rendered_scene_item_count": 2,
+      "current_solid_count": 1,
+      "bottom_panel_visible": false,
+      "left_panel_visible": true,
+      "toolbar_overflow_actions": [],
+      "screenshot": "scale-1/1366x768/error-recovery.png",
+      "error_dialog_screenshot": "scale-1/1366x768/error-dialog.png"
+    }
+  ],
+  "not_implemented": [
+    "The 2D drawing and sketch workspaces are not captured as product screens; their functional drawing tasks are P2-32+.",
+    "The selected-feature screen demonstrates the existing right-panel feature/property state; viewport entity picking remains P2-31."
+  ]
+}

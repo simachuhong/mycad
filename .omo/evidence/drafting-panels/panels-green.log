@@ -1,0 +1,41 @@
+..............F...................................                       [100%]
+=================================== FAILURES ===================================
+_______ test_navigation_multiselects_draft_and_committed_without_history _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e74d024a420>
+
+    def test_navigation_multiselects_draft_and_committed_without_history(qtbot: QtBot) -> None:
+        editor = populated_editor(qtbot)
+        other = LineEntity(uuid4().hex, (0, 20), (30, 20))
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (other,))
+        editor.set_context_sketches((sketch,))
+        tree = editor.navigator.tree
+        first = leaf(editor, editor.canvas.entities[0].entity_id)
+        second = leaf(editor, other.entity_id)
+        QTest.mouseClick(
+            tree.viewport(), Qt.MouseButton.LeftButton, pos=tree.visualItemRect(first).center()
+        )
+        QTest.mouseClick(
+            tree.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ControlModifier,
+            tree.visualItemRect(second).center(),
+        )
+        assert editor.canvas.selected_entity_ids == {
+            editor.canvas.entities[0].entity_id,
+            other.entity_id,
+        }
+        assert not editor.canvas.can_undo
+        tree.setCurrentItem(first)
+        editor.transform_buttons["copy"].click()
+>       assert editor.canvas.has_active_edit_gesture
+E       assert False
+E        +  where False = <mycad.ui.sketch_editor.SketchCanvas(0x3706aa90) at 0x7e74d70fe200>.has_active_edit_gesture
+E        +    where <mycad.ui.sketch_editor.SketchCanvas(0x3706aa90) at 0x7e74d70fe200> = <mycad.ui.sketch_editor.SketchEditorDialog(0x38d1a9e0) at 0x7e74d7163600>.canvas
+
+tests/ui/test_drafting_panels.py:339: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_navigation_multiselects_draft_and_committed_without_history
+1 failed, 49 passed in 23.59s

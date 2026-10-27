@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_scope_audit import UV_TREE_COMMAND, parse_closure
+from tests.test_scope_audit import UV_EXPORT_ALL_COMMAND, parse_exported_requirements
 
 REPO = Path(__file__).resolve().parent.parent
 NOTICE = (REPO / "NOTICE").read_text(encoding="utf-8")
@@ -59,10 +59,9 @@ def test_no_placeholder_wording() -> None:
 
 
 def test_every_runtime_distribution_is_listed() -> None:
-    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
-    # cp1252 and mojibakes the tree glyphs into the parsed closure.
+    # Export all optional runtime features; NOTICE covers the union of them.
     result = subprocess.run(
-        UV_TREE_COMMAND,
+        UV_EXPORT_ALL_COMMAND,
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -71,7 +70,7 @@ def test_every_runtime_distribution_is_listed() -> None:
     )
     if result.returncode != 0:
         pytest.skip(f"uv unavailable: {result.stderr.strip()[:120]}")
-    closure = parse_closure(result.stdout) - {"mycad"}
+    closure = parse_exported_requirements(result.stdout) - {"mycad"}
     assert closure, "closure parse produced nothing"
     missing = sorted(name for name in closure if name not in NOTICE.lower())
     assert missing == [], f"NOTICE does not attribute: {missing}"
@@ -79,10 +78,8 @@ def test_every_runtime_distribution_is_listed() -> None:
 
 def test_dev_tools_are_not_in_the_runtime_closure() -> None:
     """The dev dependency group must stay out of the attribution scope."""
-    # uv emits UTF-8 regardless of locale; Windows text=True defaults to
-    # cp1252 and mojibakes the tree glyphs into the parsed closure.
     result = subprocess.run(
-        UV_TREE_COMMAND,
+        UV_EXPORT_ALL_COMMAND,
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -91,5 +88,5 @@ def test_dev_tools_are_not_in_the_runtime_closure() -> None:
     )
     if result.returncode != 0:
         pytest.skip("uv unavailable")
-    closure = parse_closure(result.stdout)
+    closure = parse_exported_requirements(result.stdout)
     assert {"ruff", "pytest", "basedpyright", "hatchling"} & closure == set()

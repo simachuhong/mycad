@@ -1,0 +1,41 @@
+{
+  "format": "mycad.document",
+  "version": 1,
+  "metadata": {
+    "part_no": "fixture-v1",
+    "revision": "A",
+    "material": "",
+    "source": "fixture",
+    "part_name": "V1 cylinder fixture",
+    "notes": "Static archive compatibility contract"
+  },
+  "commands": [
+    {
+      "id": "feature.cylinder",
+      "version": 1,
+      "params": {
+        "radius": 5.0,
+        "height": 2.0,
+        "center": [0.0, 0.0, 0.0],
+        "mode": "new"
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-01-01T00:00:00+00:00",
+      "confirmed_by": "archive-fixture"
+    },
+    {
+      "id": "feature.cylinder",
+      "version": 1,
+      "params": {
+        "radius": 2.0,
+        "height": 2.0,
+        "center": [0.0, 0.0, 0.0],
+        "mode": "new"
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-01-01T00:00:01+00:00",
+      "confirmed_by": null
+    }
+  ],
+  "named_groups": []
+}

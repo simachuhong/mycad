@@ -1,0 +1,71 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______________ test_trim_both_ends_keeps_remaining_line_connected ______________
+
+    def test_trim_both_ends_keeps_remaining_line_connected() -> None:
+        line = LineEntity(uuid4().hex, (-20., 0.), (40., 0.))
+        cutters = tuple(LineEntity(uuid4().hex, (x, -10.), (x, 10.)) for x in (0., 20.))
+        first = trim_curve_at((line, *cutters), (-10., 0.), hit_tolerance_mm=.2)
+>       assert len(first) == 3
+E       AssertionError: assert 4 == 3
+E        +  where 4 = len((LineEntity(entity_id='460fb0f94c35413f8518d046edb86446', start_mm=(0.0, 0.0), end_mm=(20.0, 0.0), construction=False,...d='8af08b0de80c497f8ee420a803272f1a', start_mm=(20.0, -10.0), end_mm=(20.0, 10.0), construction=False, layer_name='0')))
+
+tests/ui/test_drafting_mouse_transforms.py:20: AssertionError
+___________ test_pointer_transform_preview_cancel_confirm_undo[move] ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7bc96e417e00>, operation = 'move'
+
+    @pytest.mark.parametrize('operation', ['move', 'copy'])
+    def test_pointer_transform_preview_cancel_confirm_undo(qtbot: QtBot, operation: str) -> None:
+        draft = SketchEditorDialog()
+        qtbot.addWidget(draft)
+        draft.resize(1400, 900)
+        draft.show()
+        canvas = draft.canvas
+        canvas.set_snapping_enabled(False)
+        line = LineEntity(uuid4().hex, (-20., 0.), (20., 0.))
+        canvas.replace_draft_entities((line,))
+        canvas.set_tool('选择元素')
+        canvas.selected_entity_ids = {line.entity_id}
+        canvas.changed.emit()
+        draft.transform_buttons[operation].click()
+        assert tuple(canvas.entities) == (line,)
+>       assert canvas.has_active_edit_gesture
+E       assert False
+E        +  where False = <mycad.ui.sketch_editor.SketchCanvas(0xdabbc50) at 0x7bc96e15db40>.has_active_edit_gesture
+
+tests/ui/test_drafting_mouse_transforms.py:40: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___________ test_pointer_transform_preview_cancel_confirm_undo[copy] ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7bc96e159640>, operation = 'copy'
+
+    @pytest.mark.parametrize('operation', ['move', 'copy'])
+    def test_pointer_transform_preview_cancel_confirm_undo(qtbot: QtBot, operation: str) -> None:
+        draft = SketchEditorDialog()
+        qtbot.addWidget(draft)
+        draft.resize(1400, 900)
+        draft.show()
+        canvas = draft.canvas
+        canvas.set_snapping_enabled(False)
+        line = LineEntity(uuid4().hex, (-20., 0.), (20., 0.))
+        canvas.replace_draft_entities((line,))
+        canvas.set_tool('选择元素')
+        canvas.selected_entity_ids = {line.entity_id}
+        canvas.changed.emit()
+        draft.transform_buttons[operation].click()
+>       assert tuple(canvas.entities) == (line,)
+E       AssertionError: assert (LineEntity(e...yer_name='0')) == (LineEntity(e...er_name='0'),)
+E         
+E         Left contains one more item: LineEntity(entity_id='36e05c8730e6480a85cf56ae34bdd751', start_mm=(-20.0, 0.0), end_mm=(20.0, 0.0), construction=False, layer_name='0')
+E         Use -v to get more diff
+
+tests/ui/test_drafting_mouse_transforms.py:39: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_mouse_transforms.py::test_trim_both_ends_keeps_remaining_line_connected
+FAILED tests/ui/test_drafting_mouse_transforms.py::test_pointer_transform_preview_cancel_confirm_undo[move]
+FAILED tests/ui/test_drafting_mouse_transforms.py::test_pointer_transform_preview_cancel_confirm_undo[copy]
+3 failed in 11.02s

@@ -1,0 +1,62 @@
+F...F                                                                    [100%]
+=================================== FAILURES ===================================
+__________ test_middle_drag_has_one_navigation_contract[False-False] ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7bccd4470650>, modeling = False
+pan = False
+
+    @pytest.mark.parametrize("modeling", [False, True])
+    @pytest.mark.parametrize("pan", [False, True])
+    def test_middle_drag_has_one_navigation_contract(qtbot: QtBot, modeling: bool, pan: bool) -> None:
+        view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+        qtbot.addWidget(view)
+        view.resize(800, 600)
+        view.set_modeling_context_active(modeling)
+        before_center = QVector3D(view.opts["center"])
+        before_angles = (view.opts["elevation"], view.opts["azimuth"])
+        commits: list[None] = []
+        view.modeling_commit_requested.connect(lambda: commits.append(None))
+        modifiers = Qt.KeyboardModifier.ShiftModifier if pan else Qt.KeyboardModifier.NoModifier
+        QTest.mousePress(view, Qt.MouseButton.MiddleButton, modifiers, QPoint(400, 300))
+        event = QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(430, 320), QPointF(430, 320),
+            Qt.MouseButton.NoButton, Qt.MouseButton.MiddleButton, modifiers,
+        )
+        view.mouseMoveEvent(event)
+        QTest.mouseRelease(view, Qt.MouseButton.MiddleButton, modifiers, QPoint(430, 320))
+        after_angles = (view.opts["elevation"], view.opts["azimuth"])
+        if pan:
+            assert QVector3D(view.opts["center"]) != before_center
+            assert after_angles == before_angles
+        else:
+>           assert QVector3D(view.opts["center"]) == before_center
+E           assert PySide6.QtGui.QVector3D(0.102062, -0.510310, 0.000000) == PySide6.QtGui.QVector3D(0.000000, 0.000000, 0.000000)
+E            +  where PySide6.QtGui.QVector3D(0.102062, -0.510310, 0.000000) = QVector3D(PySide6.QtGui.QVector3D(0.102062, -0.510310, 0.000000))
+
+tests/ui/test_navigation_contract.py:41: AssertionError
+___________________ test_left_drag_does_not_orbit_the_model ____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7bccd4471dc0>
+
+    def test_left_drag_does_not_orbit_the_model(qtbot: QtBot) -> None:
+        view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+        qtbot.addWidget(view)
+        view.resize(800, 600)
+        before = (view.opts["elevation"], view.opts["azimuth"])
+        QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=QPoint(100, 100))
+        view.mouseMoveEvent(QMouseEvent(
+            QEvent.Type.MouseMove, QPointF(200, 200), QPointF(200, 200),
+            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        ))
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=QPoint(200, 200))
+>       assert (view.opts["elevation"], view.opts["azimuth"]) == before
+E       assert (90.0, -55.0) == (30, 45)
+E         
+E         At index 0 diff: 90.0 != 30
+E         Use -v to get more diff
+
+tests/ui/test_navigation_contract.py:57: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_navigation_contract.py::test_middle_drag_has_one_navigation_contract[False-False]
+FAILED tests/ui/test_navigation_contract.py::test_left_drag_does_not_orbit_the_model
+2 failed, 3 passed in 24.79s

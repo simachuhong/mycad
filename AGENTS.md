@@ -135,8 +135,11 @@ MyCAD/
 ## COMMANDS
 
 ```bash
-# 安装（锁定 uv.lock，不带锁重写）
-uv sync
+# 开发 / UI 验证环境（锁定 uv.lock，不带锁重写）
+uv sync --extra desktop
+
+# 仅 headless 运行时（无开发工具与 GUI 依赖）
+uv sync --no-dev
 
 # 验证四门（增量跑，按改动路径收敛；全量只在最终集成时跑一次）
 uv run ruff check <path>            # 单路径 lint
@@ -146,6 +149,7 @@ uv run pytest tests/<path> -q       # scoped 测试
 
 # CLI 入口
 uv run mycad                        # 默认 REPL
+uv run mycad gui                    # 需先 uv sync --extra desktop
 uv run mycad run script.txt         # 执行 ASCII 命令脚本
 uv run mycad run --json plan.json   # 执行 JSON 计划并按计划文件名导出
 uv run mycad validate <file>        # 只校验 .json 计划或 .txt 脚本，不执行

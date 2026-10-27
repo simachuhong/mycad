@@ -1,0 +1,632 @@
+--- before/sketch_editor.py
++++ src/mycad/ui/sketch_editor.py
+@@ -97,6 +97,7 @@
+ from mycad.ui.layer_panel import DrawingLayerPanel
+ from mycad.ui.sketch_navigation import SketchNavigator
+ from mycad.ui.sketch_selection import entity_in_selection_box
++from mycad.ui.workspace_console import MessageLabel
+ 
+ _SNAP_RADIUS_PX = 12.0
+ _SNAP_PRIORITY = {
+@@ -3834,7 +3835,7 @@
+         )
+         self.tool_panel.setWidget(panel)
+         self.parameter_tabs = QTabWidget()
+-        self.parameter_dock = QDockWidget("绘图与修改", self.toolbar_host)
++        self.parameter_dock = QDockWidget("二维功能", self.toolbar_host)
+         self.parameter_dock.setObjectName("draftingParameterDock")
+         self.parameter_dock.setAllowedAreas(
+             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+@@ -3843,15 +3844,6 @@
+         self.toolbar_host.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.parameter_dock)
+         self.toolbar_host.resizeDocks([self.parameter_dock], [270], Qt.Orientation.Horizontal)
+         self.navigator = SketchNavigator()
+-        self.navigation_dock = QDockWidget("图形导航", self.toolbar_host)
+-        self.navigation_dock.setObjectName("draftingNavigationDock")
+-        self.navigation_dock.setAllowedAreas(
+-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+-        )
+-        self.navigation_dock.setWidget(self.navigator)
+-        self.navigation_dock.setMinimumWidth(200)
+-        self.toolbar_host.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.navigation_dock)
+-        self.toolbar_host.resizeDocks([self.navigation_dock], [260], Qt.Orientation.Horizontal)
+         self.navigator.selection_requested.connect(self._select_navigation)
+         self.navigator.constraint_activated.connect(self._activate_navigation_constraint)
+         drawing = QVBoxLayout()
+@@ -4040,7 +4032,6 @@
+         ):
+             controls.addWidget(check, 6 + index // 2, index % 2)
+         panel_layout.addWidget(options_group)
+-        panel_layout.addStretch()
+         self.parameter_tabs.addTab(self.tool_panel, "绘图")
+ 
+         origin = QFormLayout()
+@@ -4071,7 +4062,8 @@
+         self.dimension_controls_layout = QVBoxLayout()
+         drawing.addLayout(self.dimension_controls_layout)
+         drawing.addWidget(self.canvas, 1)
+-        footer = QHBoxLayout()
++        coordinate_group = QGroupBox("坐标输入 / mm")
++        coordinate_layout = QVBoxLayout(coordinate_group)
+         coordinates = QFormLayout()
+         self.u_field = QDoubleSpinBox()
+         self.v_field = QDoubleSpinBox()
+@@ -4081,7 +4073,7 @@
+             field.setSuffix(" mm")
+         coordinates.addRow("U", self.u_field)
+         coordinates.addRow("V", self.v_field)
+-        footer.addLayout(coordinates)
++        coordinate_layout.addLayout(coordinates)
+         self.coordinate_add_button = QPushButton("按坐标点")
+         self.finish_polyline_button = QPushButton("完成多段线")
+         self.finish_polyline_button.setEnabled(False)
+@@ -4091,8 +4083,8 @@
+         self.redo_entity_button.setEnabled(False)
+         self.undo_entity_button.setToolTip("撤销上一项草稿操作；画布中按 Ctrl+Z。")
+         self.redo_entity_button.setToolTip("重做已撤销的草稿操作；画布中按 Ctrl+Shift+Z。")
+-        footer.addWidget(self.coordinate_add_button)
+-        footer.addWidget(self.finish_polyline_button)
++        coordinate_layout.addWidget(self.coordinate_add_button)
++        panel_layout.addWidget(coordinate_group)
+         self.end_chain_button = QPushButton("结束连线 ↵")
+         self.close_chain_button = QPushButton("闭合 C")
+         self.end_chain_button.clicked.connect(self.canvas.end_line_chain)
+@@ -4100,10 +4092,9 @@
+         chain_controls = QHBoxLayout()
+         chain_controls.addWidget(self.end_chain_button)
+         chain_controls.addWidget(self.close_chain_button)
+-        drawing.addLayout(chain_controls)
+-        footer.addWidget(self.undo_entity_button)
+-        footer.addWidget(self.redo_entity_button)
+-        drawing.addLayout(footer)
++        panel_layout.addLayout(chain_controls)
++        panel_layout.addWidget(self.finish_polyline_button)
++        panel_layout.addStretch()
+ 
+         transform_grid = QGridLayout()
+         self.delta_u_field = QDoubleSpinBox()
+@@ -4218,22 +4209,24 @@
+         self.transform_buttons["copy"].setToolTip(
+             "复制：选择对象、指定基点和目标点；原对象保留，单击放置副本。"
+         )
+-        self.parameter_tabs.addTab(self._parameter_page(transform_group), "修改")
+-
+-        self.status_label = QLabel(self.canvas.message)
+-        self.status_label.setWordWrap(True)
+-        self.status_label.setFixedHeight(self.status_label.fontMetrics().lineSpacing() * 2 + 6)
++        transform_grid.addWidget(self.undo_entity_button, transform_grid.rowCount(), 0, 1, 2)
++        transform_grid.addWidget(self.redo_entity_button, transform_grid.rowCount(), 0, 1, 2)
++        self.modify_page = self._parameter_page(transform_group)
++        self.parameter_tabs.addTab(self.modify_page, "修改")
++        self.parameter_tabs.addTab(self.navigator, "图形")
++
++        self.status_label = MessageLabel(self.canvas.message)
++        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+         self.dimensions = DimensionTools(self)
+         self.entity_count_label = QLabel("0 个草图元素")
+         self.finish_button = QPushButton("完成草图")
+         self.finish_button.setEnabled(False)
+         self.cancel_button = QPushButton("取消")
+-        actions = QHBoxLayout()
+-        actions.addWidget(self.entity_count_label)
+-        actions.addWidget(self.status_label, 1)
+-        actions.addWidget(self.finish_button)
+-        actions.addWidget(self.cancel_button)
+-        root.addLayout(actions)
++        self.drawing_toolbar.addSeparator()
++        self.drawing_toolbar.addWidget(self.finish_button)
++        self.drawing_toolbar.addWidget(self.cancel_button)
++        self.toolbar_host.statusBar().addWidget(self.entity_count_label)
++        self.toolbar_host.statusBar().addWidget(self.status_label, 1)
+ 
+         for button in self.findChildren(QPushButton):
+             button.setAutoDefault(False)
+@@ -4283,7 +4276,7 @@
+ 
+     @property
+     def drafting_docks(self) -> tuple[QDockWidget, ...]:
+-        return (self.navigation_dock, self.parameter_dock)
++        return (self.parameter_dock,)
+ 
+     @property
+     def drafting_toolbars(self) -> tuple[QToolBar, QToolBar, QToolBar]:
+@@ -4318,12 +4311,6 @@
+             )
+             self.parameter_dock.show()
+             self.toolbar_host.resizeDocks([self.parameter_dock], [270], Qt.Orientation.Horizontal)
+-            self.navigation_dock.setFloating(False)
+-            self.toolbar_host.addDockWidget(
+-                Qt.DockWidgetArea.LeftDockWidgetArea, self.navigation_dock
+-            )
+-            self.navigation_dock.show()
+-            self.toolbar_host.resizeDocks([self.navigation_dock], [260], Qt.Orientation.Horizontal)
+ 
+     def _navigation_scope(self) -> tuple[frozenset[str], frozenset[str]]:
+         selectable = frozenset(e.entity_id for e in self.canvas.selectable_entities())
+@@ -4818,7 +4805,7 @@
+             self.canvas.message = "0 图层已冻结，请先解冻后开始绘图。"
+         elif self.canvas.set_tool(tool):
+             if tool != "选择元素":
+-                self.parameter_tabs.setCurrentIndex(0)
++                self.parameter_tabs.setCurrentWidget(self.tool_panel)
+             if return_to_zero:
+                 self.layer_combo.setCurrentText("0")
+             self.canvas.setFocus()
+@@ -4891,7 +4878,7 @@
+             self._apply_transform("rotate")
+ 
+     def _start_transform(self, operation: str) -> None:
+-        self.parameter_tabs.setCurrentIndex(2)
++        self.parameter_tabs.setCurrentWidget(self.modify_page)
+         if operation in {"move", "copy", "rotate", "mirror"}:
+             self.canvas.begin_transform(
+                 operation,
+@@ -5009,7 +4996,7 @@
+             )
+         if self.canvas.message:
+             suffix += f" · {self.canvas.message}"
+-        self.status_label.setText(f"U {u:.4f} mm，V {v:.4f} mm{suffix}")
++        self.status_label.set_transient_text(f"U {u:.4f} mm，V {v:.4f} mm{suffix}")
+ 
+     def _sync_state(self) -> None:
+         if (
+--- before/main_window.py
++++ src/mycad/ui/main_window.py
+@@ -51,7 +51,6 @@
+     QMessageBox,
+     QSizePolicy,
+     QStatusBar,
+-    QTabWidget,
+     QToolBar,
+     QWidget,
+ )
+@@ -103,6 +102,7 @@
+     SelectionState,
+     ViewOrientation,
+ )
++from mycad.ui.workspace_console import AiChatPanel, InformationPanel, MessageLabel, WorkspaceConsole
+ 
+ if TYPE_CHECKING:
+     from mycad.app import AppServices
+@@ -182,14 +182,6 @@
+     "named_group_added",
+     "named_group_removed",
+ )
+-
+-
+-class _StatusMessage(QLabel):
+-    """Long diagnostics stay available without forcing a wider main window."""
+-
+-    def setText(self, text: str) -> None:  # noqa: N802
+-        super().setText(text)
+-        self.setToolTip(text)
+ 
+ 
+ class MainWindow(QMainWindow):
+@@ -314,7 +306,7 @@
+         # fields from left to right.
+         self.status_bar = QStatusBar()
+         self.setStatusBar(self.status_bar)
+-        self.status_command = _StatusMessage("空闲")
++        self.status_command = MessageLabel("空闲")
+         self.status_command.setObjectName("statusCommand")
+         self.status_command.setMinimumWidth(60)
+         self.status_command.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+@@ -350,7 +342,10 @@
+         # dock empty.
+         self.plan_draft: PlanDraftController | None = None
+         self.command_palette: CommandPalette | None = None
+-        self.bottom_tabs: QTabWidget | None = None
++        self.bottom_tabs: WorkspaceConsole | None = None
++        self.information_tab = InformationPanel()
++        self.ai_chat = AiChatPanel()
++        self.status_command.text_changed.connect(self.information_tab.append_message)
+         self.cli_tab: CliTab | None = None
+         self.plan_cards: PlanCards | None = None
+         # Todo 7: with services the right dock hosts the five fixed tabs;
+@@ -432,16 +427,16 @@
+             viewport.escape_pressed.connect(self._cancel_active_modeling_tool)
+             self.act_fit_view.setEnabled(True)
+             self.act_fit_view.triggered.connect(self._on_fit_view)
+-            # Todo 11: bottom dock hosts the same-source CLI tab + chat placeholder.
+-            tabs = QTabWidget()
+-            tabs.setObjectName("bottomTabs")
++            tabs = WorkspaceConsole()
++            tabs.addTab(self.information_tab, "信息")
+             self.cli_tab = CliTab(
+                 services=services,
+                 on_replace_doc=self._on_cli_document_replace,
++                command_guard=self._guard_cli_command,
+                 execution_unit=self.execution_unit,
+             )
+             tabs.addTab(self.cli_tab, "CLI")
+-            # Todo 12: the Chat page is the plan-card confirmation stream.
++            tabs.addTab(self.ai_chat, "AI 对话")
+             self.plan_cards = PlanCards()
+             if self.execution_unit is not None:
+                 self.plan_cards.configure_execution(
+@@ -455,6 +450,11 @@
+             tabs.addTab(self.plan_cards, "计划")
+             self.bottom_tabs = tabs
+             self.bottom_dock.setWidget(tabs)
++            tabs.set_expanded(False)
++            tabs.expanded_changed.connect(self._resize_console)
++            self.act_show_ai.setEnabled(True)
++            self.act_show_information.setEnabled(True)
++            self.act_clear_chat.setEnabled(True)
+             self.act_show_cli.setEnabled(True)
+             self.act_view_plans.setEnabled(True)
+             assert self.plan_cards is not None  # created just above
+@@ -464,7 +464,7 @@
+             if self.execution_unit is not None:
+                 self.execution_unit.busy_changed.connect(self._on_fillet_execution_busy_changed)
+                 self.execution_unit.busy_changed.connect(self._on_modeling_execution_busy_changed)
+-            self.bottom_dock.setWindowTitle("命令行与计划")
++            self.bottom_dock.setWindowTitle("信息与命令")
+             # P2-05: a tree click previews a historical state; a viewport
+             # hit selects the current model without inventing a source row.
+             self.right_panel.structure_selection_changed.connect(self._on_structure_pick)
+@@ -684,11 +684,15 @@
+         self.act_toggle_right_dock.setCheckable(True)
+         self.act_toggle_right_dock.setChecked(True)
+         self.act_toggle_right_dock.toggled.connect(self.right_dock.setVisible)
+-        self.act_toggle_bottom_dock = self.menu_view.addAction("CLI 与计划面板")
++        self.act_toggle_bottom_dock = self.menu_view.addAction("信息与命令面板")
+         self.act_toggle_bottom_dock.setCheckable(True)
+         self.act_toggle_bottom_dock.setChecked(False)
+         self.act_toggle_bottom_dock.toggled.connect(self.bottom_dock.setVisible)
+         self.bottom_dock.hide()
++        self.bottom_dock.visibilityChanged.connect(self.act_toggle_bottom_dock.setChecked)
++        self.act_show_information = self.menu_view.addAction("信息提示")
++        self.act_show_information.setEnabled(False)
++        self.act_show_information.triggered.connect(self._show_information_panel)
+ 
+         self.menu_feature = self.menuBar().addMenu("特征")
+         self.act_open_palette = self.menu_feature.addAction("打开左栏命令库")
+@@ -722,10 +726,13 @@
+         self.act_view_plans.triggered.connect(self._show_plan_cards)
+         self.act_view_plans.setEnabled(False)
+         self.act_view_plans.setToolTip("需要可用的计划执行器；创建或打开文档后可查看计划。")
++        self.act_show_ai = self.menu_agent.addAction("AI 对话")
++        self.act_show_ai.setEnabled(False)
++        self.act_show_ai.triggered.connect(self._show_ai_panel)
+         self.act_clear_chat = self.menu_agent.addAction("清空对话")
++        self.act_clear_chat.triggered.connect(lambda: self.ai_chat.clear())
+         self.act_clear_chat.setEnabled(False)
+-        self.act_clear_chat.setVisible(False)
+-        self.act_clear_chat.setToolTip("AI 对话属于 Phase 3；当前阶段仅提供计划确认卡片。")
++        self.act_clear_chat.setToolTip("清空 AI 对话记录与输入草稿。")
+ 
+         self.menu_help = self.menuBar().addMenu("帮助")
+         self.act_shortcuts = self.menu_help.addAction("快捷键")
+@@ -945,6 +952,11 @@
+             constraint_preview=self._services.kernel.preview_sketch_constraint,
+             constraint_update_preview=self._services.kernel.preview_sketch_constraint_update,
+         )
++        dialog.toolbar_host.statusBar().hide()
++        dialog.status_label.text_changed.connect(partial(self._on_drafting_message, dialog, False))
++        dialog.status_label.transient_changed.connect(
++            partial(self._on_drafting_message, dialog, True)
++        )
+         dialog.document_layer_mode = True
+         dialog.document_undo_requested.connect(self.request_undo)
+         dialog.document_redo_requested.connect(self.request_redo)
+@@ -1003,6 +1015,10 @@
+         self.setCentralWidget(dialog)
+         dialog.show()
+         dialog.canvas.setFocus()
++        if self.bottom_tabs is not None and self.bottom_dock.isHidden():
++            self.bottom_tabs.set_expanded(False)
++            self.act_toggle_bottom_dock.setChecked(True)
++        self.status_command.setText(dialog.status_label.text())
+         self._sync_camera_status()
+ 
+     def _hide_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
+@@ -2904,19 +2920,60 @@
+             return
+         self._fill_active_modeling_selection(selection)
+ 
+-    def _show_plan_cards(self) -> None:
+-        if self.bottom_tabs is not None and self.plan_cards is not None:
+-            self.bottom_tabs.setCurrentWidget(self.plan_cards)
++    def _on_drafting_message(self, dialog: SketchEditorDialog, transient: bool, text: str) -> None:
++        if dialog is not self._sketch_dialog or self.centralWidget() is not dialog:
++            return
++        if transient:
++            self.status_command.set_transient_text(text)
++        else:
++            self.status_command.setText(text)
++
++    def _resize_console(self, expanded: bool) -> None:
++        if self.bottom_tabs is None:
++            return
++        height = self.bottom_tabs.expanded_height if expanded else self.bottom_tabs.height()
++        if self.bottom_dock.isFloating():
++            self.bottom_dock.resize(self.bottom_dock.width(), height + 24)
++        else:
++            self.resizeDocks([self.bottom_dock], [height + 24], Qt.Orientation.Vertical)
++        # A tab press completes its own focus change after this signal. Restore
++        # an in-progress dimension edit on the next event-loop turn so Enter
++        # and Esc still reach the canvas, including across floating windows.
++        QTimer.singleShot(0, self, self._restore_dimension_input_focus)
++
++    def _restore_dimension_input_focus(self) -> None:
++        draft = self._sketch_dialog
++        if draft is None or self.centralWidget() is not draft:
++            return
++        dimensions = draft.dimensions
++        if dimensions.candidate is None and dimensions.mode is None:
++            return
++        target = dimensions.value_editor if dimensions.value_editor.isVisible() else draft.canvas
++        target.window().activateWindow()
++        target.setFocus()
++
++    def _show_console_page(self, page: QWidget | None) -> None:
++        if self.bottom_tabs is None or page is None:
++            return
+         self.act_toggle_bottom_dock.setChecked(True)
+         self.bottom_dock.show()
++        self.bottom_tabs.show_page(page)
+         self.bottom_dock.raise_()
+ 
++    def _show_information_panel(self) -> None:
++        self._show_console_page(self.information_tab)
++
++    def _show_ai_panel(self) -> None:
++        self._show_console_page(self.ai_chat)
++        self.ai_chat.input.setFocus()
++
++    def _show_plan_cards(self) -> None:
++        self._show_console_page(self.plan_cards)
++
+     def _show_cli_panel(self) -> None:
+-        if self.bottom_tabs is not None and self.cli_tab is not None:
+-            self.bottom_tabs.setCurrentWidget(self.cli_tab)
+-        self.act_toggle_bottom_dock.setChecked(True)
+-        self.bottom_dock.show()
+-        self.bottom_dock.raise_()
++        self._show_console_page(self.cli_tab)
++        if self.cli_tab is not None:
++            self.cli_tab.input.setFocus()
+ 
+     def _reset_layout(self) -> None:
+         """Restore the named five-zone layout without changing document state."""
+@@ -2942,7 +2999,11 @@
+         self.act_toggle_toolbar.setChecked(True)
+         self.act_toggle_left_dock.setChecked(True)
+         self.act_toggle_right_dock.setChecked(True)
+-        self.act_toggle_bottom_dock.setChecked(False)
++        if self.bottom_tabs is not None:
++            self.bottom_tabs.set_expanded(False)
++        self.act_toggle_bottom_dock.setChecked(
++            self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog
++        )
+         screen = QApplication.primaryScreen()
+         available = screen.availableGeometry().size()
+         self.resize(min(1400, available.width()), min(900, available.height()))
+@@ -3239,6 +3300,20 @@
+     def _return_current_model(self) -> None:
+         if self.viewport is not None:
+             self.viewport.show_current_model()
++
++    def _guard_cli_command(self, line: str) -> str | None:
++        command = line.strip()
++        if (
++            not command
++            or command.startswith("#")
++            or command.split()[0] in {"help", "history", "quit", "exit"}
++        ):
++            return None
++        if self._has_unsubmitted_sketch():
++            return (
++                "草图尚未提交：请先完成或取消草稿，再执行 CLI 写入命令；help / history 仍可使用。"
++            )
++        return None
+ 
+     def _on_cli_document_replace(self, loaded: LoadedDocument | None) -> None:
+         if loaded is None:
+--- before/cli_tab.py
++++ src/mycad/ui/cli_tab.py
+@@ -52,11 +52,13 @@
+         services: AppServices,
+         on_replace_doc: Callable[[LoadedDocument | None], None],
+         execution_unit: SerializedExecutionUnit | None = None,
++        command_guard: Callable[[str], str | None] | None = None,
+     ) -> None:
+         super().__init__()
+         self._services = services
+         self._on_replace_doc_cb = on_replace_doc
+         self._execution_unit = execution_unit
++        self._command_guard = command_guard
+         self.current: LoadedDocument | None = None
+ 
+         self.output = QPlainTextEdit(self)
+@@ -95,6 +97,11 @@
+ 
+     def submit_line(self, line: str) -> bool:
+         """Run a GUI-submitted CLI line on the serialized CAD worker."""
++        if self._command_guard is not None:
++            reason = self._command_guard(line)
++            if reason is not None:
++                self.append_line(reason)
++                return False
+         unit = self._execution_unit
+         if unit is None:
+             self.dispatch_line(line)
+@@ -161,6 +168,11 @@
+         The rc is the session exit-code contract, or ``QUIT_SENTINEL`` for
+         ``quit``/``exit`` — surfaced in the pane, never closing the window.
+         """
++        if self._command_guard is not None:
++            reason = self._command_guard(line)
++            if reason is not None:
++                self.append_line(reason)
++                return 1, [reason]
+         self.append_line(f"{PROMPT}{line}")
+         if line.strip() in ("quit", "exit"):
+             self.append_line(repr(QUIT_SENTINEL) + " (hint: use File > Close to exit the app)")
+--- /dev/null
++++ src/mycad/ui/workspace_console.py
+@@ -0,0 +1,162 @@
++# SPDX-FileCopyrightText: 2026 MyCAD contributors
++# SPDX-License-Identifier: Apache-2.0
++"""Shared workspace messages and compact console tabs."""
++
++from typing import override
++
++from PySide6.QtCore import QSize, Qt, Signal
++from PySide6.QtGui import QMouseEvent
++from PySide6.QtWidgets import (
++    QHBoxLayout,
++    QLabel,
++    QPlainTextEdit,
++    QPushButton,
++    QSizePolicy,
++    QTabBar,
++    QTabWidget,
++    QToolButton,
++    QVBoxLayout,
++    QWidget,
++)
++
++
++class MessageLabel(QLabel):
++    """Persistent prompts and transient cursor readings have separate channels."""
++
++    text_changed = Signal(str)
++    transient_changed = Signal(str)
++
++    @override
++    def setText(self, text: str) -> None:  # noqa: N802
++        changed = self.text() != text
++        super().setText(text)
++        self.setToolTip(text)
++        if changed:
++            self.text_changed.emit(text)
++
++    def set_transient_text(self, text: str) -> None:
++        super().setText(text)
++        self.setToolTip(text)
++        self.transient_changed.emit(text)
++
++
++class InformationPanel(QWidget):
++    """Bounded plain-text history; cursor movement never enters this log."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.output = QPlainTextEdit()
++        self.output.setReadOnly(True)
++        self.output.setMaximumBlockCount(500)
++        self._last_message = ""
++        clear = QPushButton("清空信息")
++        clear.clicked.connect(self.clear)
++        row = QHBoxLayout()
++        row.addStretch()
++        row.addWidget(clear)
++        layout = QVBoxLayout(self)
++        layout.setContentsMargins(4, 4, 4, 4)
++        layout.addWidget(self.output, 1)
++        layout.addLayout(row)
++
++    def append_message(self, message: str) -> None:
++        if message and message != self._last_message:
++            self.output.appendPlainText(message)
++            self._last_message = message
++
++    def clear(self) -> None:
++        self.output.clear()
++        self._last_message = ""
++
++
++class AiChatPanel(QWidget):
++    """Conversation draft surface until an AI service is configured."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.connection_label = QLabel("未连接 AI 服务 · 连接后可发送消息")
++        self.connection_label.setWordWrap(True)
++        self.output = QPlainTextEdit()
++        self.output.setReadOnly(True)
++        self.output.setPlaceholderText("AI 对话记录将显示在这里。当前尚未配置服务，不会发送消息。")
++        self.input = QPlainTextEdit()
++        self.input.setPlaceholderText("输入绘图需求（可先保留草稿）")
++        self.input.setMaximumHeight(64)
++        self.send_button = QPushButton("发送")
++        self.send_button.setEnabled(False)
++        self.send_button.setToolTip("尚未连接 AI 服务。")
++        compose = QHBoxLayout()
++        compose.addWidget(self.input, 1)
++        compose.addWidget(self.send_button)
++        layout = QVBoxLayout(self)
++        layout.setContentsMargins(4, 4, 4, 4)
++        layout.addWidget(self.connection_label)
++        layout.addWidget(self.output, 1)
++        layout.addLayout(compose)
++
++    def clear(self) -> None:
++        self.output.clear()
++        self.input.clear()
++
++
++class _ConsoleTabBar(QTabBar):
++    """Capture clicking the active tab before Qt changes the current index."""
++
++    active_tab_clicked = Signal()
++
++    @override
++    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
++        if (
++            event.button() == Qt.MouseButton.LeftButton
++            and self.tabAt(event.position().toPoint()) == self.currentIndex()
++        ):
++            self.active_tab_clicked.emit()
++        super().mousePressEvent(event)
++
++
++class WorkspaceConsole(QTabWidget):
++    """Collapse to the tab strip without replacing or clearing any page."""
++
++    expanded_changed = Signal(bool)
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.expanded = False
++        self.expanded_height = 240
++        self.setObjectName("bottomTabs")
++        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
++        bar = _ConsoleTabBar()
++        bar.setExpanding(False)
++        self.setTabBar(bar)
++        self.collapse_button = QToolButton()
++        self.collapse_button.setText("展开")
++        self.collapse_button.clicked.connect(lambda: self.set_expanded(not self.expanded))
++        self.setCornerWidget(self.collapse_button)
++        bar.active_tab_clicked.connect(lambda: self.set_expanded(not self.expanded))
++        self.currentChanged.connect(self._page_changed)
++
++    def _page_changed(self, _index: int) -> None:
++        self.set_expanded(True)
++
++    def set_expanded(self, expanded: bool) -> None:
++        if self.expanded and not expanded and self.isVisible():
++            self.expanded_height = max(160, self.height())
++        self.expanded = expanded
++        if self.count():
++            self.currentWidget().setVisible(expanded)
++        if expanded:
++            self.setMinimumHeight(160)
++            self.setMaximumHeight(16_777_215)
++        else:
++            self.setFixedHeight(max(self.tabBar().sizeHint().height(), 26) + 4)
++        self.collapse_button.setText("收起" if expanded else "展开")
++        self.collapse_button.setToolTip("收起控制台" if expanded else "展开当前页")
++        self.expanded_changed.emit(expanded)
++
++    @override
++    def minimumSizeHint(self) -> QSize:  # noqa: N802
++        return QSize(0, 160 if self.expanded else max(self.tabBar().sizeHint().height(), 26) + 4)
++
++    def show_page(self, page: QWidget) -> None:
++        self.setCurrentWidget(page)
++        self.set_expanded(True)

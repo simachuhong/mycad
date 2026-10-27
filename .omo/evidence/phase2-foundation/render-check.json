@@ -1,0 +1,68 @@
+{
+  "qt_platform": "xcb",
+  "opengl": {
+    "vendor": "Intel",
+    "renderer": "Mesa Intel(R) HD Graphics 620 (KBL GT2)",
+    "version": "4.6 (Compatibility Profile) Mesa 25.2.8-0ubuntu0.24.04.4"
+  },
+  "settings_isolated": true,
+  "screens": [
+    {
+      "case": "empty",
+      "background_rgba": [
+        239,
+        243,
+        247,
+        255
+      ],
+      "size": [
+        820,
+        389
+      ]
+    },
+    {
+      "case": "flange",
+      "background_rgba": [
+        239,
+        243,
+        247,
+        255
+      ],
+      "size": [
+        820,
+        389
+      ]
+    },
+    {
+      "case": "thin-plate",
+      "background_rgba": [
+        239,
+        243,
+        247,
+        255
+      ],
+      "size": [
+        820,
+        389
+      ]
+    },
+    {
+      "case": "cylinder",
+      "background_rgba": [
+        239,
+        243,
+        247,
+        255
+      ],
+      "size": [
+        820,
+        389
+      ]
+    }
+  ],
+  "empty_cut": {
+    "scene_items": 0,
+    "solid_count": 0,
+    "background_only": true
+  }
+}

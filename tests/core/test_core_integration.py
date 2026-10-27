@@ -8,6 +8,7 @@ from mycad.commands.registry import CommandRegistry
 from mycad.commands.spec import CliSyntax, CommandSpec
 from mycad.core.bus import CommandBus
 from mycad.core.document import Document
+from mycad.core.exceptions import ValidationError
 from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
 from mycad.geom.kernel import BuildKernel
 
@@ -203,23 +204,17 @@ def _fillet_step(radius: float) -> PlannedCommand:
     )
 
 
-def test_batch_validate_failure_rolls_back_with_real_kernel() -> None:
+def test_invalid_plan_is_rejected_before_confirmation_with_real_kernel() -> None:
     bus, doc, kernel = make_bus()
     bus.execute("feature.box", BOX_PARAMS, confirmed_by="cli-local")
     plan = Plan(
         steps=[_cyl_step(2.0, 4.0, [100.0, 0.0, 0.0]), _cyl_step(-1.0, 4.0, [100.0, 0.0, 0.0])]
     )
-    plan.confirm("cli-local")
-    with pytest.raises(BatchRollbackError) as excinfo:
-        bus.execute_batch(plan)
-    err = excinfo.value
-    assert err.failed_ordinal == 1
-    assert err.failed_command_id == "feature.cylinder"
-    assert "radius" in err.reason
-    assert err.executed_ids == ("feature.cylinder",)
+    with pytest.raises(ValidationError, match="radius"):
+        bus.confirm_plan(plan, "cli-local", scope="cli")
     assert [c.id for c in doc.commands] == ["feature.box"]
     assert kernel.mass_properties().volume == pytest.approx(6000.0, rel=1e-6)
-    assert plan.status == "failed"
+    assert plan.status == "draft"
 
 
 def test_batch_geometry_failure_rolls_back_with_real_kernel() -> None:
@@ -232,9 +227,9 @@ def test_batch_geometry_failure_rolls_back_with_real_kernel() -> None:
             _fillet_step(999.0),
         ]
     )
-    plan.confirm("cli-local")
+    bus.confirm_plan(plan, "cli-local", scope="cli")
     with pytest.raises(BatchRollbackError) as excinfo:
-        bus.execute_batch(plan)
+        bus.execute_batch(plan, scope="cli")
     err = excinfo.value
     assert err.failed_ordinal == 2
     assert err.failed_command_id == "modify.fillet"

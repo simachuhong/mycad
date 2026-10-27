@@ -1,0 +1,42 @@
+{
+  "task": "in-canvas-dimensions",
+  "date": "2026-10-25",
+  "status": "implemented; ready for user UI review",
+  "features": [
+    "11 dimension tools",
+    "in-canvas stable-reference picking and hover preview",
+    "click placement and continuous commands",
+    "inline reference/driving edit",
+    "independent text/line dragging",
+    "draft undo and committed Bus update",
+    "persistent local-mm placement and projection",
+    "native DXF dimension exchange"
+  ],
+  "verification": {
+    "full_pytest_initial": {
+      "passed": 1819,
+      "failed": 2,
+      "seconds": 502.63,
+      "failures": [
+        "test_baseline_fixture_matches_current_doc_hashes",
+        "test_tree_boundaries_docs_baseline_unchanged"
+      ]
+    },
+    "full_pytest_failures_resolution": "Intentional UI design doc changed its digest. Regenerated baseline with scripts/gen_baseline_hashes.py; 4 scoped baseline checks passed. No assertions weakened.",
+    "final_focused": {
+      "ui_passed": 47,
+      "neutral_geometry_dxf_passed": 36,
+      "total": 83
+    },
+    "ruff": "full check passed; final changed scopes passed",
+    "format": "336 files passed full check; final changed scopes passed",
+    "types": "full check found only four missing test-lambda annotations; corrected callback and final changed scopes report 0 errors, 0 warnings, 0 notes",
+    "independent_review": "baseline isolation, no-op history, translated preview, driving chain and cancel-during-solve findings fixed and regression-tested",
+    "known_unresolved_test_failures": 0
+  },
+  "screenshots": [
+    "workbench.png",
+    "inline-edit.png"
+  ],
+  "workspace": "Existing checkout preserved with prior uncommitted work; no merge/push/commit performed."
+}

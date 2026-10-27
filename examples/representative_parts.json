@@ -1,0 +1,468 @@
+[
+  {
+    "id": "flange-round-solid",
+    "name": "实心圆法兰",
+    "category": "flange",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "圆柱基体可由当前命令创建；本条仅确认命令链可表达。",
+    "perturbation_ids": [
+      "perturb-flange-round-solid-01",
+      "perturb-flange-round-solid-02",
+      "perturb-flange-round-solid-03",
+      "perturb-flange-round-solid-04",
+      "perturb-flange-round-solid-05",
+      "perturb-flange-round-solid-06"
+    ]
+  },
+  {
+    "id": "flange-center-bore",
+    "name": "中心通孔法兰",
+    "category": "flange",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole"
+    ],
+    "acceptance": "圆柱基体加中心通孔，孔径和厚度可查询。",
+    "perturbation_ids": [
+      "perturb-flange-center-bore-01",
+      "perturb-flange-center-bore-02",
+      "perturb-flange-center-bore-03",
+      "perturb-flange-center-bore-04",
+      "perturb-flange-center-bore-05",
+      "perturb-flange-center-bore-06"
+    ]
+  },
+  {
+    "id": "flange-four-bolt",
+    "name": "四孔螺栓圆法兰",
+    "category": "flange",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "中心孔加四孔极阵列；阵列位于全局水平面。",
+    "perturbation_ids": [
+      "perturb-flange-four-bolt-01",
+      "perturb-flange-four-bolt-02",
+      "perturb-flange-four-bolt-03",
+      "perturb-flange-four-bolt-04",
+      "perturb-flange-four-bolt-05",
+      "perturb-flange-four-bolt-06"
+    ]
+  },
+  {
+    "id": "flange-six-bolt",
+    "name": "六孔螺栓圆法兰",
+    "category": "flange",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "六孔极阵列可用当前孔阵列命令表达。",
+    "perturbation_ids": [
+      "perturb-flange-six-bolt-01",
+      "perturb-flange-six-bolt-02",
+      "perturb-flange-six-bolt-03",
+      "perturb-flange-six-bolt-04",
+      "perturb-flange-six-bolt-05",
+      "perturb-flange-six-bolt-06"
+    ]
+  },
+  {
+    "id": "flange-raised-hub",
+    "name": "凸台法兰",
+    "category": "flange",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.cylinder",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "同轴圆柱加料后创建螺栓孔阵列。",
+    "perturbation_ids": [
+      "perturb-flange-raised-hub-01",
+      "perturb-flange-raised-hub-02",
+      "perturb-flange-raised-hub-03",
+      "perturb-flange-raised-hub-04",
+      "perturb-flange-raised-hub-05",
+      "perturb-flange-raised-hub-06"
+    ]
+  },
+  {
+    "id": "flange-slotted",
+    "name": "弧形槽法兰",
+    "category": "flange",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "当前无槽特征命令；必须明确拒绝槽几何请求。"
+  },
+  {
+    "id": "shaft-straight",
+    "name": "直轴",
+    "category": "shaft_sleeve",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "单段圆柱轴可由当前命令创建。",
+    "perturbation_ids": [
+      "perturb-shaft-straight-01",
+      "perturb-shaft-straight-02",
+      "perturb-shaft-straight-03",
+      "perturb-shaft-straight-04",
+      "perturb-shaft-straight-05",
+      "perturb-shaft-straight-06"
+    ]
+  },
+  {
+    "id": "shaft-stepped",
+    "name": "阶梯轴",
+    "category": "shaft_sleeve",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.cylinder"
+    ],
+    "acceptance": "同轴圆柱加料表达两个直径台阶。",
+    "perturbation_ids": [
+      "perturb-shaft-stepped-01",
+      "perturb-shaft-stepped-02",
+      "perturb-shaft-stepped-03",
+      "perturb-shaft-stepped-04",
+      "perturb-shaft-stepped-05",
+      "perturb-shaft-stepped-06"
+    ]
+  },
+  {
+    "id": "sleeve-through-bore",
+    "name": "直通孔套筒",
+    "category": "shaft_sleeve",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole"
+    ],
+    "acceptance": "圆柱外形与轴向通孔均可参数化。",
+    "perturbation_ids": [
+      "perturb-sleeve-through-bore-01",
+      "perturb-sleeve-through-bore-02",
+      "perturb-sleeve-through-bore-03",
+      "perturb-sleeve-through-bore-04",
+      "perturb-sleeve-through-bore-05",
+      "perturb-sleeve-through-bore-06"
+    ]
+  },
+  {
+    "id": "shaft-cross-hole",
+    "name": "横向销孔轴",
+    "category": "shaft_sleeve",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole"
+    ],
+    "acceptance": "横向平面上的单孔可表达；实际选择需由语义引用覆盖验收。",
+    "perturbation_ids": [
+      "perturb-shaft-cross-hole-01",
+      "perturb-shaft-cross-hole-02",
+      "perturb-shaft-cross-hole-03",
+      "perturb-shaft-cross-hole-04",
+      "perturb-shaft-cross-hole-05",
+      "perturb-shaft-cross-hole-06"
+    ]
+  },
+  {
+    "id": "shaft-keyway",
+    "name": "带键槽轴",
+    "category": "shaft_sleeve",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "当前无键槽或拉伸切除命令；不得把圆柱误报为完整支持。"
+  },
+  {
+    "id": "sleeve-keyed",
+    "name": "带内键槽套筒",
+    "category": "shaft_sleeve",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole"
+    ],
+    "acceptance": "基础套筒命令已存在；内键槽需要后续二维轮廓切除能力。"
+  },
+  {
+    "id": "plate-rectangular",
+    "name": "矩形安装板",
+    "category": "mounting_plate",
+    "status": "supported",
+    "commands": [
+      "feature.box"
+    ],
+    "acceptance": "矩形板由长方体尺寸表达。",
+    "perturbation_ids": [
+      "perturb-plate-rectangular-01",
+      "perturb-plate-rectangular-02",
+      "perturb-plate-rectangular-03",
+      "perturb-plate-rectangular-04",
+      "perturb-plate-rectangular-05",
+      "perturb-plate-rectangular-06"
+    ]
+  },
+  {
+    "id": "plate-four-hole",
+    "name": "圆周孔矩形安装板",
+    "category": "mounting_plate",
+    "status": "supported",
+    "commands": [
+      "feature.box",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "矩形板顶面上的圆周螺栓孔布局可由单孔和极阵列表达。",
+    "perturbation_ids": [
+      "perturb-plate-four-hole-01",
+      "perturb-plate-four-hole-02",
+      "perturb-plate-four-hole-03",
+      "perturb-plate-four-hole-04",
+      "perturb-plate-four-hole-05",
+      "perturb-plate-four-hole-06"
+    ]
+  },
+  {
+    "id": "plate-circular",
+    "name": "圆形安装板",
+    "category": "mounting_plate",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "圆盘和圆周均布孔可由圆柱与极阵列表达。",
+    "perturbation_ids": [
+      "perturb-plate-circular-01",
+      "perturb-plate-circular-02",
+      "perturb-plate-circular-03",
+      "perturb-plate-circular-04",
+      "perturb-plate-circular-05",
+      "perturb-plate-circular-06"
+    ]
+  },
+  {
+    "id": "plate-center-and-bolt-circle",
+    "name": "中心定位孔安装板",
+    "category": "mounting_plate",
+    "status": "supported",
+    "commands": [
+      "feature.box",
+      "feature.hole",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "矩形板中心孔与圆周均布安装孔可表达。",
+    "perturbation_ids": [
+      "perturb-plate-center-and-bolt-circle-01",
+      "perturb-plate-center-and-bolt-circle-02",
+      "perturb-plate-center-and-bolt-circle-03",
+      "perturb-plate-center-and-bolt-circle-04",
+      "perturb-plate-center-and-bolt-circle-05",
+      "perturb-plate-center-and-bolt-circle-06"
+    ]
+  },
+  {
+    "id": "plate-slotted",
+    "name": "长圆孔安装板",
+    "category": "mounting_plate",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.box"
+    ],
+    "acceptance": "当前孔命令不支持长圆孔；应拒绝而非用多个圆孔近似。"
+  },
+  {
+    "id": "plate-countersunk",
+    "name": "沉头孔安装板",
+    "category": "mounting_plate",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.box",
+      "feature.hole"
+    ],
+    "acceptance": "直孔能力可复用；沉头/锥面孔参数尚无命令契约。"
+  },
+  {
+    "id": "cover-flat-round",
+    "name": "圆形平盖",
+    "category": "cover",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "圆形盖板厚度由圆柱高度控制。",
+    "perturbation_ids": [
+      "perturb-cover-flat-round-01",
+      "perturb-cover-flat-round-02",
+      "perturb-cover-flat-round-03",
+      "perturb-cover-flat-round-04",
+      "perturb-cover-flat-round-05",
+      "perturb-cover-flat-round-06"
+    ]
+  },
+  {
+    "id": "cover-flat-rectangular",
+    "name": "矩形平盖",
+    "category": "cover",
+    "status": "supported",
+    "commands": [
+      "feature.box"
+    ],
+    "acceptance": "矩形盖板由长方体尺寸表达。",
+    "perturbation_ids": [
+      "perturb-cover-flat-rectangular-01",
+      "perturb-cover-flat-rectangular-02",
+      "perturb-cover-flat-rectangular-03",
+      "perturb-cover-flat-rectangular-04",
+      "perturb-cover-flat-rectangular-05",
+      "perturb-cover-flat-rectangular-06"
+    ]
+  },
+  {
+    "id": "cover-raised-rim",
+    "name": "带凸缘圆盖",
+    "category": "cover",
+    "status": "supported",
+    "commands": [
+      "feature.cylinder",
+      "feature.cylinder",
+      "feature.hole_pattern"
+    ],
+    "acceptance": "同轴圆柱组合形成盖体与外缘，螺栓孔可极阵列表达。",
+    "perturbation_ids": [
+      "perturb-cover-raised-rim-01",
+      "perturb-cover-raised-rim-02",
+      "perturb-cover-raised-rim-03",
+      "perturb-cover-raised-rim-04",
+      "perturb-cover-raised-rim-05",
+      "perturb-cover-raised-rim-06"
+    ]
+  },
+  {
+    "id": "cover-sealing-groove",
+    "name": "密封槽端盖",
+    "category": "cover",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "当前无环槽命令；不得省略密封槽后标为完整成功。"
+  },
+  {
+    "id": "cover-vented",
+    "name": "通风槽端盖",
+    "category": "cover",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.cylinder"
+    ],
+    "acceptance": "基础圆盖可建；重复通风槽需要线性阵列与槽轮廓。"
+  },
+  {
+    "id": "cover-domed",
+    "name": "曲面穹顶端盖",
+    "category": "cover",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.revolve"
+    ],
+    "acceptance": "旋转命令已有原语；受控穹顶轮廓及边界条件仍待扩展。"
+  },
+  {
+    "id": "boundary-small-safe-feature",
+    "name": "安全尺度小特征样件",
+    "category": "boundary",
+    "status": "supported",
+    "commands": [
+      "feature.box",
+      "feature.hole"
+    ],
+    "acceptance": "尺寸保持在毫米尺度常规范围；体积与孔径断言使用绝对和相对公差。",
+    "perturbation_ids": [
+      "perturb-boundary-small-safe-feature-01",
+      "perturb-boundary-small-safe-feature-02",
+      "perturb-boundary-small-safe-feature-03",
+      "perturb-boundary-small-safe-feature-04",
+      "perturb-boundary-small-safe-feature-05",
+      "perturb-boundary-small-safe-feature-06"
+    ]
+  },
+  {
+    "id": "boundary-thin-valid-wall",
+    "name": "薄壁但有效样件",
+    "category": "boundary",
+    "status": "supported",
+    "commands": [
+      "feature.box",
+      "modify.boolean_cut"
+    ],
+    "acceptance": "保持正厚度且高于本样例下限；验证非空、有效 BREP。",
+    "perturbation_ids": [
+      "perturb-boundary-thin-valid-wall-01",
+      "perturb-boundary-thin-valid-wall-02",
+      "perturb-boundary-thin-valid-wall-03",
+      "perturb-boundary-thin-valid-wall-04",
+      "perturb-boundary-thin-valid-wall-05",
+      "perturb-boundary-thin-valid-wall-06"
+    ]
+  },
+  {
+    "id": "boundary-zero-thickness",
+    "name": "零厚度边界体",
+    "category": "boundary",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.box"
+    ],
+    "acceptance": "零长度尺寸应由参数校验拒绝，不能生成退化实体。"
+  },
+  {
+    "id": "boundary-complete-cut",
+    "name": "完全切除结果",
+    "category": "boundary",
+    "status": "expected_rejection",
+    "commands": [
+      "feature.cylinder",
+      "modify.boolean_cut"
+    ],
+    "acceptance": "布尔操作可返回合法空结果，但零实体不能作为已完成零件导出。"
+  },
+  {
+    "id": "boundary-extreme-scale",
+    "name": "极端尺度组合体",
+    "category": "boundary",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.box",
+      "feature.cylinder"
+    ],
+    "acceptance": "需在建立平台和内核公差基准后定义跨尺度接受范围。"
+  },
+  {
+    "id": "boundary-multiple-solids",
+    "name": "多个分离实体结果",
+    "category": "boundary",
+    "status": "extension_candidate",
+    "commands": [
+      "feature.cylinder",
+      "feature.cylinder"
+    ],
+    "acceptance": "多实体结果的文档/导出契约仍待定义，不以实体数隐式判错。"
+  }
+]

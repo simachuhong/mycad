@@ -12,9 +12,9 @@ requires-python = ">=3.12,<3.15"
 #   the VTK/CadQuery transitive closure out.
 #   Pin to the 7.9.3.x patch stream because OCP 7.9.4 dropped TopoDS_Wire fixes
 #   that build123d 0.11.1 depends on.
-# - PySide6 + pyqtgraph : phase-1 desktop shell, allowed in src/mycad/ui/
-#   ONLY (see tests/test_scope_audit.py). VTK stays forbidden, CadQuery
-#   stays forbidden, and mycad.core imports none of these.
+# - PySide6 + pyqtgraph : optional phase-1 desktop shell (`desktop` extra),
+#   imported only in src/mycad/ui/ (see tests/test_scope_audit.py). VTK stays
+#   forbidden, CadQuery stays forbidden, and mycad.core imports none of these.
 #
 # pyrightconfig.json stubPath=typings: hand-written pyqtgraph stubs are
 # declarations of an existing runtime API (no official py.typed) — the
@@ -26,17 +26,27 @@ requires-python = ">=3.12,<3.15"
 dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk>=7.9.3.1.1,<7.9.4",
+]
+
+[project.optional-dependencies]
+desktop = [
     "PySide6>=6.7,<7",
     "pyqtgraph>=0.13,<0.14",
     # pyqtgraph only suggests PyOpenGL, but imports it in pyqtgraph.opengl
     # (the GLViewWidget the viewport builds on) — declare it explicitly so
     # the closure cannot silently drift away from what the shell imports.
     "PyOpenGL>=3.1,<4",
+    # ezdxf's SVG drawing frontend imports Pillow; preview is desktop-only.
+    "pillow>=12,<13",
+]
+# PlaneGCS is an optional geometry backend. Keep it isolated from the core
+# runtime and avoid source builds on aarch64 until its T2 matrix is verified.
+sketch-constraints = [
+    "planegcs==0.9.6; platform_machine == 'x86_64' or platform_machine == 'AMD64'",
 ]
 
-# PEP 735 group, not an extra: `uv tree --no-dev` only filters dependency
-# groups, so the runtime-closure audit (NOTICE attribution, forbidden
-# distributions) would otherwise see ruff/pytest/packaging as runtime deps.
+# PEP 735 group, not an extra: dev tools must stay out of both the default
+# and desktop runtime exports used by NOTICE/scope audits.
 [dependency-groups]
 dev = [
     "ruff>=0.6,<1.0",

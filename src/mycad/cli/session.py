@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 try:
     import readline  # noqa: F401  (optional: line editing when present)
@@ -26,20 +26,15 @@ try:
 except ImportError:
     pass
 
-import mycad.app
-from mycad.app import AppServices, new_document
+from mycad.app import AppServices, archive_plugin_identities, new_document, open_app_document
 from mycad.cli.plans import Outputs, load_plan_file
 from mycad.commands.grammar import parse_line, to_cli
 from mycad.commands.validation import validate_params
 from mycad.core.document import AFFECTED_OBJECTS, AffectedObject, PlannedCommand
+from mycad.core.document_kinds import NATIVE_ARCHIVE_SUFFIXES
 from mycad.core.exceptions import BatchRollbackError, MycadError
-from mycad.core.persistence import LoadedDocument, open_document, save_document
+from mycad.core.persistence import LoadedDocument, save_document
 from mycad.core.plan import Plan
-
-if TYPE_CHECKING:
-    from mycad.commands.registry import CommandRegistry
-    from mycad.core.handlers import CommandHandler
-    from mycad.plugins.manager import PluginManager
 
 __all__ = ["HELP_TEXT", "QUIT_SENTINEL", "CliSession", "execute_line"]
 
@@ -56,15 +51,6 @@ Subcommands:
   gui                     Open the five-zone main window (Qt event loop)
   help                    Show this help text
 """
-
-#: The app-layer handler-map assembler (``mycad.app._handler_map``), reached
-#: dynamically: it is module-private by design and the CLI must not re-derive
-#: the assembly, so ``getattr`` + ``cast`` satisfies strict checking without
-#: duplicating the logic or weakening the gate.
-_assemble_handlers = cast(
-    "Callable[[CommandRegistry, PluginManager], dict[str, CommandHandler]]",
-    getattr(mycad.app, "_handler_map"),  # noqa: B009 (private bridge, see above)
-)
 
 #: Sentinel return code for ``quit``/``exit`` — an internal stop signal handed
 #: to the loop drivers, never a process exit code (contract codes are 0/1/2).
@@ -121,8 +107,8 @@ def _builtin_syntax_error(head: str, rest: str) -> str | None:
         return f"{head} requires an argument"
     if head == "meta" and "=" not in rest:
         return "usage: meta <key>=<value>"
-    if head in ("open", "save") and rest and not rest.endswith(".mc.json"):
-        return f"{head} only supports .mc.json archives"
+    if head in ("open", "save") and rest and not rest.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
+        return f"{head} only supports .mc.json, .my2d, .my3d archives"
     if head == "history" and rest not in ("", "--json"):
         return "usage: history [--json]"
     return None
@@ -204,8 +190,8 @@ class CliSession:
             validated = load_plan_file(path, services.registry)
             loaded = new_document(services)
             plan = Plan(list(validated.steps), plan_id=validated.plan_id)
-            plan.confirm(actor="cli-local")
-            loaded.bus.execute_batch(plan)
+            loaded.bus.confirm_plan(plan, actor="cli-local", scope="cli")
+            loaded.bus.execute_batch(plan, scope="cli")
             for key, value in validated.plan_metadata.items():
                 loaded.document.set_metadata(key, value)
             outputs = validated.outputs
@@ -220,7 +206,11 @@ class CliSession:
                     services.formats.resolve(target).write(services.kernel, target)
                     self._say(str(target))
             if outputs.archive is not None:
-                save_document(loaded.document, outputs.archive)
+                save_document(
+                    loaded.document,
+                    outputs.archive,
+                    plugin_identities=archive_plugin_identities(services),
+                )
                 self._say(str(outputs.archive))
         except (MycadError, OSError) as exc:
             _print_rollback(exc, 0)
@@ -390,20 +380,14 @@ class CliSession:
             return 2
         path = Path(rest)
         # Extension gate FIRST — before any registry or file access.
-        if not path.name.endswith(".mc.json"):
-            self._emit_error("open only supports .mc.json archives")
+        if not path.name.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
+            self._emit_error("open only supports .mc.json, .my2d, .my3d archives")
             return 2
         if not path.is_file():
             self._emit_error(f"file not found: {path}")
             return 2
-        handlers = _assemble_handlers(self._services.registry, self._services.plugins)
         try:
-            replaced = open_document(
-                path,
-                registry=self._services.registry,
-                kernel=self._services.kernel,
-                handlers=handlers,
-            )
+            replaced = open_app_document(self._services, path)
         except MycadError as exc:
             self._emit_error(exc)
             return 1
@@ -415,8 +399,8 @@ class CliSession:
     def _cmd_save(self, rest: str) -> int:
         if rest:
             path = Path(rest)
-            if not path.name.endswith(".mc.json"):
-                self._emit_error("save only supports .mc.json archives")
+            if not path.name.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
+                self._emit_error("save only supports .mc.json, .my2d, .my3d archives")
                 return 2
         elif self._archive_path is not None:
             path = self._archive_path
@@ -424,7 +408,11 @@ class CliSession:
             self._emit_error("save requires a path for an unsaved document")
             return 2
         try:
-            save_document(self._require_doc().document, path)
+            save_document(
+                self._require_doc().document,
+                path,
+                plugin_identities=archive_plugin_identities(self._services),
+            )
         except (MycadError, OSError) as exc:
             self._emit_error(exc)
             return 1
@@ -439,11 +427,11 @@ class CliSession:
         path = Path(rest)
         try:
             provider = self._services.formats.resolve(path)
-            provider.write(self._services.kernel, path)
+            report = provider.write(self._services.kernel, path)
         except (MycadError, OSError) as exc:
             self._emit_error(exc)
             return 1
-        self._say(str(path))
+        self._say(f"{path}\n{report}" if report is not None else str(path))
         return 0
 
     def _cmd_meta(self, rest: str) -> int:
@@ -527,7 +515,13 @@ class CliSession:
         """List every registered command; exit 0 always (skips are not errors)."""
         specs = [s for group in self._services.registry.list_by_category().values() for s in group]
         rows = sorted(
-            (spec.cli.verb_aliases[0], spec.id, spec.summary_en, spec.label_zh) for spec in specs
+            (
+                spec.cli.verb_aliases[0] if spec.cli.verb_aliases else "",
+                spec.id,
+                spec.summary_en,
+                spec.label_zh,
+            )
+            for spec in specs
         )
         if as_json:
             payload = {
@@ -600,9 +594,10 @@ class CliSession:
             )
         base = len(self._require_doc().document.commands)
         plan = Plan(steps)
-        plan.confirm(actor="cli-local")
         try:
-            self._require_doc().bus.execute_batch(plan)
+            loaded = self._require_doc()
+            loaded.bus.confirm_plan(plan, actor="cli-local", scope="cli")
+            loaded.bus.execute_batch(plan, scope="cli")
         except MycadError as exc:
             _print_rollback(exc, base)
             self._emit_error(exc)

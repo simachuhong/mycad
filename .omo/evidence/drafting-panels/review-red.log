@@ -1,0 +1,83 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_________ test_blocked_navigation_keeps_inline_keyboard_escape[False] __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x707a92abd4c0>, floating = False
+
+    @pytest.mark.parametrize('floating', [False, True])
+    def test_blocked_navigation_keeps_inline_keyboard_escape(qtbot: QtBot, floating: bool) -> None:
+        from PySide6.QtWidgets import QApplication
+    
+        editor = populated_editor(qtbot)
+        editor.canvas.continuous_lines = True
+        extra = LineEntity(uuid4().hex, (0, 20), (30, 20))
+        editor.canvas.entities.append(extra)
+        editor.canvas.changed.emit()
+        editor.navigation_dock.setFloating(floating)
+        editor.dimensions.edit(editor.dimension_sources()[0], editor.canvas.constraints[0])
+        qtbot.waitUntil(editor.dimensions.value_editor.hasFocus)
+        tree = editor.navigator.tree
+        item = leaf(editor, extra.entity_id)
+        QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=tree.visualItemRect(item).center())
+>       qtbot.waitUntil(editor.dimensions.value_editor.hasFocus, timeout=500)
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 500 milliseconds
+
+tests/ui/test_drafting_panels.py:373: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+__________ test_blocked_navigation_keeps_inline_keyboard_escape[True] __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x707a8daa4500>, floating = True
+
+    @pytest.mark.parametrize('floating', [False, True])
+    def test_blocked_navigation_keeps_inline_keyboard_escape(qtbot: QtBot, floating: bool) -> None:
+        from PySide6.QtWidgets import QApplication
+    
+        editor = populated_editor(qtbot)
+        editor.canvas.continuous_lines = True
+        extra = LineEntity(uuid4().hex, (0, 20), (30, 20))
+        editor.canvas.entities.append(extra)
+        editor.canvas.changed.emit()
+        editor.navigation_dock.setFloating(floating)
+        editor.dimensions.edit(editor.dimension_sources()[0], editor.canvas.constraints[0])
+>       qtbot.waitUntil(editor.dimensions.value_editor.hasFocus)
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 5000 milliseconds
+
+tests/ui/test_drafting_panels.py:369: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support raise()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+___________ test_navigation_refresh_preserves_keyboard_current_item ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x707a92abd7f0>
+
+    def test_navigation_refresh_preserves_keyboard_current_item(qtbot: QtBot) -> None:
+        from mycad.ui.sketch_navigation import ID_ROLE
+    
+        editor = populated_editor(qtbot)
+        second = LineEntity(uuid4().hex, (0, 20), (30, 20))
+        third = LineEntity(uuid4().hex, (0, 40), (30, 40))
+        editor.canvas.entities.append(second)
+        editor.canvas.changed.emit()
+        tree = editor.navigator.tree
+        tree.setFocus()
+        tree.setCurrentItem(leaf(editor, second.entity_id), 1)
+        editor.canvas.entities.append(third)
+        editor.canvas.changed.emit()
+        current = tree.currentItem()
+>       assert current is not None and current.data(0, ID_ROLE) == second.entity_id
+E       assert (None is not None)
+
+tests/ui/test_drafting_panels.py:396: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_panels.py::test_blocked_navigation_keeps_inline_keyboard_escape[False]
+FAILED tests/ui/test_drafting_panels.py::test_blocked_navigation_keeps_inline_keyboard_escape[True]
+FAILED tests/ui/test_drafting_panels.py::test_navigation_refresh_preserves_keyboard_current_item
+3 failed, 16 deselected in 15.35s

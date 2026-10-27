@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import cast
+from pathlib import Path
+from typing import TextIO, cast
 
 import pytest
 
 from mycad.core import migrations
 from mycad.core.handlers import HandlerContext
+from mycad.core.measurements import MeasurementRequest, MeasurementResult
 from mycad.core.migrations import Migration, migrate, register
 
 
@@ -64,6 +66,15 @@ class FakeKernel:
                 raise exc
         self.applied.append((command_id, dict(params)))
 
+    def measure(self, request: MeasurementRequest) -> MeasurementResult:
+        return MeasurementResult(
+            value=None,
+            unit="mm³",
+            revision=request.revision,
+            description="fake measurement",
+            error="geometry is unavailable in FakeKernel",
+        )
+
 
 class EchoHandler:
     """Echoes its bound id; asserts ctx.command_id agreement."""
@@ -76,9 +87,21 @@ class EchoHandler:
         return self.command_id
 
 
+class VersionMarkerHandler:
+    """Record handler selection in the fake geometry for replay assertions."""
+
+    def __init__(self, command_id: str, version: int) -> None:
+        self.command_id = command_id
+        self.version = version
+
+    def handle(self, params: Mapping[str, object], ctx: HandlerContext) -> object | None:
+        assert ctx.command_version == self.version
+        ctx.kernel.apply(self.command_id, {**params, "handler_version": self.version})
+        return None
+
+
 # -- open exception matrix (appended batch; E402 suppressed by design) --------
 import json  # noqa: E402
-from pathlib import Path  # noqa: E402
 
 from mycad.commands.demo import demo_registry  # noqa: E402
 from mycad.commands.registry import CommandRegistry  # noqa: E402
@@ -179,6 +202,85 @@ def test_open_missing_handler_names_ordinal_and_id(tmp_path: Path) -> None:
     assert "feature.cylinder" in message
 
 
+def test_v1_archive_replays_with_its_schema_and_handler_version(tmp_path: Path) -> None:
+    command_id = "feature.cylinder"
+    registry = CommandRegistry()
+    registry.register(
+        CommandSpec(
+            command_id,
+            1,
+            "cylinder v1",
+            "圆柱 v1",
+            {
+                "type": "object",
+                "properties": {
+                    "radius": {"type": "number"},
+                    "height": {"type": "number"},
+                },
+                "required": ["radius", "height"],
+                "additionalProperties": False,
+            },
+            CliSyntax(("cylinder",)),
+        )
+    )
+    registry.register(
+        CommandSpec(
+            command_id,
+            2,
+            "cylinder v2",
+            "圆柱 v2",
+            {
+                "type": "object",
+                "properties": {
+                    "radius_mm": {"type": "number"},
+                    "height_mm": {"type": "number"},
+                },
+                "required": ["radius_mm", "height_mm"],
+                "additionalProperties": False,
+            },
+            CliSyntax(("cylinder",)),
+        )
+    )
+    handlers: dict[tuple[str, int], CommandHandler] = {
+        (command_id, version): VersionMarkerHandler(command_id, version) for version in (1, 2)
+    }
+    original_kernel = FakeKernel()
+    original = Document(registry)
+    bus = CommandBus(original, registry, original_kernel, handlers)
+    bus.execute(command_id, {"radius": 4.0, "height": 8.0}, version=1)
+    bus.execute(command_id, {"radius_mm": 5.0, "height_mm": 9.0}, version=2)
+    archive = tmp_path / "legacy.mc.json"
+    save_document(original, archive)
+
+    replay_kernel = FakeKernel()
+    loaded = open_document(
+        archive,
+        registry=registry,
+        kernel=replay_kernel,
+        handlers=handlers,
+    )
+
+    assert [command.version for command in loaded.document.commands] == [1, 2]
+    assert replay_kernel.applied == [
+        (command_id, {"radius": 4.0, "height": 8.0, "handler_version": 1}),
+        (command_id, {"radius_mm": 5.0, "height_mm": 9.0, "handler_version": 2}),
+    ]
+
+
+def test_archive_missing_command_version_is_explicit(tmp_path: Path) -> None:
+    path = tmp_path / "a.mc.json"
+    seed_archive(path)
+
+    def remove_version(data: dict[str, object]) -> None:
+        commands = cast("list[object]", data["commands"])
+        del cast("dict[str, object]", commands[0])["version"]
+
+    reg, handlers, fake = make_assembly()
+    with pytest.raises(ValidationError, match="missing command field 'version'"):
+        open_document(tamper(path, remove_version), registry=reg, kernel=fake, handlers=handlers)
+    assert fake.applied == []
+
+
 def test_open_unregistered_command_id_rejected(tmp_path: Path) -> None:
     path = tmp_path / "a.mc.json"
     seed_archive(path)
@@ -214,7 +316,7 @@ def test_open_version_99_archive_version_error_fields(tmp_path: Path) -> None:
             handlers=handlers,
         )
     assert excinfo.value.found == "99"
-    assert excinfo.value.supported == 1
+    assert excinfo.value.supported == 3
 
 
 @pytest.mark.parametrize(
@@ -363,4 +465,121 @@ def test_save_missing_parent_oserror_and_no_tmp_residue(tmp_path: Path) -> None:
         save_document(doc, tmp_path / "nope" / "out.mc.json")
     good = tmp_path / "out.mc.json"
     save_document(doc, good)
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_static_v1_archive_fixture_opens_and_preserves_audit_fields() -> None:
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "archives" / "v1_cylinders.mc.json"
+    reg, handlers, fake = make_assembly()
+
+    loaded = open_document(fixture, registry=reg, kernel=fake, handlers=handlers)
+
+    commands = loaded.document.commands
+    assert [
+        (cmd.id, cmd.version, cmd.ordinal, cmd.timestamp_utc, cmd.confirmed_by) for cmd in commands
+    ] == [
+        ("feature.cylinder", 1, 0, "2026-01-01T00:00:00+00:00", "archive-fixture"),
+        ("feature.cylinder", 1, 1, "2026-01-01T00:00:01+00:00", None),
+    ]
+    assert [cmd.params["radius"] for cmd in commands] == [5.0, 2.0]
+    assert fake.applied == [
+        (
+            "feature.cylinder",
+            {"radius": 5.0, "height": 2.0, "center": [0.0, 0.0, 0.0], "mode": "new"},
+        ),
+        (
+            "feature.cylinder",
+            {"radius": 2.0, "height": 2.0, "center": [0.0, 0.0, 0.0], "mode": "new"},
+        ),
+    ]
+
+
+def test_replace_failure_preserves_archive_and_dirty_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycad.core import persistence
+
+    reg, handlers, fake = make_assembly()
+    doc = Document(reg)
+    bus = CommandBus(doc, reg, fake, handlers)
+    bus.execute("feature.cylinder", {"radius": 1.0, "height": 2.0})
+    path = tmp_path / "part.mc.json"
+    save_document(doc, path)
+    prior_bytes = path.read_bytes()
+    doc.set_metadata("part_no", "changed")
+    saved: list[object] = []
+    doc.events.subscribe("document_saved", saved.append)
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(persistence.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        save_document(doc, path)
+
+    assert path.read_bytes() == prior_bytes
+    assert doc.is_dirty
+    assert saved == []
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("failure_point", ["write", "flush"])
+def test_temp_write_failure_preserves_archive_and_cleans_partial_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    from mycad.core import persistence
+
+    reg, handlers, fake = make_assembly()
+    doc = Document(reg)
+    bus = CommandBus(doc, reg, fake, handlers)
+    bus.execute("feature.cylinder", {"radius": 1.0, "height": 2.0})
+    path = tmp_path / "part.mc.json"
+    save_document(doc, path)
+    prior_bytes = path.read_bytes()
+    doc.set_metadata("part_no", "changed")
+    saved: list[object] = []
+    doc.events.subscribe("document_saved", saved.append)
+
+    class FailingTemporaryFile:
+        def __init__(self) -> None:
+            self.path = tmp_path / "partial.tmp"
+            self.name = str(self.path)
+            self.handle: TextIO | None = None
+
+        def __enter__(self) -> FailingTemporaryFile:
+            self.handle = self.path.open("w", encoding="utf-8")
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: object,
+            _exc: object,
+            _traceback: object,
+        ) -> None:
+            assert self.handle is not None
+            self.handle.close()
+
+        def write(self, value: str) -> int:
+            assert self.handle is not None
+            if failure_point == "write":
+                self.handle.write(value[:1])
+                raise OSError("simulated temp write failure")
+            return self.handle.write(value)
+
+        def flush(self) -> None:
+            if failure_point == "flush":
+                raise OSError("simulated temp flush failure")
+            assert self.handle is not None
+            self.handle.flush()
+
+    def create_failing_file(*_args: object, **_kwargs: object) -> FailingTemporaryFile:
+        return FailingTemporaryFile()
+
+    monkeypatch.setattr(persistence.tempfile, "NamedTemporaryFile", create_failing_file)
+    with pytest.raises(OSError, match=f"simulated temp {failure_point} failure"):
+        save_document(doc, path)
+
+    assert path.read_bytes() == prior_bytes
+    assert doc.is_dirty
+    assert saved == []
     assert list(tmp_path.glob("*.tmp")) == []

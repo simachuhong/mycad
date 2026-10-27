@@ -1,0 +1,40 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___________ test_preview_material_is_distinct_and_cancel_restores_it ___________
+
+viewport = <mycad.ui.viewport.GLViewport(0x36704fb0) at 0x7471d3c75b40>
+loaded = LoadedDocument(document=<mycad.core.document.Document object at 0x7471d3c84b30>, bus=<mycad.core.bus.CommandBus object at 0x7471d3c84d10>)
+qapp = <PySide6.QtWidgets.QApplication(0x3923b8e0) at 0x74720ca4a300>
+
+    def test_preview_material_is_distinct_and_cancel_restores_it(
+        viewport: GLViewport, loaded: LoadedDocument, qapp: object,
+    ) -> None:
+        loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 10}, "test")
+        viewport.bind_document(loaded)
+        original = cast(_MeshItemProbe, viewport.items[0])
+        before = original.opts["color"]
+        viewport.show_candidate_preview(viewport.snapshots()[-1], preserve_view=True)
+>       assert original.opts["color"] != before
+E       assert (0.72, 0.75, 0.8, 1.0) != (0.72, 0.75, 0.8, 1.0)
+
+tests/ui/test_viewport.py:59: AssertionError
+______________ test_theme_updates_gl_canvas_together_with_widgets ______________
+
+qapp = <PySide6.QtWidgets.QApplication(0x3923b8e0) at 0x74720ca4a300>
+
+    def test_theme_updates_gl_canvas_together_with_widgets(qapp: QApplication) -> None:
+        window = MainWindow(services=build_app(discoverers=[]))
+        view = window.viewport
+        assert view is not None
+        window.act_theme_dark.trigger()
+>       assert tuple(view.opts["bgcolor"]) == QColor("#18212B").getRgbF()
+E       assert (0.9372549057...28503418, 1.0) == (0.0941176488...83057404, 1.0)
+E         
+E         At index 0 diff: 0.9372549057006836 != 0.0941176488995552
+E         Use -v to get more diff
+
+tests/ui/test_theme.py:70: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_viewport.py::test_preview_material_is_distinct_and_cancel_restores_it
+FAILED tests/ui/test_theme.py::test_theme_updates_gl_canvas_together_with_widgets
+2 failed, 40 deselected in 16.83s

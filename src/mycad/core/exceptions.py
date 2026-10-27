@@ -52,6 +52,8 @@ class TopologyReferenceError(MycadError):
     """
 
     ordinal: int | None = None
+    reason: str | None = None
+    parameter_path: str | None = None
 
 
 @dataclass
@@ -128,10 +130,11 @@ class BatchRollbackError(MycadError):
 
 @dataclass
 class ReplayDuringRollbackError(MycadError):
-    """Replay was attempted while a rollback is in flight."""
+    """State recovery failed; original and recovery failures remain inspectable."""
 
     original: BaseException | None = None
     replay_reason: str = ""
+    recovery_error: BaseException | None = None
 
 
 @dataclass
