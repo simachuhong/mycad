@@ -23,7 +23,7 @@ def _object(properties: Mapping[str, object], required: list[str]) -> dict[str, 
 _TEXT = {"type": "string"}
 _BOOL = {"type": "boolean"}
 _POSITIVE = {"type": "number", "exclusiveMinimum": 0}
-_NULLABLE_TEXT = {"oneOf": [{"type": "string"}, {"type": "null"}]}
+_NULLABLE_TEXT = {"oneOf": [{"type": "string"}, {"const": None}]}
 _REFERENCE = _object(
     {
         "kind": {"enum": ["cylindrical_face", "planar_face", "edge"]},

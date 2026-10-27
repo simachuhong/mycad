@@ -82,6 +82,7 @@ from mycad.ui.cad_icons import cad_icon, command_icon_name, refresh_button_icons
 from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.command_reference import CommandReferenceDialog
+from mycad.ui.drawing_workbench import DrawingWorkbench
 from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
 from mycad.ui.fillet_toolbar import FilletCommandBar
@@ -103,6 +104,7 @@ from mycad.ui.viewport import (
     ViewOrientation,
 )
 from mycad.ui.workspace_console import AiChatPanel, InformationPanel, MessageLabel, WorkspaceConsole
+from mycad.ui.workspace_tabs import WorkspaceId, WorkspaceTabs
 
 if TYPE_CHECKING:
     from mycad.app import AppServices
@@ -271,7 +273,10 @@ class MainWindow(QMainWindow):
         # shell keeps the placeholder host widget with the same name.
         center = QWidget()
         center.setObjectName(CENTER_OBJECT_NAME)
-        self.setCentralWidget(center)
+        self.workspace_tabs = WorkspaceTabs()
+        self.workspace_tabs.setObjectName(CENTER_OBJECT_NAME)
+        self.workspace_tabs.set_content("model", center)
+        self.setCentralWidget(self.workspace_tabs)
 
         self.main_toolbar = QToolBar("main")
         self.main_toolbar.setObjectName(TOOLBAR_OBJECT_NAME)
@@ -368,7 +373,7 @@ class MainWindow(QMainWindow):
             viewport.set_orientation("isometric")
             viewport.setObjectName(CENTER_OBJECT_NAME)
             self.viewport = viewport
-            self.setCentralWidget(viewport)
+            self.workspace_tabs.set_content("model", viewport)
             self.rebuild_hook = viewport.refresh
             for action in self.render_mode_actions.values():
                 action.setEnabled(True)
@@ -471,6 +476,12 @@ class MainWindow(QMainWindow):
             self.right_panel.history_edit_requested.connect(self._on_history_edit_requested)
             self.viewport.current_entity_picked.connect(self._on_current_entity_pick)
             self.viewport.history_preview_changed.connect(self._on_history_preview_changed)
+        self.drawing_workbench = DrawingWorkbench(services, self.execution_unit)
+        self.workspace_tabs.set_content("drawing", self.drawing_workbench)
+        self.drawing_workbench.message.connect(self._on_engineering_message)
+        drawing_workbench = self.drawing_workbench
+        self.destroyed.connect(lambda: drawing_workbench.shutdown())
+        self.workspace_tabs.workspace_changed.connect(self._on_workspace_changed)
         self._populate_toolbar()
         self.resizeDocks(
             [self.left_dock, self.right_dock],
@@ -983,36 +994,64 @@ class MainWindow(QMainWindow):
         self._show_sketch_workbench(dialog)
         self.status_command.setText("二维绘图：主工作区内编辑；完成草图提交，取消草稿不写入。")
 
-    def _show_3d_workspace(self, _checked: bool = False) -> None:
-        if self._sketch_dialog is not None:
-            self._hide_sketch_workbench(self._sketch_dialog)
-            self.status_command.setText(
-                "三维视图显示已提交模型；二维草稿已保留，点击“二维绘图”继续。"
+    @property
+    def active_workspace(self) -> WorkspaceId:
+        return self.workspace_tabs.active_workspace
+
+    def _on_engineering_message(self, text: str) -> None:
+        if self.active_workspace == "drawing":
+            self.status_command.setText(text)
+
+    def _on_workspace_changed(self, previous: str, current: str) -> None:
+        if previous == "model" and current != "model" and self._sketch_dock_visibility is None:
+            self._modeling_toolbar_was_visible = not self.modeling_toolbar.isHidden()
+            self._sketch_dock_visibility = (self.left_dock.isVisible(), self.right_dock.isVisible())
+        if current == "model":
+            if self._sketch_dock_visibility is not None:
+                left, right = self._sketch_dock_visibility
+                self._sketch_dock_visibility = None
+                self.left_dock.setVisible(left)
+                self.right_dock.setVisible(right)
+                self.modeling_toolbar.setVisible(self._modeling_toolbar_was_visible)
+        else:
+            self.left_dock.hide()
+            self.right_dock.hide()
+            self.modeling_toolbar.hide()
+        for action in (
+            *self.orientation_actions.values(),
+            *self.projection_actions.values(),
+            *self.render_mode_actions.values(),
+        ):
+            action.setEnabled(current == "model" and self._loaded is not None)
+        for action in self._part_only_actions:
+            action.setEnabled(
+                current == "model"
+                and self._loaded is not None
+                and self._loaded.document.document_type == "part"
             )
-        self.act_view_3d.setChecked(True)
-        self.act_view_2d.setChecked(False)
+        self.act_view_2d.setChecked(current == "sketch")
+        self.act_view_3d.setChecked(current == "model")
+        if current == "sketch":
+            self._on_sketch_start()
+        elif current == "drawing":
+            if self.bottom_tabs is not None and self.bottom_dock.isHidden():
+                self.bottom_tabs.set_expanded(False)
+                self.act_toggle_bottom_dock.setChecked(True)
+            self.drawing_workbench.refresh()
+            self.status_command.setText(self.drawing_workbench.hint.text())
+        self._sync_camera_status()
+
+    def _show_3d_workspace(self, _checked: bool = False) -> None:
+        self.workspace_tabs.activate("model")
+        self.status_command.setText("三维视图显示已提交模型；其他工作区草稿已保留。")
         if self.viewport is not None:
             self.viewport.setFocus()
         self._sync_camera_status()
 
     def _show_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
-        self.act_view_2d.setChecked(True)
-        self.act_view_3d.setChecked(False)
-        if self.centralWidget() is dialog:
-            dialog.show()
-            return
-        previous = self.takeCentralWidget()
-        if previous is not None:
-            previous.setParent(self)
-            previous.hide()
-        if self._sketch_dock_visibility is None:
-            self._modeling_toolbar_was_visible = not self.modeling_toolbar.isHidden()
-            self._sketch_dock_visibility = (self.left_dock.isVisible(), self.right_dock.isVisible())
-        self.left_dock.hide()
-        self.right_dock.hide()
-        self.modeling_toolbar.hide()
         dialog.setWindowFlags(Qt.WindowType.Widget)
-        self.setCentralWidget(dialog)
+        self.workspace_tabs.set_content("sketch", dialog)
+        self.workspace_tabs.activate("sketch")
         dialog.show()
         dialog.canvas.setFocus()
         if self.bottom_tabs is not None and self.bottom_dock.isHidden():
@@ -1023,21 +1062,10 @@ class MainWindow(QMainWindow):
 
     def _hide_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
         self._drafting_toolbar_state = dialog.toolbar_layout_state()
-        if self.centralWidget() is dialog:
-            self.takeCentralWidget()
-            dialog.setParent(self, Qt.WindowType.Widget)
-            dialog.hide()
-            if self.viewport is not None:
-                self.setCentralWidget(self.viewport)
-                self.viewport.show()
-                self.act_view_2d.setChecked(False)
-                self.act_view_3d.setChecked(True)
-        if self._sketch_dock_visibility is not None:
-            left, right = self._sketch_dock_visibility
-            self._sketch_dock_visibility = None
-            self.left_dock.setVisible(left)
-            self.right_dock.setVisible(right)
-            self.modeling_toolbar.setVisible(self._modeling_toolbar_was_visible)
+        if self.workspace_tabs.content("sketch") is dialog:
+            self.workspace_tabs.set_content("sketch", None)
+        if self.active_workspace == "sketch":
+            self.workspace_tabs.activate("model")
         self._sync_camera_status()
 
     def _sync_drawing_layers(self) -> None:
@@ -2848,13 +2876,19 @@ class MainWindow(QMainWindow):
             self.viewport.set_coordinate_axes_visible(visible)
 
     def _on_fit_view(self) -> None:
-        if self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog:
+        if self.active_workspace == "drawing":
+            self.drawing_workbench.canvas.fit_view()
+            return
+        if self._sketch_dialog is not None and self.active_workspace == "sketch":
             self._sketch_dialog.canvas.fit_view()
         elif self.viewport is not None:
             self.viewport.fit_view()
 
     def _sync_camera_status(self) -> None:
-        if self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog:
+        if self.active_workspace == "drawing":
+            self.status_camera.setText("工程图 · 纸张 mm")
+            return
+        if self._sketch_dialog is not None and self.active_workspace == "sketch":
             self.status_camera.setText(
                 f"二维 · {self._sketch_dialog.plane_combo.currentText()} · UCS"
             )
@@ -2921,7 +2955,7 @@ class MainWindow(QMainWindow):
         self._fill_active_modeling_selection(selection)
 
     def _on_drafting_message(self, dialog: SketchEditorDialog, transient: bool, text: str) -> None:
-        if dialog is not self._sketch_dialog or self.centralWidget() is not dialog:
+        if dialog is not self._sketch_dialog or self.active_workspace != "sketch":
             return
         if transient:
             self.status_command.set_transient_text(text)
@@ -2943,7 +2977,7 @@ class MainWindow(QMainWindow):
 
     def _restore_dimension_input_focus(self) -> None:
         draft = self._sketch_dialog
-        if draft is None or self.centralWidget() is not draft:
+        if draft is None or self.active_workspace != "sketch":
             return
         dimensions = draft.dimensions
         if dimensions.candidate is None and dimensions.mode is None:
@@ -2987,7 +3021,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.modeling_toolbar)
         self._modeling_toolbar_was_visible = True
         self.modeling_toolbar.setVisible(
-            self._sketch_dialog is None or self.centralWidget() is not self._sketch_dialog
+            self._sketch_dialog is None or self.active_workspace != "sketch"
         )
         if self._sketch_dialog is not None:
             self._sketch_dialog.reset_toolbar_layout()
@@ -3002,7 +3036,7 @@ class MainWindow(QMainWindow):
         if self.bottom_tabs is not None:
             self.bottom_tabs.set_expanded(False)
         self.act_toggle_bottom_dock.setChecked(
-            self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog
+            self._sketch_dialog is not None and self.active_workspace == "sketch"
         )
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry().size()
@@ -3165,6 +3199,11 @@ class MainWindow(QMainWindow):
             self.viewport.bind_document(loaded)
         if self.cli_tab is not None:
             self.cli_tab.bind_document(loaded)
+        self.drawing_workbench.bind_document(loaded, self._session_id)
+        self.workspace_tabs.setTabEnabled(2, True)
+        self.workspace_tabs.activate(
+            "sketch" if loaded.document.document_type == "drawing2d" else "model"
+        )
 
     def _queue_core_event(
         self, session_id: int, name: SignalName, payload: Mapping[str, object]
@@ -3191,6 +3230,7 @@ class MainWindow(QMainWindow):
                 self._invalidate_modeling_preview()
         if name in STRUCTURE_REFRESH_SIGNALS:
             self._on_structure_signal(name, payload)
+            self.drawing_workbench.refresh()
 
     def _on_structure_pick(self, ordinal: int) -> None:
         """Load a clicked historical mesh on the serialized worker, then render it."""
@@ -3309,7 +3349,7 @@ class MainWindow(QMainWindow):
             or command.split()[0] in {"help", "history", "quit", "exit"}
         ):
             return None
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return (
                 "草图尚未提交：请先完成或取消草稿，再执行 CLI 写入命令；help / history 仍可使用。"
             )
@@ -3437,7 +3477,7 @@ class MainWindow(QMainWindow):
         if (
             not layer_undo
             and draft is not None
-            and self.centralWidget() is draft
+            and self.active_workspace == "sketch"
             and (
                 draft.canvas.entities
                 or draft.canvas.has_pending_geometry
@@ -3495,7 +3535,7 @@ class MainWindow(QMainWindow):
         if (
             not layer_redo
             and draft is not None
-            and self.centralWidget() is draft
+            and self.active_workspace == "sketch"
             and (
                 draft.canvas.entities
                 or draft.canvas.has_pending_geometry
@@ -3629,7 +3669,7 @@ class MainWindow(QMainWindow):
             settings.setValue("layout/draftingToolbars", self._drafting_toolbar_state)
         else:
             settings.remove("layout/draftingToolbars")
-        in_drawing = self._sketch_dialog is not None and self.centralWidget() is self._sketch_dialog
+        in_drawing = self._sketch_dialog is not None and self.active_workspace == "sketch"
         settings.setValue(
             "toolbar/modelingVisible",
             self._modeling_toolbar_was_visible
@@ -3651,7 +3691,7 @@ class MainWindow(QMainWindow):
         if self._services is None:
             self.status_command.setText("未组合应用服务，无法新建")
             return
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return
         if self.new_document_dialog is not None:
             self.new_document_dialog.raise_()
@@ -3862,7 +3902,7 @@ class MainWindow(QMainWindow):
         self._replace_document(loaded, path)
 
     def _on_save_document(self) -> None:
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return
         if self._loaded is None:
             self.status_command.setText("未绑定文档")
@@ -3873,7 +3913,7 @@ class MainWindow(QMainWindow):
         self._store_document(self._document_path)
 
     def _on_save_document_as(self) -> None:
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return
         if self._loaded is None:
             self.status_command.setText("未绑定文档")
@@ -3935,7 +3975,7 @@ class MainWindow(QMainWindow):
             )
 
     def _store_document(self, path: Path) -> bool:
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return False
         if self._loaded is None:
             return False
@@ -4048,6 +4088,17 @@ class MainWindow(QMainWindow):
         else:
             self.status_command.setText("应用工作线程忙碌，DXF 尚未导出；请稍后重试。")
 
+    def _has_unsubmitted_geometry(self) -> bool:
+        if self._has_unsubmitted_sketch():
+            return True
+        placement = self.drawing_workbench.placement
+        if placement is not None and placement.pending:
+            self.status_command.setText(
+                "工程图视图组尚未提交：请在画布按 Enter 完成或 Esc 取消，再保存或切换文档。"
+            )
+            return True
+        return False
+
     def _has_unsubmitted_sketch(self) -> bool:
         draft = self._sketch_dialog
         if draft is None:
@@ -4062,7 +4113,7 @@ class MainWindow(QMainWindow):
 
     def _confirm_unsaved_changes(self) -> bool:
         """True 放行（无文档/未脏/用户放弃），False 一律不动当前文档。"""
-        if self._has_unsubmitted_sketch():
+        if self._has_unsubmitted_geometry():
             return False
         if self._loaded is None or not self._loaded.document.is_dirty:
             return True
@@ -4121,6 +4172,7 @@ class MainWindow(QMainWindow):
             return
         if self.execution_unit is not None:
             self.execution_unit.shutdown()
+        self.drawing_workbench.shutdown()
         if self.viewport is not None:
             self.viewport.dispose()
         self.store_window_state()

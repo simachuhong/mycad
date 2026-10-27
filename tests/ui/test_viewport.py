@@ -489,7 +489,10 @@ def test_window_hosts_viewport(services: AppServices, qapp: object, qtbot: QtBot
     window = MainWindow(services=services)
     qtbot.addWidget(window)
     assert window.viewport is not None
-    assert window.centralWidget() is window.viewport
+    assert (
+        window.workspace_tabs.content("model") is window.viewport
+        and window.active_workspace == "model"
+    )
     assert window.viewport.objectName() == "viewportHost"
     assert window.act_shaded_wireframe.isEnabled()
     assert window.act_fit_view.isEnabled()

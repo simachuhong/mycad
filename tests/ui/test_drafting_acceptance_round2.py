@@ -130,10 +130,13 @@ def test_view_switch_preserves_pending_draft_and_history(qtbot: QtBot) -> None:
         draft.canvas.pending_point_count,
     )
     window.act_view_3d.trigger()
-    assert window.centralWidget() is window.viewport
+    assert (
+        window.workspace_tabs.content("model") is window.viewport
+        and window.active_workspace == "model"
+    )
     assert window.active_sketch_dialog() is draft
     window.act_view_2d.trigger()
-    assert window.centralWidget() is draft
+    assert window.workspace_tabs.content("sketch") is draft and window.active_workspace == "sketch"
     assert (
         tuple(draft.canvas.entities),
         tuple(draft.canvas.constraints),

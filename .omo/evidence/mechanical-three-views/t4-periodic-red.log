@@ -1,0 +1,16 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_unnormalized_periodic_spline_is_not_drawn_as_its_control_polygon _____
+
+    def test_unnormalized_periodic_spline_is_not_drawn_as_its_control_polygon() -> None:
+        from mycad.core.drawing_projection import SplineCurve
+        from mycad.ui.drawing_canvas import curve_path
+    
+        curve = SplineCurve(((0,0),(10,0),(5,10)),2,(0,1,2,3),(1,1,1,1),(1,1,1),True)
+>       with pytest.raises(ValueError, match="周期"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/ui/test_drawing_views.py:101: Failed
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_views.py::test_unnormalized_periodic_spline_is_not_drawn_as_its_control_polygon
+1 failed in 18.89s

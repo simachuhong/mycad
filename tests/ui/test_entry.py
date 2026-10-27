@@ -95,7 +95,10 @@ def test_run_gui_builds_the_five_zones(
     qtbot.addWidget(window)
 
     assert window.viewport is not None
-    assert window.centralWidget() is window.viewport
+    assert (
+        window.workspace_tabs.content("model") is window.viewport
+        and window.active_workspace == "model"
+    )
     assert window.command_palette is not None
     assert window.right_panel is not None
     assert window.bottom_tabs is not None

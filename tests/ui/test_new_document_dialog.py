@@ -33,10 +33,18 @@ def test_common_new_dialog_routes_selected_document(qtbot: QtBot, kind: str) -> 
     assert loaded is not None and loaded.document.document_type == kind
     draft = window.active_sketch_dialog()
     if kind == "drawing2d":
-        assert draft is not None and window.centralWidget() is draft
+        assert (
+            draft is not None
+            and window.workspace_tabs.content("sketch") is draft
+            and window.active_workspace == "sketch"
+        )
         draft.reject()
     else:
-        assert draft is None and window.centralWidget() is window.viewport
+        assert (
+            draft is None
+            and window.workspace_tabs.content("model") is window.viewport
+            and window.active_workspace == "model"
+        )
     assert window.new_document_dialog is None
 
 

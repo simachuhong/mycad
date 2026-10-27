@@ -20,3 +20,16 @@ Performance debugging, 900-edge fixture, three views:
 - OCCT represents some edge-on conics as collinear splines. Only when their positive-weight poles lie on the endpoint segment can the adapter canonicalize their geometric image to an exact line. Curved splines retain full poles, knots, multiplicities and rational weights.
 
 Canonicalization and adversarial spline checks passed: 10 tests, full 900-edge DTO pipeline 2.983 s (`t3-canonical.log`). A further 22 T0/GUI-heartbeat/layering regressions passed (`t3-regressions.log`). Scoped lint, format and strict typing passed. Performance margin on this machine remains small and will be checked at integration. Worker/session publishing logic remains T5; no final user workflow/export/release claim is made here.
+
+
+## T4 — permanent workspaces and placement
+
+`平面草图 | 工程图 | 3D图` are permanent containers. Every previous MainWindow central-widget identity condition now routes via active_workspace. Sketch draft entities, selection, zoom, floating dock state and 3D camera persist; document undo from the engineering page leaves a hidden sketch draft intact. drawing2d retains its spatial preview tab per the approved spec, with engineering generation disabled.
+
+Base/projected views are placed directly on the paper canvas. Enter submits one view-group command; Esc discards the transient group. Model changes pause pending placement pending explicit preview refresh. Uncommitted groups block save/document replacement with an in-canvas completion instruction. A new document clears the old paper scene. Existing sheets fit on first activation; later tab switches preserve the zoom.
+
+Evidence: 96 GUI regressions (`t4-regressions.log`), 27 scoped command/archive/GUI/layering tests (execution ledger), 5 first-activation/camera/capture regressions (`t4-fit-green.log`). Real X11 desktop projection/placement passed (`t4-desktop.log`); normal, 960×600 and floating screenshots are saved alongside this report. Narrow windows preserve the current zoom and offer scrollbars; Fit remains available. Hints are centralized in the shared Info/CLI/offline-AI/Plans console.
+
+Integration corrected a command-schema mismatch: the fixed validator supports const:null, not type:null. Optional absent parent/owner fields are omitted by the DTO serializer, with a full DTO CLI roundtrip regression. Periodic OCCT source splines are normalized by the adapter; the renderer explicitly rejects unnormalized periodic input rather than displaying a false control polygon.
+
+Remaining stages: T5 robust async states and grips, T6 associated dimensions, T7 output, T8 complete workflow/release verification. These screenshots are not evidence of those later features.

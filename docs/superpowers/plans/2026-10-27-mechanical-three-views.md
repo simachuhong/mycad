@@ -141,12 +141,12 @@
 
 **Interfaces:** `WorkspaceTabs.activate(workspace: WorkspaceId) -> None`、`active_workspace: WorkspaceId`；`DrawingCanvas.set_scene(scene: DrawingScene) -> None`。原二维/三维 QAction 委托 Tab 切换；保留旧 active_sketch_dialog 等兼容入口。
 
-- [ ] RED：`test_three_pages_keep_identity_and_draft` 切三页后草图草稿/选择/缩放/相机不变；`test_switch_releases_capture_and_hides_inactive_floating_dock`；`test_global_undo_does_not_edit_hidden_draft`；`test_drawing2d_does_not_offer_solid_projection`。
-- [ ] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_workspace_tabs.py tests/ui/test_drawing_views.py -q`，确认失败。
-- [ ] 建立三个常驻页，重用右侧浮动功能区和共享控制台。枚举 main_window.py 所有 `centralWidget()` 身份判断，逐一改为明确工作区路由，覆盖保存、撤销、相机、选择、快捷键和工具菜单。
-- [ ] 实现 enter/leave：释放抓鼠标、暂停预览、保留未提交草稿；切回时来源已变则提示重选，不偷偷提交或丢弃。新建/打开文档按现有未保存确认路径切换全部页的文档上下文。
-- [ ] 右侧设置纸张、标题、第一/第三角、比例、基准方向；预览在画布跟随鼠标，单击定位，Enter 通过一个事务提交整组，Esc 撤销整组临时预览。
-- [ ] GREEN 跑同组及现有 toolbar/workspace_console/草图关闭回归；真实桌面验证窄窗与浮动面板，截图说明画布空间。草图 DIM→0 工具切换既有规则仍通过。
+- [x] RED：`test_three_pages_keep_identity_and_draft` 切三页后草图草稿/选择/缩放/相机不变；`test_switch_releases_capture_and_hides_inactive_floating_dock`；`test_global_undo_does_not_edit_hidden_draft`；`test_drawing2d_does_not_offer_solid_projection`。
+- [x] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_workspace_tabs.py tests/ui/test_drawing_views.py -q`，确认失败。
+- [x] 建立三个常驻页，重用右侧浮动功能区和共享控制台。枚举 main_window.py 所有 `centralWidget()` 身份判断，逐一改为明确工作区路由，覆盖保存、撤销、相机、选择、快捷键和工具菜单。
+- [x] 实现 enter/leave：释放抓鼠标、暂停预览、保留未提交草稿；切回时来源已变则提示重选，不偷偷提交或丢弃。新建/打开文档按现有未保存确认路径切换全部页的文档上下文。
+- [x] 右侧设置纸张、标题、第一/第三角、比例、基准方向；预览在画布跟随鼠标，单击定位，Enter 通过一个事务提交整组，Esc 撤销整组临时预览。
+- [x] GREEN 跑同组及现有 toolbar/workspace_console/草图关闭回归；真实桌面验证窄窗与浮动面板，截图说明画布空间。草图 DIM→0 工具切换既有规则仍通过。
 
 ### Task 5: T5 — 视图句柄、对齐与更新
 

@@ -114,7 +114,7 @@ def drawing_object_mapping(
                 "up": list(value.basis.up),
                 "normal": list(value.basis.normal),
             },
-            "parent_id": None if value.parent_id is None else str(value.parent_id),
+            **({"parent_id": str(value.parent_id)} if value.parent_id is not None else {}),
             "direction": value.direction,
             "anchor_mm": list(value.anchor_mm),
             "offset_mm": list(value.offset_mm),
@@ -133,7 +133,7 @@ def drawing_object_mapping(
             {
                 "kind": ref.kind,
                 "parameters": dict(ref.parameters),
-                "owner_command": ref.owner_command,
+                **({"owner_command": ref.owner_command} if ref.owner_command is not None else {}),
                 "role": ref.role,
             }
             for ref in value.references

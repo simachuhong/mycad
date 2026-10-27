@@ -130,3 +130,19 @@ def test_projected_orientation_follows_parent() -> None:
     assert services.kernel.drawing_state.effective_basis(UUID(child)) == projected_basis(
         basis, "top"
     )
+
+
+def test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli() -> None:
+    from mycad.commands.grammar import parse_line, to_cli
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    params = drawing_object_mapping(DrawingView(uuid4(), sheet))
+    loaded.bus.execute("drawing.view.create", params)
+    assert parse_line(
+        to_cli("drawing.view.create", params, services.registry), services.registry
+    ) == ("drawing.view.create", params)

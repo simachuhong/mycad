@@ -1,0 +1,68 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli ________
+
+    def test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli() -> None:
+        from mycad.commands.grammar import parse_line, to_cli
+        from mycad.core.drawing import DrawingView
+        from mycad.core.drawing_codec import drawing_object_mapping
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        sheet = uuid4()
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id":str(sheet)})
+        params = drawing_object_mapping(DrawingView(uuid4(),sheet))
+>       loaded.bus.execute("drawing.view.create", params)
+
+tests/core/test_drawing_commands.py:145: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/bus.py:303: in execute
+    result = self._execute_one(
+src/mycad/core/bus.py:349: in _execute_one
+    validated = validate_params(spec, dict(params), defs=self._registry.schema_defs)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/mycad/commands/validation.py:371: in validate_params
+    result = _validate(spec.params_schema, params, [], table)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/mycad/commands/validation.py:194: in _validate
+    return _validate_one_of(schema_dict["oneOf"], value, path, defs, active_refs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+branches = [{'type': 'object', 'properties': {'view_id': {'type': 'string'}, 'sheet_id': {'type': 'string'}, 'source': {'type': '... 'additionalProperties': False}, 'minItems': 1, 'maxItems': 6}}, 'required': ['views'], 'additionalProperties': False}]
+value = {'view_id': '8e9cf025-628a-4245-8462-ef08ce2fc388', 'sheet_id': '0332799b-27e3-4bf8-9726-5a79136bc8b9', 'source': {'kind': 'current_part'}, 'basis': {'right': [1, 0, 0], 'up': [0, 0, 1], 'normal': [0, -1, 0]}, ...}
+path = []
+defs = {'BodySelector': {'type': 'object', 'required': ['volume_mm3', 'center_mm', 'bounds_mm'], 'additionalProperties': Fals...'additionalProperties': False, 'properties': {'type': {'const': 'face'}, 'target_face': {'oneOf': [...]}}, ...}]}, ...}
+active_refs = ()
+
+    def _validate_one_of(
+        branches: object,
+        value: object,
+        path: list[str],
+        defs: Mapping[str, object],
+        active_refs: tuple[str, ...],
+    ) -> object:
+        if not isinstance(branches, list) or not branches:
+            raise ValidationError(f"{_path_str(path)}: oneOf requires a non-empty array of subschemas")
+        branch_list = cast("list[object]", branches)
+        where = _path_str(path)
+        filled: list[object] = []
+        errors: list[str] = []
+        for index, branch in enumerate(branch_list):
+            try:
+                filled.append(_validate(branch, value, path, defs, active_refs))
+            except ValidationError as exc:
+                errors.append(f"[{index}] {exc.message}")
+        if len(filled) == 1:
+            return filled[0]
+        if not filled:
+>           raise ValidationError(
+                f"{where}: oneOf matched no branch (expected exactly 1); "
+                f"branch errors: {'; '.join(errors)}"
+            )
+E           mycad.core.exceptions.ValidationError: : oneOf matched no branch (expected exactly 1); branch errors: [0] parent_id: oneOf matched no branch (expected exactly 1); branch errors: [0] parent_id: expected string, got null; [1] parent_id: unsupported type 'null' in schema; [1] views: required key is missing
+
+src/mycad/commands/validation.py:239: ValidationError
+=========================== short test summary info ============================
+FAILED tests/core/test_drawing_commands.py::test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli
+1 failed in 9.25s

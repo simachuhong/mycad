@@ -1,0 +1,70 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______________ test_changed_model_pauses_uncommitted_placement ________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x72e7b0cf8290>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x72e7e9e2adb0>
+
+    
+    def test_changed_model_pauses_uncommitted_placement(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 10, "size_z": 5})
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())})
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        bench.begin_placement()
+        placement = bench.placement
+        assert placement is not None
+        placement.click((90, 140))
+        bench.canvas.placing = True
+>       loaded.bus.execute("feature.box", {"size_x": 30, "size_y": 10, "size_z": 5})
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert not True
+E        +  where True = <mycad.ui.drawing_canvas.DrawingCanvas(0x41df6430) at 0x72e7b0cf7d00>.placing
+E        +    where <mycad.ui.drawing_canvas.DrawingCanvas(0x41df6430) at 0x72e7b0cf7d00> = <mycad.ui.drawing_workbench.DrawingWorkbench(0x4659e6b0) at 0x72e7b0d048c0>.canvas
+
+tests/ui/test_drawing_views.py:167: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+__________ test_pending_engineering_group_blocks_document_replacement __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x72e7b0cf8b90>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x72e7b0d87290>
+
+        bench.cancel_placement()
+    
+    
+    def test_pending_engineering_group_blocks_document_replacement(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())})
+        loaded.document.mark_clean()
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+>       bench = window.drawing_workbench
+E       assert not True
+E        +  where True = _confirm_unsaved_changes()
+E        +    where _confirm_unsaved_changes = <mycad.ui.main_window.MainWindow(0x46733700) at 0x72e7b0d6a000>._confirm_unsaved_changes
+
+tests/ui/test_drawing_views.py:188: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_views.py::test_changed_model_pauses_uncommitted_placement
+FAILED tests/ui/test_drawing_views.py::test_pending_engineering_group_blocks_document_replacement
+2 failed in 13.13s

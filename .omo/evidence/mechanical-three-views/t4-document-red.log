@@ -1,0 +1,30 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_new_document_clears_previous_sheet_canvas ________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7dc31e706ff0>
+
+    def test_new_document_clears_previous_sheet_canvas(qtbot: QtBot) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        loaded = new_document(services)
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id":str(uuid4())})
+        window.bind_document(loaded)
+        assert window.drawing_workbench.canvas.drawing_scene is not None
+        window.bind_document(new_document(services))
+>       assert window.drawing_workbench.canvas.drawing_scene is None
+E       AssertionError: assert DrawingScene(sheet_id=UUID('ffc51230-317c-48cc-b6d9-4874ad2be4c0'), size_mm=(297.0, 210.0), margin_mm=10.0, title=(), views=(), annotations=(), issues=(), source_fingerprint='') is None
+E        +  where DrawingScene(sheet_id=UUID('ffc51230-317c-48cc-b6d9-4874ad2be4c0'), size_mm=(297.0, 210.0), margin_mm=10.0, title=(), views=(), annotations=(), issues=(), source_fingerprint='') = <mycad.ui.drawing_canvas.DrawingCanvas(0x40a363b0) at 0x7dc31e39d4c0>.drawing_scene
+E        +    where <mycad.ui.drawing_canvas.DrawingCanvas(0x40a363b0) at 0x7dc31e39d4c0> = <mycad.ui.drawing_workbench.DrawingWorkbench(0x4508e500) at 0x7dc31e78d440>.canvas
+E        +      where <mycad.ui.drawing_workbench.DrawingWorkbench(0x4508e500) at 0x7dc31e78d440> = <mycad.ui.main_window.MainWindow(0x3b956e60) at 0x7dc31e76a9c0>.drawing_workbench
+
+tests/ui/test_drawing_views.py:93: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_views.py::test_new_document_clears_previous_sheet_canvas
+1 failed in 11.21s

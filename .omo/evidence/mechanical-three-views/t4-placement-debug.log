@@ -1,0 +1,54 @@
+QOpenGLWidget is not supported on this platform.
+commit status 1 工程图操作失败：ValidationError: : oneOf matched no branch (expected exactly 1); branch errors: [0] view_id: required key is missing; [1] views.0.parent_id: oneOf matched no branch (expected exactly 1); branch errors: [0] views.0.parent_id: expected string, got null; [1] views.0.parent_id: unsupported type 'null' in schema <mycad.ui.drawing_tools.ViewPlacement object at 0x7d17a0637bc0>
+F
+=================================== FAILURES ===================================
+_______________________ test_canvas_group_enter_and_undo _______________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d17a06369c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7d17d97ffb30>
+
+    def test_canvas_group_enter_and_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+        from PySide6.QtCore import QPointF, Qt
+    
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_projection import LineCurve, ProjectedCurve, ProjectionResult
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        loaded = new_document(services)
+        sheet = uuid4()
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+        window.bind_document(loaded)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench.begin_placement()
+        placement = bench.placement
+        assert placement is not None
+        for identity in (
+            placement.base_id,
+            *(placement.projected_id(d) for d in ("top", "bottom", "left", "right")),
+        ):
+            bench.projections[identity] = ProjectionResult(
+                identity, "fixture", 1, (ProjectedCurve("line", LineCurve((0, 0), (20, 0))),)
+            )
+        bench.canvas.placing = True
+        for point in (QPointF(90, -140), QPointF(90, -70)):
+            qtbot.mouseClick(
+                bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=bench.canvas.mapFromScene(point)
+            )
+        assert len(loaded.document.commands) == 1
+        assert len(placement.pending) == 2, (placement.pending, bench.hint.text())
+        qtbot.keyClick(bench.canvas, Qt.Key.Key_Return)
+        qtbot.wait(300)
+        print("commit status", len(loaded.document.commands), bench.hint.text(), bench.placement)
+>       qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and bench.placement is None)
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 5000 milliseconds
+
+tests/ui/test_drawing_views.py:76: TimeoutError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_views.py::test_canvas_group_enter_and_undo - pyt...
+1 failed in 16.43s

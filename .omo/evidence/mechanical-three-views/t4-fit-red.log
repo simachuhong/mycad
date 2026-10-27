@@ -1,0 +1,37 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_opened_sheet_fits_on_first_activation_only ________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x710e7b5cb440>
+
+    def test_opened_sheet_fits_on_first_activation_only(qtbot: QtBot) -> None:
+        from PySide6.QtCore import QRectF
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services=build_app(discoverers=[])
+        loaded=new_document(services)
+        loaded.bus.execute("drawing.sheet.create",{"sheet_id":str(uuid4())})
+        window=MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        qtbot.wait(50)
+        canvas=window.drawing_workbench.canvas
+        paper=canvas.mapFromScene(QRectF(0,-210,297,210)).boundingRect()
+>       assert paper.height() > canvas.viewport().height()*.8
+E       assert 426 > (650 * 0.8)
+E        +  where 426 = <built-in method height of PySide6.QtCore.QRect object at 0x710e7b4b4600>()
+E        +    where <built-in method height of PySide6.QtCore.QRect object at 0x710e7b4b4600> = PySide6.QtCore.QRect(264, 112, 603, 426).height
+E        +  and   650 = <built-in method height of PySide6.QtWidgets.QWidget object at 0x710e7b4cc100>()
+E        +    where <built-in method height of PySide6.QtWidgets.QWidget object at 0x710e7b4cc100> = <PySide6.QtWidgets.QWidget(0x27c7bfc0) at 0x710e7b4cc100>.height
+E        +      where <PySide6.QtWidgets.QWidget(0x27c7bfc0) at 0x710e7b4cc100> = <built-in method viewport of DrawingCanvas object at 0x710e7b4c7880>()
+E        +        where <built-in method viewport of DrawingCanvas object at 0x710e7b4c7880> = <mycad.ui.drawing_canvas.DrawingCanvas(0x235f00e0) at 0x710e7b4c7880>.viewport
+
+tests/ui/test_drawing_views.py:225: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_views.py::test_opened_sheet_fits_on_first_activation_only
+1 failed in 14.36s

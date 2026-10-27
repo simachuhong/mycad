@@ -176,3 +176,18 @@ def test_edge_on_circular_boundaries_are_exact_line_segments() -> None:
     result = project_shape(Cylinder(5, 12), request((0, -1, 0), (0, 0, 1)))
     assert len(result.curves) == 4
     assert all(isinstance(c.geometry, LineCurve) for c in result.curves)
+
+
+def test_periodic_source_is_normalized_without_losing_closed_curve() -> None:
+    from build123d import Edge
+
+    from mycad.core.drawing_projection import SplineCurve
+
+    edge = Edge.make_spline([(0, 0, 0), (10, 2, 0), (8, 15, 0), (-4, 9, 0)], periodic=True)
+    result = project_shape(edge, request())
+    assert not result.diagnostics
+    assert len(result.curves) == 1
+    curve = result.curves[0].geometry
+    assert isinstance(curve, SplineCurve)
+    assert not curve.periodic
+    assert curve.poles[0] == pytest.approx(curve.poles[-1])

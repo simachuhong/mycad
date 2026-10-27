@@ -1,0 +1,35 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-10-27-mechanical-three-views.md
+
+Baseline: 77ca873. User authorized checkpoint of existing work and T0 followed by remaining stages if T0 passes, 2026-10-27.
+Ruling: Work in existing codex/phase2-foundation checkout after requested baseline commit — preserves live MyCAD testing path and existing uv environment; no new worktree without need. Cost if wrong: simultaneous edits need reconciliation.
+Baseline verification: tests/test_layering.py 6 passed; tracked source diff whitespace check clean. Staged checkpoint retained historical raw logs/diffs with whitespace warnings; no claim of full baseline suite.
+Pre-flight: T1 -> T2/T3 DTO and reducer, matching contract; T2 -> T4/T5 commands, matching; T3 -> T5/T6 projection/result/ref, matching; T5/T6 -> T7 scene/export, matching; T4-T7 -> T8 full workflow, matching.
+Task T0: in progress. Gate first; no product wiring before HLR provenance, correctness and responsiveness verified.
+Ruling: T0 probes characterize installed backend and current architecture; new helper tests are written first, while direct backend characterization can pass initially. No production implementation until a failing test demonstrates its need. Cost if wrong: probe evidence insufficient and T0 must be extended.
+
+Ruling: Normalize T0–T8 headings to Task 0–8 for task-start parser; scope unchanged. The first parser invocation exited 3 with no side effects.
+
+Task 0: Ruling: HLR reconstructs faces; use explicit NewSOldS history before source filtering. Cylinder seam can be a visible boundary; assert physical silhouette, not internal bucket counts. Wrong-assumption cost: lost geometry or misbound dimensions.
+Task 0: Ruling: QThread HLR fails heartbeat gate (up to1.143s); spawn process passes (~0.102s). Adopt persistent process with asynchronous prewarm for T3/T5. Cold startup not yet ≤3s; expose preparation state and measure separately. Cost:4–6 extra person-days, ~600MiB child peak, full DTO IPC still needs validation.
+Task 0: Ruling: Add minimal external OCCT declarations in existing typings excluded-from-ruff tree; no source ignore or configuration relaxation. Cost: maintain signatures against pinned version.
+Task 0: complete (commits 77ca873..77ca873, tests: uv run pytest tests/geom/test_drawing_projection_probe.py tests/geom/test_drawing_history_probe.py tests/ui/test_drawing_execution_probe.py tests/test_layering.py -q → 27 passed in 51.53s)
+Task 1: complete (commits 6956492..6956492, tests: uv run pytest tests/core/test_drawing_model.py tests/core/test_drawing_coordinates.py tests/test_layering.py -q → 27 passed in 7.75s)
+
+Task 1: verified 27 scoped tests plus lint/format/type. Persistent identities use UUID objects, encoded to canonical strings at command boundary. Aligned child offset_mm is relative to parent; anchor_mm is used when detached.
+Task 2: Ruling: Existing execute_batch is atomic on failure but undo removes one command. Make drawing.view.create/update accept a views array for atomic one-history-entry group placement, in addition to single view arguments. Keep sheets separately created. Cost if wrong: group edit/undo behavior mismatch; add explicit one-undo regression test.
+
+Task 2: verified CLI group roundtrip, confirmed Plan rollback, parent orientation propagation, annotation cascade undo/open, unknown command version rejection without replacing live state. Engineering edits retain geometry revision, mesh identity, body provenance and current model feature. New affected-object roles make the same commands available to explicit confirmed plans.
+Task 2: complete (commits fdf2d0e..fdf2d0e, tests: uv run pytest tests/core/test_drawing_commands.py tests/core/test_drawing_archive.py tests/geom/test_drawing_state.py -q → 9 passed in 7.94s)
+Task 3: complete (commits 1c52760..1c52760, tests: uv run pytest tests/geom/test_drawing_projection.py -q → 8 passed in 7.21s)
+
+Task 3: Ruling: Process worker transport is implemented with the adapter now, rather than postponing its full DTO cost to T5. Immutable BREP bytes + fingerprint enter a persistent spawn process; UI lifecycle and stale-result publication remain T5. Cost if wrong: increased startup/RAM, now exposed in measurements.
+Task 3: Ruling: Source lookup accelerates explicit HLR NewSOldS history with hashes plus IsSame validation; no indexed persistent identity. Exact spline data replaces five-sample dedup; collinear positive-weight splines are only reduced when their whole pole hull lies on the endpoint segment. Cost if wrong: geometry loss; adversarial spline/cylinder tests cover both.
+Task 3: 10 adapter/IPC tests passed; 900-edge complete three-view DTO pipeline 2.983s, limited margin. 22 GUI heartbeat/T0 geometry/layering regressions passed, scoped lint/format/type green. Details in implementation.md and raw logs.
+
+Task 4: in progress (base 58a51cf). Added permanent WorkspaceTabs, direct canvas ViewPlacement, DrawingWorkbench with floating settings/tree and shared execution/process integration. Replaced all MainWindow centralWidget identity routing with active_workspace, preserving editor/model objects. 96 existing/scoped GUI regressions passed (t4-regressions.log); real model three-view canvas placement passed (t4-real.log), screenshot inspected. No T4 completion claim yet.
+Task 4: Ruling: Preserve drawing2d spatial-preview 3D tab as spec §4 requires; only engineering generation and solid modeling are disabled. Initial test incorrectly disabled the whole tab; corrected before commit. Cost if wrong: legacy 2D preview regression (covered by toolbar/workbench regressions).
+Task 4: Integration exposed nullable DTO fields incompatible with fixed JSON-schema subset. Changed nullable schema branch to supported const:null and omit absent optional references in serializer so full DTO CLI roundtrip works; failing full-DTO test now passes.
+Task 4 remaining: finish field settings/title and source-change pause validation, ensure initial sheet fit and no clipped hints, real desktop narrow/floating screenshot, final scoped typing/lint + commit. T5 worker stale/caching/failure behavior currently preliminary; do not treat as completed. Canvas periodic spline rejects unnormalized data instead of drawing false control polygon; backend periodic-source normalization characterization passed (t4-canvas.log).
+Task 4: complete (commits 58a51cf..58a51cf, tests: uv run pytest tests/ui/test_workspace_tabs.py tests/ui/test_drawing_views.py tests/core/test_drawing_commands.py tests/core/test_drawing_archive.py tests/test_layering.py -q → 27 passed in 35.33s)
+
+Task 4: final GUI follow-up fixed first activation fit (RED→GREEN t4-fit-red/green.log), preserving later zoom; strict typing green. Real X11 normal/narrow/floating screenshots inspected. Shared console now opens collapsed in engineering; dynamic hints removed from right form to prevent clipped duplicated messages. Current commit pending final changed-path checks.
