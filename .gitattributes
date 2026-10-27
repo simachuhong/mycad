@@ -8,3 +8,6 @@
 # files that are format-clean on Linux. Git's auto-detection leaves
 # binaries (e.g. .omo/evidence/spike/flange.stl) untouched.
 * text=auto eol=lf
+
+# PDF may begin with a long textual object table; never normalize its streams.
+*.pdf binary
