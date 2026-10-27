@@ -193,12 +193,12 @@
 
 **Interfaces:** 完整用户流程与前述模块一致，不加临时演示专用路径。
 
-- [ ] 写贯通测试：打开法兰→切工程图→第一角主俯左→标孔径→切3D修改孔径→更新→存档重开→撤销/重做→DXF/PDF 数值一致；第二例用不对称阶梯件区分左右/上下。
-- [ ] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_mechanical_three_views.py -q`，先见 RED，再修复真实接线缺口至 GREEN。
-- [ ] 验证未提交草图跨页保留、右侧图形信息页/浮动设置、底部 CLI/未连接 AI/计划共用，以及 .my2d 原有自由绘图路径。
-- [ ] 按设计样本矩阵验收：盲/沉孔、圆角、斜孔、重复孔、多实体遮挡、复杂曲线、空/非法模型；记录失败样本，不能用正方体截图代替。
-- [ ] 完成改动路径四门后，最终集成只跑一次全量 `uv run ruff check .`、`uv run ruff format --check .`、`uv run basedpyright`、`QT_QPA_PLATFORM=offscreen uv run pytest -q`。区分基线既有问题和本功能回归；Windows 门由 CI 验证，不把本机通过等同跨平台通过。
-- [ ] 写用户操作指南、首版限制和实际性能；记录 P0/P1 发布判断、手工验收与证据。只有关联、更新、存档、出图全部过门才标完整首版交付。
+- [x] 写贯通测试：打开法兰→切工程图→第一角主俯左→标孔径→切3D修改孔径→更新→存档重开→撤销/重做→DXF/PDF 数值一致；第二例用不对称阶梯件区分左右/上下。
+- [x] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_mechanical_three_views.py -q`，先见 RED，再修复真实接线缺口至 GREEN。
+- [x] 验证未提交草图跨页保留、右侧图形信息页/浮动设置、底部 CLI/未连接 AI/计划共用，以及 .my2d 原有自由绘图路径。
+- [x] 按设计样本矩阵验收：盲/沉孔、圆角、斜孔、重复孔、多实体遮挡、复杂曲线、空/非法模型；记录失败样本，不能用正方体截图代替。
+- [x] 完成改动路径四门后，最终集成只跑一次全量 `uv run ruff check .`、`uv run ruff format --check .`、`uv run basedpyright`、`QT_QPA_PLATFORM=offscreen uv run pytest -q`。区分基线既有问题和本功能回归；Windows 门由 CI 验证，不把本机通过等同跨平台通过。
+- [x] 写用户操作指南、首版限制和实际性能；记录 P0/P1 发布判断、手工验收与证据。只有关联、更新、存档、出图全部过门才标完整首版交付。
 
 ## 计划自查与交付口径
 

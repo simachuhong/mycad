@@ -1,0 +1,240 @@
+........................................................................ [  3%]
+........................................................................ [  6%]
+.FFF.................................................................... [ 10%]
+........................................................................ [ 13%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+.................................FF..................................... [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 34%]
+........................................................................ [ 37%]
+........................................................................ [ 41%]
+........................................................................ [ 44%]
+........................................................................ [ 48%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 58%]
+........................................................................ [ 61%]
+........................................................................ [ 65%]
+.F...................................................................... [ 68%]
+..............................................FF.F...................... [ 72%]
+........................................................................ [ 75%]
+..................F..................................................... [ 79%]
+........................................................................ [ 82%]
+........................................................................ [ 85%]
+........................................................................ [ 89%]
+........................................................................ [ 92%]
+........................................................................ [ 96%]
+........................................................................ [ 99%]
+.......                                                                  [100%]
+=================================== FAILURES ===================================
+__________________ test_commands_lists_all_released_builtins ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76379f14bfb0>
+capsys = <_pytest.capture.CaptureFixture object at 0x76379f14b6e0>
+
+    def test_commands_lists_all_released_builtins(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+>       assert len(lines) == 17
+E       AssertionError: assert 26 == 17
+E        +  where 26 = len(['\tdrawing.layers.set\tSet shared drawing layers and dimension defaults', '\tsketch.constraint.add\tConstrain a sketc...elected solid body', 'body-transform\tmodify.body_transform\tMove, rotate, mirror, or copy a selected solid body', ...])
+
+tests/cli/test_commands_plugins.py:69: AssertionError
+___________________________ test_commands_json_shape ___________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76379f15cfe0>
+capsys = <_pytest.capture.CaptureFixture object at 0x76379f15e060>
+
+    def test_commands_json_shape(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands", "--json"]) == 0
+        raw = capsys.readouterr().out
+        payload = json.loads(raw)
+        assert set(payload) == {"commands"}
+        commands = payload["commands"]
+>       assert len(commands) == 17
+E       AssertionError: assert 26 == 17
+E        +  where 26 = len([{'verb': '', 'id': 'drawing.layers.set', 'summary_en': 'Set shared drawing layers and dimension defaults', 'label_zh'...'modify.body_transform', 'summary_en': 'Move, rotate, mirror, or copy a selected solid body', 'label_zh': '实体变换'}, ...])
+
+tests/cli/test_commands_plugins.py:92: AssertionError
+___________________ test_commands_lists_plugin_contributions ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76379f187ef0>
+capsys = <_pytest.capture.CaptureFixture object at 0x76379f1873b0>
+
+    def test_commands_lists_plugin_contributions(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A plugin-contributed command is visible to ``commands``, not just to the REPL.
+    
+        Driven through ``main`` on purpose: the subcommand must build the app
+        with real discovery enabled, which a direct ``CliSession`` call cannot
+        prove.
+        """
+    
+        def _one_plugin(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
+            return (_demo_plugin(),)
+    
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
+        assert main(["commands"]) == 0
+        rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+>       assert len(rows) == 18
+E       AssertionError: assert 27 == 18
+E        +  where 27 = len([['', 'drawing.layers.set', 'Set shared drawing layers and dimension defaults'], ['', 'sketch.constraint.add', 'Constr... solid body'], ['body-transform', 'modify.body_transform', 'Move, rotate, mirror, or copy a selected solid body'], ...])
+
+tests/cli/test_commands_plugins.py:122: AssertionError
+____________ test_affected_object_literal_locked_to_thirteen_values ____________
+
+    def test_affected_object_literal_locked_to_thirteen_values() -> None:
+        args = typing.get_args(AffectedObject)
+        assert isinstance(args, tuple)
+>       assert args == EXPECTED_AFFECTED
+E       AssertionError: assert ('box_body', ...pattern', ...) == ('box_body', ...pattern', ...)
+E         
+E         Left contains 3 more items, first extra item: 'drawing_sheet'
+E         Use -v to get more diff
+
+tests/core/test_document_dtos.py:78: AssertionError
+___________________ test_affected_objects_table_locked_to_b2 ___________________
+
+    def test_affected_objects_table_locked_to_b2() -> None:
+>       assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
+E       AssertionError: assert {'feature.box...ed_body', ...} == {'feature.box...ed_body', ...}
+E         
+E         Omitting 13 identical items, use -vv to show
+E         Left contains 9 more items:
+E         {'drawing.annotation.create': 'drawing_annotation',
+E          'drawing.annotation.delete': 'drawing_annotation',
+E          'drawing.annotation.update': 'drawing_annotation',
+E          'drawing.sheet.create': 'drawing_sheet',...
+E         
+E         ...Full output truncated (6 lines hidden), use '-vv' to show
+
+tests/core/test_document_dtos.py:83: AssertionError
+_______________ test_adr_dir_holds_exactly_eleven_numbered_files _______________
+
+    def test_adr_dir_holds_exactly_eleven_numbered_files() -> None:
+        files = _adr_files()
+        assert files, "docs/adr/ does not exist or holds no files"
+        numbers: list[str] = []
+        for path in files:
+            match = FILENAME_RE.match(path.name)
+>           assert match is not None, f"unexpected file name in docs/adr/: {path.name}"
+E           AssertionError: unexpected file name in docs/adr/: ADR-012-engineering-drawing-workspace.md
+E           assert None is not None
+
+tests/test_adr_docs.py:128: AssertionError
+__________________ test_all_released_builtins_appear_grouped ___________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x4de72620) at 0x763796a67c40>
+
+    def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
+        assert palette.tree.topLevelItemCount() == 4
+        assert _group_titles(palette) == {"图纸", "创建特征", "修改", "草图"}
+        ids = _all_leaf_ids(palette)
+>       assert len(ids) == len(RELEASED_BUILTIN_IDS)
+E       AssertionError: assert 26 == 17
+E        +  where 26 = len(['drawing.annotation.create', 'drawing.annotation.delete', 'drawing.annotation.update', 'drawing.layers.set', 'drawing.sheet.create', 'drawing.sheet.delete', ...])
+E        +  and   17 = len(frozenset({'drawing.layers.set', 'feature.box', 'feature.cylinder', 'feature.extrude', 'feature.hole', 'feature.hole_pattern', ...}))
+
+tests/ui/test_command_palette.py:91: AssertionError
+_________ test_independent_drawing_palette_only_shows_drawing_commands _________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x4d7cde50) at 0x763796d9a6c0>
+
+    def test_independent_drawing_palette_only_shows_drawing_commands(
+        palette: CommandPalette,
+    ) -> None:
+        palette.set_document_type("drawing2d")
+        assert set(_all_leaf_ids(palette)) == {
+            "drawing.layers.set",
+            "sketch.create",
+            "sketch.constraint.add",
+            "sketch.constraint.update",
+        }
+        palette.set_document_type("part")
+>       assert set(_all_leaf_ids(palette)) == RELEASED_BUILTIN_IDS
+E       AssertionError: assert {'drawing.ann....delete', ...} == frozenset({'d...attern', ...})
+E         
+E         Extra items in the left set:
+E         'drawing.annotation.update'
+E         'drawing.sheet.update'
+E         'drawing.view.update'
+E         'drawing.view.create'
+E         'drawing.sheet.delete'...
+E         
+E         ...Full output truncated (5 lines hidden), use '-vv' to show
+
+tests/ui/test_command_palette.py:106: AssertionError
+_____________________ test_search_matches_id_and_zh_label ______________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x4efd2500) at 0x7637951a8700>
+qapp = <PySide6.QtWidgets.QApplication(0x4abed210) at 0x76379cb1a840>
+
+    def test_search_matches_id_and_zh_label(
+        palette: CommandPalette,
+        qapp: object,
+    ) -> None:
+        assert palette.apply_filter("hole") == 2
+        visible = [id_ for id_ in _all_leaf_ids(palette) if not _leaf_is_hidden(palette, id_)]
+        assert set(visible) == {"feature.hole", "feature.hole_pattern"}
+        # The zh query hits the same pair through label_zh (register.search
+        # excludes zh by design — the palette is the reason it must work).
+        assert palette.apply_filter("孔") == 2
+>       assert palette.apply_filter("") == len(RELEASED_BUILTIN_IDS)
+E       AssertionError: assert 26 == 17
+E        +  where 26 = apply_filter('')
+E        +    where apply_filter = <mycad.ui.command_palette.CommandPalette(0x4efd2500) at 0x7637951a8700>.apply_filter
+E        +  and   17 = len(frozenset({'drawing.layers.set', 'feature.box', 'feature.cylinder', 'feature.extrude', 'feature.hole', 'feature.hole_pattern', ...}))
+
+tests/ui/test_command_palette.py:134: AssertionError
+________________ test_reference_rotation_uses_from_and_to_rays _________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x76379d307470>
+
+    def test_reference_rotation_uses_from_and_to_rays(qtbot: QtBot) -> None:
+        editor, line = _editor(qtbot)
+        canvas = editor.canvas
+        editor.rotation_reference_check.setChecked(True)
+        editor.transform_buttons["rotate"].click()
+        for point in ((10.0, 10.0), (10.0, 30.0)):
+            QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen(point))
+        assert tuple(canvas.entities) == (line,)
+        assert canvas.has_active_edit_gesture
+        _hover(canvas, (-10.0, 10.0))
+        assert tuple(canvas.entities) == (line,)
+        QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((-10.0, 10.0)))
+        rotated = canvas.entities[0]
+        assert isinstance(rotated, LineEntity)
+>       assert rotated.start_mm == pytest.approx((10.0, 20.0))
+E       assert (9.9, 19.9) == approx((10.0 ....0 ± 2.0e-05))
+E         
+E         comparison failed. Mismatched elements: 2 / 2:
+E         Max absolute difference: 0.10000000000000142
+E         Max relative difference: 0.010101010101010065
+E         Index | Obtained | Expected      
+E         0     | 9.9      | 10.0 ± 1.0e-05
+E         1     | 19.9     | 20.0 ± 2.0e-05
+
+tests/ui/test_drafting_interaction_repairs.py:102: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_all_released_builtins
+FAILED tests/cli/test_commands_plugins.py::test_commands_json_shape - Asserti...
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_plugin_contributions
+FAILED tests/core/test_document_dtos.py::test_affected_object_literal_locked_to_thirteen_values
+FAILED tests/core/test_document_dtos.py::test_affected_objects_table_locked_to_b2
+FAILED tests/test_adr_docs.py::test_adr_dir_holds_exactly_eleven_numbered_files
+FAILED tests/ui/test_command_palette.py::test_all_released_builtins_appear_grouped
+FAILED tests/ui/test_command_palette.py::test_independent_drawing_palette_only_shows_drawing_commands
+FAILED tests/ui/test_command_palette.py::test_search_matches_id_and_zh_label
+FAILED tests/ui/test_drafting_interaction_repairs.py::test_reference_rotation_uses_from_and_to_rays
+10 failed, 2085 passed in 1168.65s (0:19:28)

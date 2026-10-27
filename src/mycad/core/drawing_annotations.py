@@ -32,6 +32,7 @@ class SceneAnnotation:
     curves: tuple[CurveGeometry, ...] = ()
     status: ReferenceStatus = "resolved"
     message: str = ""
+    layer: str = "DIM"
 
 
 def _point(curve: CurveGeometry, role: str) -> Point2:
@@ -74,6 +75,7 @@ def resolve_annotation(
             None,
             status=status,
             message=message,
+            layer=annotation.layer,
         )
 
     selected: list[CurveGeometry] = []
@@ -224,4 +226,5 @@ def _layout(
         value,
         anchors,
         tuple(lines),
+        layer="CENTER" if kind == "center" else annotation.layer,
     )

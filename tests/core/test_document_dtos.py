@@ -32,6 +32,9 @@ EXPECTED_AFFECTED: tuple[str, ...] = (
     "body_pair",
     "body_transform",
     "body_pattern",
+    "drawing_sheet",
+    "drawing_view",
+    "drawing_annotation",
 )
 
 EXPECTED_B2: dict[str, str] = {
@@ -48,6 +51,15 @@ EXPECTED_B2: dict[str, str] = {
     "modify.boolean_bodies": "body_pair",
     "modify.body_transform": "body_transform",
     "modify.body_pattern": "body_pattern",
+    "drawing.sheet.create": "drawing_sheet",
+    "drawing.sheet.update": "drawing_sheet",
+    "drawing.sheet.delete": "drawing_sheet",
+    "drawing.view.create": "drawing_view",
+    "drawing.view.update": "drawing_view",
+    "drawing.view.delete": "drawing_view",
+    "drawing.annotation.create": "drawing_annotation",
+    "drawing.annotation.update": "drawing_annotation",
+    "drawing.annotation.delete": "drawing_annotation",
 }
 
 
@@ -72,7 +84,7 @@ def _executed() -> ExecutedCommand:
     )
 
 
-def test_affected_object_literal_locked_to_thirteen_values() -> None:
+def test_affected_object_literal_locked_to_sixteen_values() -> None:
     args = typing.get_args(AffectedObject)
     assert isinstance(args, tuple)
     assert args == EXPECTED_AFFECTED
@@ -81,7 +93,7 @@ def test_affected_object_literal_locked_to_thirteen_values() -> None:
 
 def test_affected_objects_table_locked_to_b2() -> None:
     assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
-    assert len(set(AFFECTED_OBJECTS.values())) == 13
+    assert len(set(AFFECTED_OBJECTS.values())) == 16
 
 
 def test_planned_command_unknown_id_raises_unknown_command_error() -> None:

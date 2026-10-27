@@ -81,6 +81,7 @@ def test_canvas_drag_is_preview_until_release_and_one_undo(
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     initial = state()
     loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
     loaded.bus.execute(
@@ -142,6 +143,7 @@ def test_delete_view_subtree_is_one_undo(qtbot: QtBot, monkeypatch: pytest.Monke
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     initial = state()
     loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
     loaded.bus.execute(
@@ -193,6 +195,7 @@ def test_external_delete_cancels_pending_delete(
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     initial = state()
     loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
     loaded.bus.execute(

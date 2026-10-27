@@ -107,7 +107,7 @@ def paint_drawing(painter: QPainter, scene: DrawingScene) -> None:
             painter.drawPath(curve_path(curve.geometry, tolerance=0.01 / view.scale))
         painter.restore()
     for annotation in scene.resolved_annotations:
-        painter.setPen(paper_pen("CENTER" if annotation.kind == "center" else "DIM"))
+        painter.setPen(paper_pen(annotation.layer))
         for curve in annotation.curves:
             painter.drawPath(curve_path(curve))
     for text in paper_texts(scene):

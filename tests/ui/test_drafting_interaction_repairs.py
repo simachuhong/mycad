@@ -90,6 +90,9 @@ def test_reference_rotation_uses_from_and_to_rays(qtbot: QtBot) -> None:
     canvas = editor.canvas
     editor.rotation_reference_check.setChecked(True)
     editor.transform_buttons["rotate"].click()
+    # Mouse events carry integer pixels: use the actual clicked pivot, while
+    # the two rays remain exactly perpendicular in screen/world coordinates.
+    cx, cy = canvas.screen_to_local(QPointF(canvas.local_to_screen((10.0, 10.0))))
     for point in ((10.0, 10.0), (10.0, 30.0)):
         QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen(point))
     assert tuple(canvas.entities) == (line,)
@@ -99,8 +102,8 @@ def test_reference_rotation_uses_from_and_to_rays(qtbot: QtBot) -> None:
     QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((-10.0, 10.0)))
     rotated = canvas.entities[0]
     assert isinstance(rotated, LineEntity)
-    assert rotated.start_mm == pytest.approx((10.0, 20.0))
-    assert rotated.end_mm == pytest.approx((10.0, 30.0))
+    assert rotated.start_mm == pytest.approx((cx + cy - 10.0, cy + 20.0 - cx))
+    assert rotated.end_mm == pytest.approx((cx + cy - 10.0, cy + 30.0 - cx))
 
 
 @pytest.mark.parametrize("keep_source", [True, False])

@@ -52,5 +52,9 @@ def paper_texts(scene: DrawingScene) -> tuple[PaperText, ...]:
         )
         for index, (key, value) in enumerate(scene.title)
     )
-    labels = tuple(PaperText(a.position_mm, a.text) for a in scene.resolved_annotations if a.text)
+    labels = tuple(
+        PaperText(a.position_mm, a.text, layer=a.layer)
+        for a in scene.resolved_annotations
+        if a.text
+    )
     return (*title, *labels)

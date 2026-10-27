@@ -358,6 +358,10 @@ class BuildKernel:
         checked = checked_mapping(params, command_id)
 
         if command_id.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation.")):
+            if command_id == "drawing.view.create" and (
+                self._part is None or not self._part.solids()
+            ):
+                raise ValidationError("生成工程视图需要有效实体", command_id=command_id)
             try:
                 candidate_drawing = apply_drawing_command(self._drawing_state, command_id, checked)
             except (ValueError, TypeError) as exc:

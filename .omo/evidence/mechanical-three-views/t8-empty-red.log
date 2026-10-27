@@ -1,0 +1,17 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_empty_model_cannot_create_view_or_change_history _____________
+
+    def test_empty_model_cannot_create_view_or_change_history() -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        sheet = str(uuid4())
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet})
+        before = tuple(loaded.document.commands)
+>       with pytest.raises(MycadError, match="实体|solid"):
+E       Failed: DID NOT RAISE MycadError
+
+tests/core/test_drawing_commands.py:157: Failed
+=========================== short test summary info ============================
+FAILED tests/core/test_drawing_commands.py::test_empty_model_cannot_create_view_or_change_history
+1 failed, 7 deselected in 9.94s

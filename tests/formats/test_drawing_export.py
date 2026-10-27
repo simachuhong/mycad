@@ -52,3 +52,24 @@ def test_invalid_scene_preserves_existing_file(tmp_path: Path) -> None:
         export_drawing_dxf(replace(drawing_scene(), issues=("请更新视图",)), path)
     assert path.read_bytes() == b"original"
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_annotation_layer_is_preserved_in_scene_and_dxf(tmp_path: Path) -> None:
+    from mycad.core.drawing_annotations import resolve_annotation
+    from mycad.core.drawing_paper import paper_texts
+    from mycad.core.drawing_projection import ProjectionResult
+
+    scene = drawing_scene()
+    annotation = replace(scene.annotations[0], layer="MEASURE")
+    # Resolve through the real shared path rather than decorating an output DTO.
+    view = scene.views[0]
+    resolved = resolve_annotation(
+        annotation, ProjectionResult(view.view_id, "fixture", 1, view.curves), view
+    )
+    assert resolved.layer == "MEASURE"
+    scene = replace(scene, annotations=(annotation,), resolved_annotations=(resolved,))
+    assert paper_texts(scene)[-1].layer == "MEASURE"
+    path = tmp_path / "layer.dxf"
+    export_drawing_dxf(scene, path)
+    data = tags(path)
+    assert (2, "MEASURE") in data and (8, "MEASURE") in data

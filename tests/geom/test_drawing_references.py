@@ -69,3 +69,27 @@ def test_source_count_uses_same_tolerance_as_reference_matching() -> None:
     b = DrawingGeometryReference("cylindrical_face", (("x", 0.51e-6),))
     counts = source_multiplicities((a, b))
     assert counts[source_key(a)] == counts[source_key(b)] == 2
+
+
+@pytest.mark.parametrize("mirrored", [False, True])
+def test_outer_and_inner_cylinders_keep_distinct_material_sides(mirrored: bool) -> None:
+    from build123d import Plane
+
+    shape = Cylinder(40, 8) - Cylinder(10, 20)
+    changed = Cylinder(45, 8) - Cylinder(12, 20)
+    if mirrored:
+        shape, changed = shape.mirror(Plane.YZ), changed.mirror(Plane.YZ)
+    before = project_shape(shape, request())
+    after = project_shape(changed, request())
+    for radius, expected in ((40, 45), (10, 12)):
+        curve = next(
+            c
+            for c in before.curves
+            if isinstance(c.geometry, ArcCurve) and abs(c.geometry.radius - radius) < 1e-6
+        )
+        reference = reference_for_curve(curve)
+        assert resolve_reference(reference, before).status == "resolved"
+        resolution = resolve_reference(reference, after)
+        assert resolution.status == "resolved"
+        new = next(c.geometry for c in after.curves if c.curve_id in resolution.curve_ids)
+        assert isinstance(new, ArcCurve) and new.radius == pytest.approx(expected)

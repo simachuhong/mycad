@@ -1,0 +1,26 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_annotation_layer_is_preserved_in_scene_and_dxf ______________
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-114/test_annotation_layer_is_prese0')
+
+    def test_annotation_layer_is_preserved_in_scene_and_dxf(tmp_path: Path) -> None:
+        from mycad.core.drawing_annotations import resolve_annotation
+        from mycad.core.drawing_paper import paper_texts
+        from mycad.core.drawing_projection import ProjectionResult
+    
+        scene = drawing_scene()
+        annotation = replace(scene.annotations[0], layer="MEASURE")
+        # Resolve through the real shared path rather than decorating an output DTO.
+        view = scene.views[0]
+        resolved = resolve_annotation(
+            annotation, ProjectionResult(view.view_id, "fixture", 1, view.curves), view
+        )
+>       assert resolved.layer == "MEASURE"
+               ^^^^^^^^^^^^^^
+E       AttributeError: 'SceneAnnotation' object has no attribute 'layer'
+
+tests/formats/test_drawing_export.py:69: AttributeError
+=========================== short test summary info ============================
+FAILED tests/formats/test_drawing_export.py::test_annotation_layer_is_preserved_in_scene_and_dxf
+1 failed, 3 deselected in 2.85s

@@ -203,6 +203,11 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
                 "linetype": line_type,
             },
         )
+    for name in sorted(
+        {a.layer for a in scene.resolved_annotations}
+        - {"VISIBLE", "HIDDEN", "TANGENT", "CENTER", "DIM", "FRAME", "0"}
+    ):
+        document.layers.new(name, dxfattribs={"color": 7, "true_color": 0x26313C, "lineweight": 18})
     document.styles.new("MyCAD", dxfattribs={"font": "NotoSansCJK-Regular.ttc"})
     document.header["$INSUNITS"] = 4
     document.header["$LWDISPLAY"] = True
@@ -224,7 +229,7 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
         _curve(paper, line, "FRAME")
     for annotation in scene.resolved_annotations:
         for geometry in annotation.curves:
-            _curve(paper, geometry, "CENTER" if annotation.kind == "center" else "DIM")
+            _curve(paper, geometry, annotation.layer)
     for text in paper_texts(scene):
         # Escape formatting controls: user text remains literal DXF MTEXT.
         literal = (

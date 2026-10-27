@@ -1,0 +1,36 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_reference_rotation_uses_from_and_to_rays _________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x78c2a6011760>
+
+    def test_reference_rotation_uses_from_and_to_rays(qtbot: QtBot) -> None:
+        editor, line = _editor(qtbot)
+        canvas = editor.canvas
+        editor.rotation_reference_check.setChecked(True)
+        editor.transform_buttons["rotate"].click()
+        for point in ((10.0, 10.0), (10.0, 30.0)):
+            QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen(point))
+        assert tuple(canvas.entities) == (line,)
+        assert canvas.has_active_edit_gesture
+        _hover(canvas, (-10.0, 10.0))
+        assert tuple(canvas.entities) == (line,)
+        QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((-10.0, 10.0)))
+        rotated = canvas.entities[0]
+        assert isinstance(rotated, LineEntity)
+>       assert rotated.start_mm == pytest.approx((10.0, 20.0))
+E       assert (9.9, 19.9) == approx((10.0 ....0 ± 2.0e-05))
+E         
+E         comparison failed. Mismatched elements: 2 / 2:
+E         Max absolute difference: 0.10000000000000142
+E         Max relative difference: 0.010101010101010065
+E         Index | Obtained | Expected      
+E         0     | 9.9      | 10.0 ± 1.0e-05
+E         1     | 19.9     | 20.0 ± 2.0e-05
+
+tests/ui/test_drafting_interaction_repairs.py:102: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_drafting_interaction_repairs.py::test_reference_rotation_uses_from_and_to_rays
+1 failed in 11.60s

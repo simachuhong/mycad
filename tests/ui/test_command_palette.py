@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "drawing.layers.set",
+        "drawing.sheet.create",
+        "drawing.sheet.update",
+        "drawing.sheet.delete",
+        "drawing.view.create",
+        "drawing.view.update",
+        "drawing.view.delete",
+        "drawing.annotation.create",
+        "drawing.annotation.update",
+        "drawing.annotation.delete",
         "feature.box",
         "feature.cylinder",
         "feature.extrude",

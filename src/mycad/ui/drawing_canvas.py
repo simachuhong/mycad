@@ -18,7 +18,13 @@ from PySide6.QtGui import (
     QShowEvent,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QWidget
+from PySide6.QtWidgets import (
+    QGraphicsItem,
+    QGraphicsPathItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QWidget,
+)
 
 from mycad.core.drawing_paper import PaperText, paper_texts, sheet_frame
 from mycad.core.drawing_projection import (
@@ -133,8 +139,12 @@ class DrawingCanvas(QGraphicsView):
                 previous = self._bounds.get(view.view_id)
                 self._bounds[view.view_id] = bounds if previous is None else previous.united(bounds)
         for annotation in scene.resolved_annotations:
-            color = QColor("#087589" if annotation.status == "resolved" else "#bc3540")
-            pen = paper_pen("CENTER" if annotation.kind == "center" else "DIM")
+            color = (
+                paper_pen(annotation.layer).color()
+                if annotation.status == "resolved"
+                else QColor("#bc3540")
+            )
+            pen = paper_pen(annotation.layer)
             pen.setColor(color)
             for geometry in annotation.curves:
                 item = graphics.addPath(curve_path(geometry), pen)
@@ -227,16 +237,55 @@ class DrawingCanvas(QGraphicsView):
                 return identity
         return None
 
+    def _pick_curve(self, position: QPoint) -> tuple[UUID, str] | None:
+        """Pick a visible stroke within five screen pixels, never a closed path's fill."""
+        best: tuple[UUID, str] | None = None
+        distance = 5.0
+        # QGraphicsPathItem.shape includes closed interiors even with NoBrush.
+        # Measure the rendered path in screen coordinates instead of accepting that fill.
+        area = QRectF(position.x() - 5, position.y() - 5, 10, 10).toRect()
+        for item in self.items(area):
+            identity, curve_id = item.data(0), item.data(1)
+            if (
+                not isinstance(item, QGraphicsPathItem)
+                or not isinstance(identity, UUID)
+                or not isinstance(curve_id, str)
+            ):
+                continue
+            path = self.viewportTransform().map(item.mapToScene(item.path()))
+            for polygon in path.toSubpathPolygons():
+                for index in range(1, polygon.count()):
+                    a, b = polygon.at(index - 1), polygon.at(index)
+                    dx, dy = b.x() - a.x(), b.y() - a.y()
+                    length_squared = dx * dx + dy * dy
+                    t = (
+                        0.0
+                        if length_squared == 0
+                        else max(
+                            0.0,
+                            min(
+                                1.0,
+                                ((position.x() - a.x()) * dx + (position.y() - a.y()) * dy)
+                                / length_squared,
+                            ),
+                        )
+                    )
+                    candidate = math.hypot(
+                        position.x() - a.x() - t * dx, position.y() - a.y() - t * dy
+                    )
+                    if candidate < distance:
+                        distance, best = candidate, (identity, curve_id)
+        return best
+
     @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self.annotation_mode and event.button() == Qt.MouseButton.LeftButton:
             point = self.paper_point(event.position())
-            for item in self.items(event.position().toPoint()):
-                identity, curve_id = item.data(0), item.data(1)
-                if isinstance(identity, UUID) and isinstance(curve_id, str):
-                    self.geometry_clicked.emit(identity, curve_id, point)
-                    event.accept()
-                    return
+            picked = self._pick_curve(event.position().toPoint())
+            if picked is not None:
+                self.geometry_clicked.emit(*picked, point)
+                event.accept()
+                return
             self.paper_clicked.emit(point)
             event.accept()
             return

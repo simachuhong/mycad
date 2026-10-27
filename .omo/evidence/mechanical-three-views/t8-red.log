@@ -1,0 +1,55 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_flange_three_views_measure_edit_reopen_undo_and_export __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7c64cfd90c50>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-110/test_flange_three_views_measur0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c64cfe863c0>
+
+    def test_flange_three_views_measure_edit_reopen_undo_and_export(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        plan = cast("dict[str, object]", json.loads(Path('examples/flange_plan.json').read_text()))
+        steps = cast("list[dict[str, object]]", plan['steps'])
+        for step in steps:
+            loaded.bus.execute(cast("str", step['id']), cast("dict[str, object]", step['params']), "test")
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.resize(1400, 900)
+        window.bind_document(loaded)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench = window.drawing_workbench
+        unit = window.execution_unit
+        assert unit is not None
+        bench.scale.setValue(0.5)
+        bench.title.setText("法兰三视图验收")
+        bench.begin_placement()
+        qtbot.waitUntil(lambda: bench.canvas.placing and not unit.is_busy, timeout=60000)
+        def click(x: float, y: float) -> None:
+            point = bench.canvas.mapFromScene(QPointF(x, -y))
+            QTest.mouseMove(bench.canvas.viewport(), point)
+            QTest.mouseClick(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        for point in ((90, 150), (90, 75), (200, 150)):
+            click(*point)
+        QTest.keyClick(bench.canvas, Qt.Key.Key_Return)
+        qtbot.waitUntil(lambda: len(services.kernel.drawing_state.views) == 3 and not unit.is_busy)
+        views = services.kernel.drawing_state.views
+        top = next(v for v in views if v.direction == "top")
+        assert services.kernel.drawing_state.effective_anchor(top.view_id)[1] < 150
+        qtbot.waitUntil(lambda: all(bench.updates.status(v.view_id) == "clean" for v in views), timeout=60000)
+        projection = bench.projections[top.view_id]
+        outer = next(c for c in projection.curves if isinstance(c.geometry, ArcCurve) and abs(c.geometry.radius - 40) < 1e-6)
+        # Same axis does not make an outward cylinder and an inward bore ambiguous.
+>       assert resolve_reference(reference_for_curve(outer), projection).status == "resolved"
+E       AssertionError: assert 'ambiguous' == 'resolved'
+E         
+E         - resolved
+E         + ambiguous
+
+tests/ui/test_mechanical_three_views.py:59: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_mechanical_three_views.py::test_flange_three_views_measure_edit_reopen_undo_and_export
+1 failed in 18.52s

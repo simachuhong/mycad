@@ -44,6 +44,7 @@ def test_annotation_cascade_roundtrip_and_unknown_version(tmp_path: Path) -> Non
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet, base, child, annotation = (str(uuid4()) for _ in range(4))
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet})
     loaded.bus.execute(

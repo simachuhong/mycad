@@ -1,0 +1,172 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______ test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[1.0] _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x772cca95c140>, zoom = 1.0
+
+    @pytest.mark.parametrize("zoom", [1.0, 2.3, 4.0])
+    def test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance(qtbot: QtBot, zoom: float) -> None:
+        from uuid import uuid4
+    
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtTest import QTest
+    
+        from mycad.core.drawing_projection import ArcCurve, DrawingScene, ProjectedCurve, SceneView
+        from mycad.ui.drawing_canvas import DrawingCanvas
+    
+        canvas = DrawingCanvas()
+        qtbot.addWidget(canvas)
+        canvas.resize(800, 600)
+        identity = uuid4()
+        canvas.set_scene(
+            DrawingScene(
+                uuid4(),
+                (297, 210),
+                10,
+                (),
+                (
+                    SceneView(
+                        identity,
+                        (90, 75),
+                        0.5,
+                        (
+                            ProjectedCurve("hole", ArcCurve((25, 0), 3)),
+                            ProjectedCurve("outer", ArcCurve((0, 0), 40)),
+                        ),
+                    ),
+                ),
+            )
+        )
+        canvas.show()
+        canvas.resetTransform()
+        canvas.scale(zoom, zoom)
+        canvas.annotation_mode = True
+        picked: list[str] = []
+        canvas.geometry_clicked.connect(lambda _view, curve, _point: picked.append(curve))
+        # Two pixels outside the thin hole stroke, well inside the unfilled outer circle.
+        point = canvas.mapFromScene(QPointF(104, -75)) + QPoint(2, 0)
+        QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+>       assert picked == ["hole"]
+E       AssertionError: assert ['outer'] == ['hole']
+E         
+E         At index 0 diff: 'outer' != 'hole'
+E         Use -v to get more diff
+
+tests/ui/test_drawing_annotations.py:406: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: Mouse event "MouseRelease" not accepted by receiving widget
+______ test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[2.3] _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x772cca95cd70>, zoom = 2.3
+
+    @pytest.mark.parametrize("zoom", [1.0, 2.3, 4.0])
+    def test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance(qtbot: QtBot, zoom: float) -> None:
+        from uuid import uuid4
+    
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtTest import QTest
+    
+        from mycad.core.drawing_projection import ArcCurve, DrawingScene, ProjectedCurve, SceneView
+        from mycad.ui.drawing_canvas import DrawingCanvas
+    
+        canvas = DrawingCanvas()
+        qtbot.addWidget(canvas)
+        canvas.resize(800, 600)
+        identity = uuid4()
+        canvas.set_scene(
+            DrawingScene(
+                uuid4(),
+                (297, 210),
+                10,
+                (),
+                (
+                    SceneView(
+                        identity,
+                        (90, 75),
+                        0.5,
+                        (
+                            ProjectedCurve("hole", ArcCurve((25, 0), 3)),
+                            ProjectedCurve("outer", ArcCurve((0, 0), 40)),
+                        ),
+                    ),
+                ),
+            )
+        )
+        canvas.show()
+        canvas.resetTransform()
+        canvas.scale(zoom, zoom)
+        canvas.annotation_mode = True
+        picked: list[str] = []
+        canvas.geometry_clicked.connect(lambda _view, curve, _point: picked.append(curve))
+        # Two pixels outside the thin hole stroke, well inside the unfilled outer circle.
+        point = canvas.mapFromScene(QPointF(104, -75)) + QPoint(2, 0)
+        QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+>       assert picked == ["hole"]
+E       AssertionError: assert ['outer'] == ['hole']
+E         
+E         At index 0 diff: 'outer' != 'hole'
+E         Use -v to get more diff
+
+tests/ui/test_drawing_annotations.py:406: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: Mouse event "MouseRelease" not accepted by receiving widget
+______ test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[4.0] _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x772cca95fa70>, zoom = 4.0
+
+    @pytest.mark.parametrize("zoom", [1.0, 2.3, 4.0])
+    def test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance(qtbot: QtBot, zoom: float) -> None:
+        from uuid import uuid4
+    
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtTest import QTest
+    
+        from mycad.core.drawing_projection import ArcCurve, DrawingScene, ProjectedCurve, SceneView
+        from mycad.ui.drawing_canvas import DrawingCanvas
+    
+        canvas = DrawingCanvas()
+        qtbot.addWidget(canvas)
+        canvas.resize(800, 600)
+        identity = uuid4()
+        canvas.set_scene(
+            DrawingScene(
+                uuid4(),
+                (297, 210),
+                10,
+                (),
+                (
+                    SceneView(
+                        identity,
+                        (90, 75),
+                        0.5,
+                        (
+                            ProjectedCurve("hole", ArcCurve((25, 0), 3)),
+                            ProjectedCurve("outer", ArcCurve((0, 0), 40)),
+                        ),
+                    ),
+                ),
+            )
+        )
+        canvas.show()
+        canvas.resetTransform()
+        canvas.scale(zoom, zoom)
+        canvas.annotation_mode = True
+        picked: list[str] = []
+        canvas.geometry_clicked.connect(lambda _view, curve, _point: picked.append(curve))
+        # Two pixels outside the thin hole stroke, well inside the unfilled outer circle.
+        point = canvas.mapFromScene(QPointF(104, -75)) + QPoint(2, 0)
+        QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+>       assert picked == ["hole"]
+E       AssertionError: assert ['outer'] == ['hole']
+E         
+E         At index 0 diff: 'outer' != 'hole'
+E         Use -v to get more diff
+
+tests/ui/test_drawing_annotations.py:406: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: Mouse event "MouseRelease" not accepted by receiving widget
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_annotations.py::test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[1.0]
+FAILED tests/ui/test_drawing_annotations.py::test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[2.3]
+FAILED tests/ui/test_drawing_annotations.py::test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance[4.0]
+3 failed, 16 deselected in 18.37s

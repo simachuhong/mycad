@@ -1,0 +1,54 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______ test_outer_and_inner_cylinders_keep_distinct_material_sides[False] ______
+
+mirrored = False
+
+    @pytest.mark.parametrize("mirrored", [False, True])
+    def test_outer_and_inner_cylinders_keep_distinct_material_sides(mirrored: bool) -> None:
+        from build123d import Plane
+    
+        shape = Cylinder(40, 8) - Cylinder(10, 20)
+        changed = Cylinder(45, 8) - Cylinder(12, 20)
+        if mirrored:
+            shape, changed = shape.mirror(Plane.YZ), changed.mirror(Plane.YZ)
+        before = project_shape(shape, request())
+        after = project_shape(changed, request())
+        for radius, expected in ((40, 45), (10, 12)):
+            curve = next(c for c in before.curves if isinstance(c.geometry, ArcCurve) and abs(c.geometry.radius - radius) < 1e-6)
+            reference = reference_for_curve(curve)
+>           assert resolve_reference(reference, before).status == "resolved"
+E           AssertionError: assert 'ambiguous' == 'resolved'
+E             
+E             - resolved
+E             + ambiguous
+
+tests/geom/test_drawing_references.py:87: AssertionError
+______ test_outer_and_inner_cylinders_keep_distinct_material_sides[True] _______
+
+mirrored = True
+
+    @pytest.mark.parametrize("mirrored", [False, True])
+    def test_outer_and_inner_cylinders_keep_distinct_material_sides(mirrored: bool) -> None:
+        from build123d import Plane
+    
+        shape = Cylinder(40, 8) - Cylinder(10, 20)
+        changed = Cylinder(45, 8) - Cylinder(12, 20)
+        if mirrored:
+            shape, changed = shape.mirror(Plane.YZ), changed.mirror(Plane.YZ)
+        before = project_shape(shape, request())
+        after = project_shape(changed, request())
+        for radius, expected in ((40, 45), (10, 12)):
+            curve = next(c for c in before.curves if isinstance(c.geometry, ArcCurve) and abs(c.geometry.radius - radius) < 1e-6)
+            reference = reference_for_curve(curve)
+>           assert resolve_reference(reference, before).status == "resolved"
+E           AssertionError: assert 'ambiguous' == 'resolved'
+E             
+E             - resolved
+E             + ambiguous
+
+tests/geom/test_drawing_references.py:87: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_references.py::test_outer_and_inner_cylinders_keep_distinct_material_sides[False]
+FAILED tests/geom/test_drawing_references.py::test_outer_and_inner_cylinders_keep_distinct_material_sides[True]
+2 failed, 4 deselected in 9.43s

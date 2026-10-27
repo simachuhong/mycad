@@ -48,6 +48,7 @@ def test_canvas_group_enter_and_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
     window = MainWindow(services=services)
     qtbot.addWidget(window)
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet = uuid4()
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
     window.bind_document(loaded)
@@ -70,14 +71,14 @@ def test_canvas_group_enter_and_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
         QTest.mouseClick(
             bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=bench.canvas.mapFromScene(point)
         )
-    assert len(loaded.document.commands) == 1
+    assert len(loaded.document.commands) == 2
     assert len(placement.pending) == 2, (placement.pending, bench.hint.text())
     QTest.keyClick(bench.canvas, Qt.Key.Key_Return)
-    qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and bench.placement is None)
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 3 and bench.placement is None)
     assert len(services.kernel.drawing_state.views) == 2
     window.request_undo()
     qtbot.waitUntil(lambda: not services.kernel.drawing_state.views)
-    assert len(loaded.document.commands) == 1
+    assert len(loaded.document.commands) == 2
 
 
 def test_new_document_clears_previous_sheet_canvas(qtbot: QtBot) -> None:

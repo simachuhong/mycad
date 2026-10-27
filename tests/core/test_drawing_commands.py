@@ -13,6 +13,7 @@ from mycad.core.exceptions import MycadError
 def test_group_creation_is_atomic_and_replayable() -> None:
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet, base, child = (uuid4() for _ in range(3))
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)}, "test")
     params = {
@@ -31,7 +32,7 @@ def test_group_creation_is_atomic_and_replayable() -> None:
     with pytest.raises(MycadError):
         loaded.bus.execute("drawing.view.create", broken, "test")
     assert not services.kernel.drawing_state.views
-    assert len(loaded.document.commands) == 1
+    assert len(loaded.document.commands) == 2
     loaded.bus.execute("drawing.view.create", params, "test")
     assert len(services.kernel.drawing_state.views) == 2
     loaded.bus.undo()
@@ -72,6 +73,7 @@ def test_confirmed_drawing_batch_rolls_back_missing_parent() -> None:
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet = str(uuid4())
     plan = Plan(
         steps=[
@@ -91,7 +93,7 @@ def test_confirmed_drawing_batch_rolls_back_missing_parent() -> None:
     with pytest.raises(MycadError):
         loaded.bus.execute_batch(plan, scope="cli")
     assert not services.kernel.drawing_state.sheets
-    assert not loaded.document.commands
+    assert len(loaded.document.commands) == 1
     assert loaded.document.archive_version == 1
 
 
@@ -100,6 +102,7 @@ def test_projected_orientation_follows_parent() -> None:
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet, base, child = (str(uuid4()) for _ in range(3))
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet})
     loaded.bus.execute(
@@ -139,6 +142,7 @@ def test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli() -> None:
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
     sheet = uuid4()
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
     params = drawing_object_mapping(DrawingView(uuid4(), sheet))
@@ -146,3 +150,15 @@ def test_full_drawing_dto_can_be_committed_and_roundtripped_in_cli() -> None:
     assert parse_line(
         to_cli("drawing.view.create", params, services.registry), services.registry
     ) == ("drawing.view.create", params)
+
+
+def test_empty_model_cannot_create_view_or_change_history() -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    sheet = str(uuid4())
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet})
+    before = tuple(loaded.document.commands)
+    with pytest.raises(MycadError, match="实体|solid"):
+        loaded.bus.execute("drawing.view.create", {"view_id": str(uuid4()), "sheet_id": sheet})
+    assert tuple(loaded.document.commands) == before
+    assert not services.kernel.drawing_state.views

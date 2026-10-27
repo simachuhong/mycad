@@ -359,3 +359,57 @@ def test_model_change_during_annotation_draft_prevents_commit(qtbot: QtBot) -> N
     assert tool.pending
     tool.cancel()
     assert not tool.pending
+
+
+@pytest.mark.parametrize("zoom", [1.0, 2.3, 4.0])
+def test_hollow_circle_picks_nearest_stroke_with_pixel_tolerance(qtbot: QtBot, zoom: float) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.drawing_projection import ArcCurve, DrawingScene, ProjectedCurve, SceneView
+    from mycad.ui.drawing_canvas import DrawingCanvas
+
+    canvas = DrawingCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    identity = uuid4()
+    canvas.set_scene(
+        DrawingScene(
+            uuid4(),
+            (297, 210),
+            10,
+            (),
+            (
+                SceneView(
+                    identity,
+                    (90, 75),
+                    0.5,
+                    (
+                        ProjectedCurve("hole", ArcCurve((25, 0), 3)),
+                        ProjectedCurve("outer", ArcCurve((0, 0), 40)),
+                    ),
+                ),
+            ),
+        )
+    )
+    canvas.show()
+    canvas.resetTransform()
+    canvas.scale(zoom, zoom)
+    canvas.annotation_mode = True
+    picked: list[str] = []
+
+    def on_pick(_view: object, curve: str, _point: object) -> None:
+        picked.append(curve)
+
+    canvas.geometry_clicked.connect(on_pick)
+    # Two pixels outside the thin hole stroke, well inside the unfilled outer circle.
+    point = canvas.mapFromScene(QPointF(104, -75)) + QPoint(2, 0)
+    QTest.mouseClick(canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert picked == ["hole"]
+    picked.clear()
+    QTest.mouseClick(
+        canvas.viewport(), Qt.MouseButton.LeftButton, pos=canvas.mapFromScene(QPointF(90, -75))
+    )
+    assert not picked  # Interior of an unfilled circle is not a geometry hit.

@@ -1,0 +1,10 @@
+/media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py
+  /media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py:402:37 - error: Argument type is partially unknown
+    Argument corresponds to parameter "slot" in function "connect"
+    Argument type is "(_view: Unknown, curve: Unknown, _point: Unknown) -> None" (reportUnknownArgumentType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py:402:44 - error: Type of parameter "_view" is unknown (reportUnknownLambdaType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py:402:51 - error: Type of parameter "curve" is unknown (reportUnknownLambdaType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py:402:58 - error: Type of parameter "_point" is unknown (reportUnknownLambdaType)
+  /media/sima/Data/projects/MyCAD/tests/ui/test_drawing_annotations.py:402:80 - error: Argument type is unknown
+    Argument corresponds to parameter "object" in function "append" (reportUnknownArgumentType)
+5 errors, 0 warnings, 0 notes

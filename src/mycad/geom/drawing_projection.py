@@ -101,9 +101,21 @@ def face_reference(face: Face) -> DrawingGeometryReference | None:
         # Axis location is canonical: nearest point on axis to world origin.
         dot = p.X() * n.X() + p.Y() * n.Y() + p.Z() * n.Z()
         point = (p.X() - dot * n.X(), p.Y() - dot * n.Y(), p.Z() - dot * n.Z())
-        values = (*point, *direction)
+        # The oriented material side separates an outer cylinder from a
+        # coaxial bore without binding to the editable radius. Sampling uses
+        # surface UV geometry, not a nearest candidate or face index.
+        sample = face.position_at(0.37, 0.5)
+        normal = face.normal_at(0.37, 0.5)
+        outward = sum(
+            (value - origin) * component
+            for value, origin, component in zip(
+                (sample.X, sample.Y, sample.Z), point, (normal.X, normal.Y, normal.Z), strict=True
+            )
+        )
+        values = (*point, *direction, 1.0 if outward > 0 else -1.0)
         return DrawingGeometryReference(
-            "cylindrical_face", tuple(zip(("x", "y", "z", "nx", "ny", "nz"), values, strict=True))
+            "cylindrical_face",
+            tuple(zip(("x", "y", "z", "nx", "ny", "nz", "material_side"), values, strict=True)),
         )
     if face.geom_type == GeomType.PLANE:
         normal = face.normal_at()
