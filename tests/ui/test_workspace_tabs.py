@@ -98,3 +98,28 @@ def test_global_undo_does_not_edit_hidden_draft(qtbot: QtBot) -> None:
     window.request_undo()
     qtbot.waitUntil(lambda: not loaded.document.commands)
     assert tuple(draft.canvas.entities) == before
+
+
+def test_switch_during_execution_does_not_restore_wrong_workspace_actions(qtbot: QtBot) -> None:
+    from threading import Event
+
+    services = build_app(discoverers=[])
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(new_document(services))
+    unit = window.execution_unit
+    assert unit is not None
+    released = Event()
+    try:
+        assert unit.submit(
+            lambda: released.wait(5),
+            operation="fixture",
+            session_id=window.drawing_workbench.session_id,
+            on_complete=lambda _result: None,
+        )
+        window.workspace_tabs.activate("drawing")
+        released.set()
+        qtbot.waitUntil(lambda: not unit.is_busy)
+        assert not any(action.isEnabled() for action in window.orientation_actions.values())
+    finally:
+        released.set()

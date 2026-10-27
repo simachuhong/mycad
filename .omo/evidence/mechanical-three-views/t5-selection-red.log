@@ -1,0 +1,23 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________ test_clear_paper_clears_view_selection ____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x727ead6f4980>
+
+    def test_clear_paper_clears_view_selection(qtbot: QtBot) -> None:
+        from mycad.core.drawing_projection import DrawingScene
+        from mycad.ui.drawing_canvas import DrawingCanvas
+    
+        canvas = DrawingCanvas()
+        qtbot.addWidget(canvas)
+        canvas.set_scene(DrawingScene(uuid4(), (297, 210), 10, (), ()))
+        canvas.select_view(uuid4())
+        canvas.clear_scene()
+>       assert canvas.selected_view is None
+E       AssertionError: assert UUID('9490f715-8f03-495a-8a79-e3bedf1ebf71') is None
+E        +  where UUID('9490f715-8f03-495a-8a79-e3bedf1ebf71') = <mycad.ui.drawing_canvas.DrawingCanvas(0xab9fbc0) at 0x727ead6f8c80>.selected_view
+
+tests/ui/test_drawing_grips.py:164: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_grips.py::test_clear_paper_clears_view_selection
+1 failed, 5 deselected in 16.86s

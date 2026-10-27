@@ -1,0 +1,166 @@
+{
+  "pid": 186373,
+  "edges": 300,
+  "faces": 300,
+  "runs_s": [
+    0.5238388899888378,
+    0.49155071600398514,
+    0.4827441439992981,
+    0.47094790000119247,
+    0.8334477820026223
+  ],
+  "p50_s": 0.49155071600398514,
+  "p95_sample_s": 0.8334477820026223,
+  "peak_rss_kib": 634616,
+  "curve_counts": [
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620
+  ],
+  "mode": "process",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "wall_including_startup_s": 11.336325796990423,
+  "heartbeat_samples": 109,
+  "max_gap_s": 0.1027653440105496,
+  "screenshot": "/tmp/pytest-of-sima/pytest-87/test_exact_hlr_execution_probe0/heartbeat.png"
+}
+.{
+  "pid": 186468,
+  "edges": 900,
+  "faces": 900,
+  "runs_s": [
+    2.547150159996818,
+    3.0391114829981234,
+    3.585156115004793,
+    2.3559888589952607,
+    2.1886919219978154
+  ],
+  "p50_s": 2.547150159996818,
+  "p95_sample_s": 3.585156115004793,
+  "peak_rss_kib": 637080,
+  "curve_counts": [
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820
+  ],
+  "mode": "process",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "wall_including_startup_s": 24.593348103997414,
+  "heartbeat_samples": 239,
+  "max_gap_s": 0.10506669100141153,
+  "screenshot": "/tmp/pytest-of-sima/pytest-87/test_exact_hlr_execution_probe1/heartbeat.png"
+}
+F
+=================================== FAILURES ===================================
+____________ test_exact_hlr_execution_probe[900-edges-process-gate] ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x74450009dc10>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-87/test_exact_hlr_execution_probe1')
+use_process = True, columns = 30
+
+    @pytest.mark.parametrize("use_process", [False, True], ids=["thread-diagnostic", "process-gate"])
+    @pytest.mark.parametrize("columns", [10, 30], ids=["300-edges", "900-edges"])
+    def test_exact_hlr_execution_probe(
+        qtbot: QtBot, tmp_path: Path, use_process: bool, columns: int
+    ) -> None:
+        shape = Compound(
+            children=[Pos(x * 5, y * 5, 0) * Cylinder(2, 8) for x in range(columns) for y in range(10)]
+        )
+        archive = tmp_path / "source.brep"
+        write_brep = cast("Callable[[Compound, Path], bool]", build123d.export_brep)
+        assert write_brep(shape, archive)
+        label = QLabel("HLR 技术验证：等待计算，当前 MyCAD 文档不受影响")
+        label.setWindowTitle("MyCAD T0 — HLR heartbeat probe")
+        label.resize(680, 120)
+        qtbot.addWidget(label)
+        label.show()
+        times: list[float] = []
+        completed: list[ExecutionResult] = []
+        timer = QTimer()
+        timer.setInterval(100)
+    
+        def tick() -> None:
+            times.append(perf_counter())
+            label.setText(f"HLR 技术验证：UI 心跳 {len(times)}，计算路径 {use_process=}")
+    
+        timer.timeout.connect(tick)
+        unit = SerializedExecutionUnit()
+        unit.set_session(1)
+        # Spawn, never fork a running Qt/OCCT process. Include cold start in heartbeat.
+        pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+    
+        def action() -> dict[str, object]:
+            if use_process:
+                return pool.submit(benchmark_brep, str(archive)).result(timeout=120)
+            return benchmark_brep(str(archive))
+    
+        timer.start()
+        qtbot.wait(150)
+        times.append(perf_counter())
+        start = perf_counter()
+        try:
+            assert unit.submit(
+                action, operation="HLR probe", session_id=1, on_complete=completed.append
+            )
+            qtbot.waitUntil(lambda: bool(completed), timeout=120000)
+            times.append(perf_counter())
+            assert completed[0].error is None
+        finally:
+            timer.stop()
+            unit.shutdown(wait_for_running=True)
+            pool.shutdown(wait=True, cancel_futures=True)
+        elapsed = perf_counter() - start
+        gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+        metrics = cast("dict[str, object]", completed[0].value)
+        report = {
+            **metrics,
+            "mode": "process" if use_process else "thread",
+            "platform": platform.platform(),
+            "wall_including_startup_s": elapsed,
+            "heartbeat_samples": len(times),
+            "max_gap_s": max(gaps),
+        }
+        label.setText(
+            f"HLR {report['mode']} / {metrics['edges']} edges\n"
+            f"max UI gap {max(gaps):.3f}s / p50 {metrics['p50_s']}s"
+        )
+        screenshot = tmp_path / "heartbeat.png"
+        assert label.grab().save(str(screenshot))
+        report["screenshot"] = str(screenshot)
+        print(json.dumps(report, indent=2))
+        if use_process:
+            assert metrics["pid"] != os.getpid()
+            assert max(gaps) <= 0.25, "Process HLR must not stall the GUI heartbeat"
+>           assert cast("float", metrics["p95_sample_s"]) <= 3, "Three views exceeded T0 target"
+E           AssertionError: Three views exceeded T0 target
+E           assert 3.585156115004793 <= 3
+E            +  where 3.585156115004793 = cast('float', 3.585156115004793)
+
+tests/ui/test_drawing_execution_probe.py:105: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_execution_probe.py::test_exact_hlr_execution_probe[900-edges-process-gate]
+1 failed, 1 passed, 2 deselected in 56.77s

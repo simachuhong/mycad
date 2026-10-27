@@ -1017,18 +1017,7 @@ class MainWindow(QMainWindow):
             self.left_dock.hide()
             self.right_dock.hide()
             self.modeling_toolbar.hide()
-        for action in (
-            *self.orientation_actions.values(),
-            *self.projection_actions.values(),
-            *self.render_mode_actions.values(),
-        ):
-            action.setEnabled(current == "model" and self._loaded is not None)
-        for action in self._part_only_actions:
-            action.setEnabled(
-                current == "model"
-                and self._loaded is not None
-                and self._loaded.document.document_type == "part"
-            )
+        self._sync_workspace_actions()
         self.act_view_2d.setChecked(current == "sketch")
         self.act_view_3d.setChecked(current == "model")
         if current == "sketch":
@@ -1040,6 +1029,20 @@ class MainWindow(QMainWindow):
             self.drawing_workbench.refresh()
             self.status_command.setText(self.drawing_workbench.hint.text())
         self._sync_camera_status()
+
+    def _sync_workspace_actions(self) -> None:
+        for action in (
+            *self.orientation_actions.values(),
+            *self.projection_actions.values(),
+            *self.render_mode_actions.values(),
+        ):
+            action.setEnabled(self.active_workspace == "model" and self._loaded is not None)
+        for action in self._part_only_actions:
+            action.setEnabled(
+                self.active_workspace == "model"
+                and self._loaded is not None
+                and self._loaded.document.document_type == "part"
+            )
 
     def _show_3d_workspace(self, _checked: bool = False) -> None:
         self.workspace_tabs.activate("model")
@@ -3447,6 +3450,7 @@ class MainWindow(QMainWindow):
         for action, enabled in self._busy_action_states.items():
             action.setEnabled(enabled)
         self._busy_action_states.clear()
+        self._sync_workspace_actions()
         self.status_rebuild.setText("重建状态：就绪")
         if self._sketch_dialog is not None and self._services is not None:
             self._sync_drawing_layers()

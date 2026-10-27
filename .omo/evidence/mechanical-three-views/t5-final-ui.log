@@ -1,0 +1,105 @@
+...FF.......................                                             [100%]
+=================================== FAILURES ===================================
+____________ test_canvas_drag_is_preview_until_release_and_one_undo ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7c8a2172d7c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c8a2172d610>
+
+    def test_canvas_drag_is_preview_until_release_and_one_undo(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+    
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.core.drawing_projection import LineCurve, ProjectedCurve, ProjectionResult
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        initial = state()
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
+        loaded.bus.execute(
+            "drawing.view.create", {"views": [drawing_object_mapping(v) for v in initial.views]}
+        )
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        for view in initial.views:
+            bench.projections[view.view_id] = ProjectionResult(
+                view.view_id, "fixture", 1, (ProjectedCurve("line", LineCurve((0, 0), (20, 0))),)
+            )
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench.canvas.fit_view()
+        parent, child = initial.views
+        bench.canvas.select_view(parent.view_id)
+        start = bench.canvas.grip_position("move")
+        end = start + QPoint(35, -15)
+        before = len(loaded.document.commands)
+        for leave in (False, True):
+            QTest.mousePress(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=start)
+            QTest.mouseMove(bench.canvas.viewport(), end)
+            if leave:
+                window.workspace_tabs.activate("model")
+                window.workspace_tabs.activate("drawing")
+            else:
+                QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+            assert services.kernel.drawing_state == initial
+            assert len(loaded.document.commands) == before
+            bench.canvas.select_view(parent.view_id)
+        QTest.mousePress(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(bench.canvas.viewport(), end)
+        assert len(loaded.document.commands) == before
+        QTest.mouseRelease(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=end)
+>       qtbot.waitUntil(lambda: len(loaded.document.commands) == before + 1)
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 5000 milliseconds
+
+tests/ui/test_drawing_grips.py:121: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+QtWarningMsg: This plugin does not support grabbing the mouse
+QtWarningMsg: This plugin does not support grabbing the mouse
+QtWarningMsg: This plugin does not support grabbing the mouse
+QtWarningMsg: This plugin does not support grabbing the mouse
+_____________________ test_delete_view_subtree_is_one_undo _____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7c8a1c0d8dd0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c8a1c0d8200>
+
+    def test_delete_view_subtree_is_one_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        initial = state()
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
+        loaded.bus.execute(
+            "drawing.view.create", {"views": [drawing_object_mapping(v) for v in initial.views]}
+        )
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.canvas.select_view(initial.views[0].view_id)
+        bench.preview_delete()
+        assert len(services.kernel.drawing_state.views) == 2
+        bench.confirm_delete()
+        qtbot.waitUntil(lambda: not services.kernel.drawing_state.views)
+        window.request_undo()
+>       qtbot.waitUntil(lambda: services.kernel.drawing_state == initial)
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 5000 milliseconds
+
+tests/ui/test_drawing_grips.py:152: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_grips.py::test_canvas_drag_is_preview_until_release_and_one_undo
+FAILED tests/ui/test_drawing_grips.py::test_delete_view_subtree_is_one_undo
+2 failed, 26 passed in 58.01s

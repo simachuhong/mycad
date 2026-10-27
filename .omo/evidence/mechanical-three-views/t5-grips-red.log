@@ -1,0 +1,69 @@
+...FF                                                                    [100%]
+=================================== FAILURES ===================================
+____________ test_canvas_drag_is_preview_until_release_and_one_undo ____________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x76cd3650c950>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76cd3650c620>
+
+    def test_canvas_drag_is_preview_until_release_and_one_undo(qtbot, monkeypatch) -> None:
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.core.drawing_projection import LineCurve, ProjectedCurve, ProjectionResult
+        from mycad.ui.main_window import MainWindow
+    
+        services=build_app(discoverers=[])
+        loaded=new_document(services)
+        initial=state()
+        loaded.bus.execute("drawing.sheet.create",drawing_object_mapping(initial.sheets[0]))
+        loaded.bus.execute("drawing.view.create",{"views":[drawing_object_mapping(v) for v in initial.views]})
+        window=MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench=window.drawing_workbench
+        monkeypatch.setattr(bench,"request_update",lambda: None)
+        window.bind_document(loaded)
+        for view in initial.views:
+            bench.projections[view.view_id]=ProjectionResult(view.view_id,"fixture",1,(ProjectedCurve("line",LineCurve((0,0),(20,0))),))
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench.canvas.fit_view()
+        parent,child=initial.views
+>       bench.canvas.select_view(parent.view_id)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingCanvas' object has no attribute 'select_view'
+
+tests/ui/test_drawing_grips.py:92: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+_____________________ test_delete_view_subtree_is_one_undo _____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x76cd360d35f0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76cd360d3200>
+
+    def test_delete_view_subtree_is_one_undo(qtbot, monkeypatch) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.ui.main_window import MainWindow
+    
+        services=build_app(discoverers=[])
+        loaded=new_document(services)
+        initial=state()
+        loaded.bus.execute("drawing.sheet.create",drawing_object_mapping(initial.sheets[0]))
+        loaded.bus.execute("drawing.view.create",{"views":[drawing_object_mapping(v) for v in initial.views]})
+        window=MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench=window.drawing_workbench
+        monkeypatch.setattr(bench,"request_update",lambda: None)
+        window.bind_document(loaded)
+>       bench.canvas.select_view(initial.views[0].view_id)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingCanvas' object has no attribute 'select_view'
+
+tests/ui/test_drawing_grips.py:123: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_grips.py::test_canvas_drag_is_preview_until_release_and_one_undo
+FAILED tests/ui/test_drawing_grips.py::test_delete_view_subtree_is_one_undo
+2 failed, 3 passed in 12.44s

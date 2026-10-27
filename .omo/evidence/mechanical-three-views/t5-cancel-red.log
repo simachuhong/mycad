@@ -1,0 +1,41 @@
+.....FF                                                                  [100%]
+=================================== FAILURES ===================================
+___________ test_cancel_includes_queued_snapshot_and_latest_request ____________
+
+    def test_cancel_includes_queued_snapshot_and_latest_request() -> None:
+        updates = ProjectionUpdates()
+        identity = uuid4()
+        updates.sync(1, "source", {identity: ViewBasis()})
+        updates.cancel()
+>       assert updates.begin() is None
+E       AssertionError: assert ProjectionBatch(session_id=1, requests=(DrawingProjectionRequest(view_id=UUID('2b67e1b3-98a3-4fc7-8d26-3af7be24fe87'),...nt='source', generation=1, basis=ViewBasis(right=(1, 0, 0), up=(0, 0, 1), normal=(0, -1, 0)), source='current_part'),)) is None
+E        +  where ProjectionBatch(session_id=1, requests=(DrawingProjectionRequest(view_id=UUID('2b67e1b3-98a3-4fc7-8d26-3af7be24fe87'),...nt='source', generation=1, basis=ViewBasis(right=(1, 0, 0), up=(0, 0, 1), normal=(0, -1, 0)), source='current_part'),)) = begin()
+E        +    where begin = <mycad.ui.drawing_updates.ProjectionUpdates object at 0x71524f80c320>.begin
+
+tests/ui/test_drawing_updates.py:114: AssertionError
+________________ test_diagnostic_result_keeps_previous_geometry ________________
+
+    def test_diagnostic_result_keeps_previous_geometry() -> None:
+        updates = ProjectionUpdates()
+        identity = uuid4()
+        updates.sync(1, "old", {identity: ViewBasis()})
+        first = updates.begin()
+        assert first is not None
+        old = ProjectionResult(identity, "old", first.requests[0].generation, ())
+        updates.finish(first, (old,))
+        updates.sync(1, "new", {identity: ViewBasis()})
+        second = updates.begin()
+        assert second is not None
+        incomplete = ProjectionResult(
+            identity, "new", second.requests[0].generation, (), ("unsupported curve",)
+        )
+>       assert updates.finish(second, (incomplete,)) == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = finish(ProjectionBatch(session_id=1, requests=(DrawingProjectionRequest(view_id=UUID('9cbbb20c-ab20-4e97-9bae-6829000c0613'),...print='new', generation=2, basis=ViewBasis(right=(1, 0, 0), up=(0, 0, 1), normal=(0, -1, 0)), source='current_part'),)), (ProjectionResult(view_id=UUID('9cbbb20c-ab20-4e97-9bae-6829000c0613'), source_fingerprint='new', generation=2, curves=(), diagnostics=('unsupported curve',)),))
+E        +    where finish = <mycad.ui.drawing_updates.ProjectionUpdates object at 0x71524f80ea20>.finish
+
+tests/ui/test_drawing_updates.py:138: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_updates.py::test_cancel_includes_queued_snapshot_and_latest_request
+FAILED tests/ui/test_drawing_updates.py::test_diagnostic_result_keeps_previous_geometry
+2 failed, 5 passed in 11.31s

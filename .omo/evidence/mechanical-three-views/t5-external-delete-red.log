@@ -1,0 +1,41 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_external_delete_cancels_pending_delete __________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7cb772e88c20>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cb7ab70eea0>
+
+    def test_external_delete_cancels_pending_delete(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        initial = state()
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(initial.sheets[0]))
+        loaded.bus.execute(
+            "drawing.view.create", {"views": [drawing_object_mapping(v) for v in initial.views]}
+        )
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.canvas.select_view(initial.views[0].view_id)
+        bench.preview_delete()
+        loaded.bus.execute("drawing.view.delete", {"view_id": str(initial.views[0].view_id)})
+        bench.refresh()
+        bench.confirm_delete()
+>       assert not bench.confirm_delete_action.isVisible()
+E       assert not True
+E        +  where True = <built-in method isVisible of PySide6.QtGui.QAction object at 0x7cb77172bcc0>()
+E        +    where <built-in method isVisible of PySide6.QtGui.QAction object at 0x7cb77172bcc0> = <PySide6.QtGui.QAction(0x14f7ea80 text="确认删除（Enter）" toolTip="确认删除（Enter）" menuRole=TextHeuristicRole enabled=true visible=true) at 0x7cb77172bcc0>.isVisible
+E        +      where <PySide6.QtGui.QAction(0x14f7ea80 text="确认删除（Enter）" toolTip="确认删除（Enter）" menuRole=TextHeuristicRole enabled=true visible=true) at 0x7cb77172bcc0> = <mycad.ui.drawing_workbench.DrawingWorkbench(0x14f565e0) at 0x7cb772e8ef00>.confirm_delete_action
+
+tests/ui/test_drawing_grips.py:189: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_grips.py::test_external_delete_cancels_pending_delete
+1 failed, 6 deselected in 23.13s

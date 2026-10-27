@@ -154,12 +154,12 @@
 
 **Interfaces:** 视图拖动生成 T2 update 操作；后台通过常驻 spawn 进程实现 ProjectionPort 并返回冻结结果，应用结果同时匹配 session、source_fingerprint、view_id、generation。
 
-- [ ] RED：`test_parent_move_keeps_children_aligned`、`test_child_move_is_axis_constrained`、`test_scale_override_and_restore`、`test_stale_same_session_result_is_discarded`、`test_delete_view_subtree_is_one_undo`。
-- [ ] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_grips.py tests/ui/test_drawing_updates.py -q`，确认失败。
-- [ ] 实现位置/等比比例/解除对齐句柄，拖动全程只预览，松开提交一次；纸张缩放不修改实体，不重算 HLR。
-- [ ] 定义视图 clean/stale/updating/failed 派生状态，模型变更后安排更新；忙时合并到最新请求，不丢失最后一次更新需求，不插队修改正在计算的模型。旧结果丢弃，失败保留上一版本并标过期。
-- [ ] 删除父视图时预览子树及关联标注影响，确认后一个事务删除；undo 恢复全部。取消计算只停止接收结果，UI 不谎称已物理中断线程。
-- [ ] GREEN 跑同组并复测 T0 心跳。整组生成/拖动/取消/更新能通过 CLI 调用相同命令能力，不为 AI 另建写模型后门。
+- [x] RED：`test_parent_move_keeps_children_aligned`、`test_child_move_is_axis_constrained`、`test_scale_override_and_restore`、`test_stale_same_session_result_is_discarded`、`test_delete_view_subtree_is_one_undo`。
+- [x] 运行 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_grips.py tests/ui/test_drawing_updates.py -q`，确认失败。
+- [x] 实现位置/等比比例/解除对齐句柄，拖动全程只预览，松开提交一次；纸张缩放不修改实体，不重算 HLR。
+- [x] 定义视图 clean/stale/updating/failed 派生状态，模型变更后安排更新；忙时合并到最新请求，不丢失最后一次更新需求，不插队修改正在计算的模型。旧结果丢弃，失败保留上一版本并标过期。
+- [x] 删除父视图时预览子树及关联标注影响，确认后一个事务删除；undo 恢复全部。取消计算只停止接收结果，UI 不谎称已物理中断线程。
+- [x] GREEN 跑同组并复测 T0 心跳。整组生成/拖动/取消/更新能通过 CLI 调用相同命令能力，不为 AI 另建写模型后门。
 
 ### Task 6: T6 — 关联标注和失关联修复
 

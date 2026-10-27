@@ -1,0 +1,27 @@
+
+==================================== ERRORS ====================================
+_______________ ERROR collecting tests/ui/test_drawing_grips.py ________________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/ui/test_drawing_grips.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/ui/test_drawing_grips.py:9: in <module>
+    from mycad.ui.drawing_tools import move_view, scale_view, set_view_alignment
+E   ImportError: cannot import name 'move_view' from 'mycad.ui.drawing_tools' (/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_tools.py)
+______________ ERROR collecting tests/ui/test_drawing_updates.py _______________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/ui/test_drawing_updates.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/ui/test_drawing_updates.py:8: in <module>
+    from mycad.ui.drawing_updates import ProjectionUpdates
+E   ModuleNotFoundError: No module named 'mycad.ui.drawing_updates'
+=========================== short test summary info ============================
+ERROR tests/ui/test_drawing_grips.py
+ERROR tests/ui/test_drawing_updates.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 errors in 0.74s

@@ -33,3 +33,9 @@ Evidence: 96 GUI regressions (`t4-regressions.log`), 27 scoped command/archive/G
 Integration corrected a command-schema mismatch: the fixed validator supports const:null, not type:null. Optional absent parent/owner fields are omitted by the DTO serializer, with a full DTO CLI roundtrip regression. Periodic OCCT source splines are normalized by the adapter; the renderer explicitly rejects unnormalized periodic input rather than displaying a false control polygon.
 
 Remaining stages: T5 robust async states and grips, T6 associated dimensions, T7 output, T8 complete workflow/release verification. These screenshots are not evidence of those later features.
+
+## T5 — view handles and asynchronous updates
+
+Paper move/scale/alignment gestures preview without history writes, then submit one command on release. Escape/tab changes cancel capture and preview. Parent motion carries aligned children; child direction constrains motion; scale/display overrides restore inheritance explicitly. Parent deletion previews the subtree and annotation count, requires inline confirmation, and undoes together.
+
+ProjectionUpdates validates session, model fingerprint, view UUID and request generation. New model requests coalesce; cancellation includes queued captures; failed/diagnostic results retain old geometry with stale/failed styling. Worker death restarts the pool for explicit retry. Layout-only edits do not submit projection work. 29 scoped tests pass; strict typing/lint/format pass. Isolated 300/900-edge process heartbeat gates pass, 900-edge maximum UI gap 0.102s. A concurrent-load 3.585s timing failure is retained in t5-heartbeat.log; isolated t5-heartbeat-isolated.log passes without relaxing the 3s threshold.

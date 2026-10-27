@@ -1,0 +1,78 @@
+{
+  "pid": 187049,
+  "edges": 300,
+  "faces": 300,
+  "runs_s": [
+    0.46744283799489494,
+    0.4553134870075155,
+    0.45853750499372836,
+    0.4808243610023055,
+    0.47112580099201296
+  ],
+  "p50_s": 0.46744283799489494,
+  "p95_sample_s": 0.4808243610023055,
+  "peak_rss_kib": 634932,
+  "curve_counts": [
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620,
+    200,
+    510,
+    620
+  ],
+  "mode": "process",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "wall_including_startup_s": 8.390338761993917,
+  "heartbeat_samples": 81,
+  "max_gap_s": 0.10255491299903952,
+  "screenshot": "/tmp/pytest-of-sima/pytest-90/test_exact_hlr_execution_probe0/heartbeat.png"
+}
+.{
+  "pid": 187063,
+  "edges": 900,
+  "faces": 900,
+  "runs_s": [
+    1.634581516002072,
+    1.6358726339967689,
+    1.547668644998339,
+    1.5328121930069756,
+    1.674450896010967
+  ],
+  "p50_s": 1.634581516002072,
+  "p95_sample_s": 1.674450896010967,
+  "peak_rss_kib": 637240,
+  "curve_counts": [
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820,
+    600,
+    1530,
+    1820
+  ],
+  "mode": "process",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.39",
+  "wall_including_startup_s": 15.23397220800689,
+  "heartbeat_samples": 150,
+  "max_gap_s": 0.10171907000767533,
+  "screenshot": "/tmp/pytest-of-sima/pytest-90/test_exact_hlr_execution_probe1/heartbeat.png"
+}
+.
+2 passed, 2 deselected in 33.55s
