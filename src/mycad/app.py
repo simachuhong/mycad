@@ -29,6 +29,7 @@ from mycad.core.persistence import open_document as _open_document
 from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
 from mycad.formats.providers import DXF_PROVIDER, STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
+from mycad.geom.drawing_worker import DrawingProjectionWorker
 from mycad.geom.kernel import BuildKernel
 from mycad.plugins.discovery import EntryPointDiscoverer
 from mycad.plugins.loader import register_plugins
@@ -278,3 +279,8 @@ def preview_command_with_sketches(
     if not snapshots:
         raise ValueError("candidate command produced no viewport geometry")
     return snapshots[-1], scratch_kernel.sketch_display_data()
+
+
+def create_drawing_worker() -> DrawingProjectionWorker:
+    """Create an owned, explicitly closed background engineering projection service."""
+    return DrawingProjectionWorker()

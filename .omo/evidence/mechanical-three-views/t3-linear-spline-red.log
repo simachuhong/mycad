@@ -1,0 +1,15 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_edge_on_circular_boundaries_are_exact_line_segments ___________
+
+    def test_edge_on_circular_boundaries_are_exact_line_segments() -> None:
+        result = project_shape(Cylinder(5, 12), request((0, -1, 0), (0, 0, 1)))
+>       assert len(result.curves) == 4
+E       AssertionError: assert 6 == 4
+E        +  where 6 = len((ProjectedCurve(curve_id='curve-0', geometry=SplineCurve(poles=((-5.0, 6.0), (-4.874639560909118, 6.0), (-4.5048443395...'y', 0.0), ('z', 0.0), ('nx', 0.0), ('ny', 0.0), ('nz', 1.0)), owner_command=None, role='geometry'), silhouette=False)))
+E        +    where (ProjectedCurve(curve_id='curve-0', geometry=SplineCurve(poles=((-5.0, 6.0), (-4.874639560909118, 6.0), (-4.5048443395...'y', 0.0), ('z', 0.0), ('nx', 0.0), ('ny', 0.0), ('nz', 1.0)), owner_command=None, role='geometry'), silhouette=False)) = ProjectionResult(view_id=UUID('94a25da2-e162-4920-9dbc-0a2c64646dd6'), source_fingerprint='fixture', generation=1, cur...0.0), ('nx', 0.0), ('ny', 0.0), ('nz', 1.0)), owner_command=None, role='geometry'), silhouette=False)), diagnostics=()).curves
+
+tests/geom/test_drawing_projection.py:177: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection.py::test_edge_on_circular_boundaries_are_exact_line_segments
+1 failed in 9.38s

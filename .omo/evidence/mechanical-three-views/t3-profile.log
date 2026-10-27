@@ -1,0 +1,30 @@
+         1851944 function calls (1796434 primitive calls) in 2.282 seconds
+
+   Ordered by: cumulative time
+   List reduced from 102 to 22 due to restriction <22>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   910393    0.592    0.000    0.592    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/topology/shape_core.py:317(wrapped)
+    24000    0.536    0.000    0.536    0.000 {built-in method OCP.OCP.GCPnts.Length_s}
+     4800    0.166    0.000    0.166    0.000 {built-in method OCP.OCP.BRepGProp.LinearProperties_s}
+    24000    0.081    0.000    0.106    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/topology/one_d.py:2883(geom_adaptor)
+127907/127895    0.065    0.000    0.103    0.000 {built-in method builtins.isinstance}
+    48000    0.057    0.000    0.057    0.000 {built-in method builtins.round}
+     4800    0.051    0.000    0.051    0.000 {built-in method OCP.OCP.BRepLib.BuildCurves3d_s}
+    27994    0.015    0.000    0.043    0.000 {built-in method builtins.all}
+28006/27994    0.013    0.000    0.038    0.000 <frozen abc>:117(__instancecheck__)
+     2194    0.009    0.000    0.031    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/anytree/node/nodemixin.py:240(children)
+24000/18000    0.039    0.000    0.029    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/geometry.py:249(X)
+   115800    0.028    0.000    0.028    0.000 {method 'get' of 'dict' objects}
+    25800    0.015    0.000    0.028    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/geometry.py:211(<genexpr>)
+    28200    0.027    0.000    0.027    0.000 {method 'join' of 'str' objects}
+28006/27994    0.024    0.000    0.025    0.000 {built-in method _abc._abc_instancecheck}
+     1295    0.007    0.000    0.023    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/topology/shape_core.py:3102(filter_by)
+      600    0.022    0.000    0.022    0.000 {built-in method OCP.OCP.BRepGProp.SurfaceProperties_s}
+    28200    0.022    0.000    0.022    0.000 {method 'difference' of 'set' objects}
+      900    0.006    0.000    0.017    0.000 /media/sima/Data/projects/MyCAD/src/mycad/core/drawing_references.py:27(__post_init__)
+     3000    0.005    0.000    0.017    0.000 {built-in method builtins.any}
+     5700    0.002    0.000    0.015    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/topology/shape_core.py:3232(actual_predicate)
+     1296    0.015    0.000    0.015    0.000 /media/sima/Data/projects/MyCAD/.venv/lib/python3.12/site-packages/build123d/topology/composite.py:517(__bool__)
+
+

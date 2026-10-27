@@ -286,3 +286,11 @@ def build_drawing_scene(
         tuple(issues),
         next(iter(fingerprints), ""),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class DrawingSourceSnapshot:
+    """Runtime-only immutable BREP payload; never persisted in the document."""
+
+    source_fingerprint: str
+    brep: bytes

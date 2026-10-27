@@ -1,0 +1,49 @@
+.......F......................                                           [100%]
+=================================== FAILURES ===================================
+___________________ test_complete_projection_payload_timing ____________________
+
+    def test_complete_projection_payload_timing() -> None:
+        from collections.abc import Callable
+        from io import BytesIO
+        from time import perf_counter
+        from typing import cast
+    
+        import build123d
+        from build123d import Compound, Cylinder, Pos
+    
+        from mycad.core.drawing_projection import DrawingSourceSnapshot, ViewBasis
+    
+        shape = Compound(
+            children=[Pos(x * 5, y * 5, 0) * Cylinder(2, 8) for x in range(30) for y in range(10)]
+        )
+        stream = BytesIO()
+        write_brep = cast("Callable[[Compound, BytesIO], bool]", build123d.export_brep)
+        assert write_brep(shape, stream)
+        snapshot = DrawingSourceSnapshot("900-edge-fixture", stream.getvalue())
+        requests = tuple(
+            DrawingProjectionRequest(
+                uuid4(), snapshot.source_fingerprint, 1, ViewBasis.from_normal_up(n, u)
+            )
+            for n, u in [((0, 0, 1), (0, 1, 0)), ((0, -1, 0), (0, 0, 1)), ((-1, 0, 0), (0, 0, 1))]
+        )
+        worker = DrawingProjectionWorker()
+        try:
+            worker.prewarm().result(timeout=45)
+            start = perf_counter()
+            results = worker.submit(snapshot, requests).result(timeout=120)
+            elapsed = perf_counter() - start
+            print(
+                f"complete 900-edge DTO pipeline: {elapsed:.3f}s, curves={sum(len(r.curves) for r in results)}"
+            )
+            assert len(results) == 3
+            assert all(not r.diagnostics for r in results)
+>           assert elapsed <= 3, "Full DTO pipeline exceeds the warm three-view target"
+E           AssertionError: Full DTO pipeline exceeds the warm three-view target
+E           assert 3.539152339013526 <= 3
+
+tests/geom/test_drawing_worker.py:71: AssertionError
+----------------------------- Captured stdout call -----------------------------
+complete 900-edge DTO pipeline: 3.539s, curves=500
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_worker.py::test_complete_projection_payload_timing
+1 failed, 29 passed in 53.80s

@@ -128,12 +128,12 @@
 
 **Interfaces:** 实现 `DrawingProjectionPort.project_drawing`；用 T1 request/result，来源匹配依 T0 已证明策略，不自行扩大承诺。
 
-- [ ] RED：`test_asymmetric_three_views_have_expected_coordinates`、`test_hole_occlusion_and_cylinder_silhouettes`、`test_two_solids_occlude_each_other`、`test_ellipse_and_rational_curve_not_flattened`、`test_tangent_policy_does_not_remove_sharp_edges`。
-- [ ] 运行 `uv run pytest tests/geom/test_drawing_projection.py -q`，失败必须由数值/拓扑断言体现，不能只保存截图。
-- [ ] 在 geom 中计算整件 HLR 并分类；复用必要曲线修复，过滤零段/接缝并处理重复；源模型到局部坐标同基准，禁止各视图独立居中。
-- [ ] 将精确线、圆/弧、椭圆和完整有理样条转换为 DTO；超出表达范围返回诊断，不能静默降为折线。
-- [ ] 缓存以模型内容指纹+来源+基方向+几何策略/内核版本索引；纸上移动/比例不得进 HLR 缓存键。空模型可显示空页，但创建视图明确失败。
-- [ ] GREEN 跑同组和 T0 几何回归，输出数值及定向截图证据；按 T0 审定容差验收。
+- [x] RED：`test_asymmetric_three_views_have_expected_coordinates`、`test_hole_occlusion_and_cylinder_silhouettes`、`test_two_solids_occlude_each_other`、`test_ellipse_and_rational_curve_not_flattened`、`test_tangent_policy_does_not_remove_sharp_edges`。
+- [x] 运行 `uv run pytest tests/geom/test_drawing_projection.py -q`，失败必须由数值/拓扑断言体现，不能只保存截图。
+- [x] 在 geom 中计算整件 HLR 并分类；复用必要曲线修复，过滤零段/接缝并处理重复；源模型到局部坐标同基准，禁止各视图独立居中。
+- [x] 将精确线、圆/弧、椭圆和完整有理样条转换为 DTO；超出表达范围返回诊断，不能静默降为折线。
+- [x] 缓存以模型内容指纹+来源+基方向+几何策略/内核版本索引；纸上移动/比例不得进 HLR 缓存键。空模型可显示空页，但创建视图明确失败。
+- [x] GREEN 跑同组和 T0 几何回归，输出数值及定向截图证据；按 T0 审定容差验收。
 
 ### Task 4: T4 — 三工作区与图纸放置
 

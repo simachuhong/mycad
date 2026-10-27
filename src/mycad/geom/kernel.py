@@ -15,19 +15,29 @@ strings ``new`` / ``add`` / ``cut`` mapped to build123d ``Mode.NEW`` /
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
+import json
 import math
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from typing import cast
 
+import build123d
 from build123d import CenterOf, Edge, Face, GeomType, Part
 
 from mycad.core.drawing import DrawingState
 from mycad.core.drawing_codec import apply_drawing_command
+from mycad.core.drawing_projection import (
+    DrawingProjectionRequest,
+    DrawingSourceSnapshot,
+    ProjectionResult,
+    ViewBasis,
+)
 from mycad.core.exceptions import (
     GeometryBuildError,
     GeomVersionError,
@@ -87,6 +97,7 @@ from mycad.geom._b123_features import (
 )
 from mycad.geom._b123_ops import apply_primitive, checked_mapping
 from mycad.geom.body_provenance import BodyOrigin, operation_origins
+from mycad.geom.drawing_projection import project_shape
 from mycad.geom.io import write_step, write_stl
 from mycad.geom.query import (
     build_boundary_edges,
@@ -212,6 +223,7 @@ class BuildKernel:
 
     def __init__(self) -> None:
         self._drawing_state = DrawingState()
+        self._drawing_projection_cache: dict[tuple[str, ViewBasis], ProjectionResult] = {}
         self._drawing_revision = 0
         self._part: Part | None = None
         self._snapshots: list[tuple[str, int, Part | None]] = []
@@ -698,6 +710,38 @@ class BuildKernel:
                 self._geometry_revision,
                 deepcopy(self._part),
             )
+        )
+
+    @property
+    def drawing_source_fingerprint(self) -> str:
+        operations = [(cid, p) for cid, p in self._operations if not cid.startswith("drawing.")]
+        return hashlib.sha256(
+            json.dumps(operations, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    def drawing_snapshot(self) -> DrawingSourceSnapshot:
+        if self._part is None or not self._part.solids():
+            raise ValueError("Cannot create a view from an empty source model")
+        stream = BytesIO()
+        write_brep = cast("Callable[[Part, BytesIO], bool]", build123d.export_brep)
+        if not write_brep(self._part, stream):
+            raise ValueError("Could not serialize drawing source")
+        return DrawingSourceSnapshot(self.drawing_source_fingerprint, stream.getvalue())
+
+    def project_drawing(self, request: DrawingProjectionRequest) -> ProjectionResult:
+        if request.source_fingerprint != self.drawing_source_fingerprint:
+            raise ValueError("Drawing source has changed")
+        if self._part is None or not self._part.solids():
+            raise ValueError("Cannot create a view from an empty source model")
+        key = (request.source_fingerprint, request.basis)
+        if key not in self._drawing_projection_cache:
+            if len(self._drawing_projection_cache) >= 24:
+                self._drawing_projection_cache.clear()
+            self._drawing_projection_cache[key] = project_shape(self._part, request)
+        return replace(
+            self._drawing_projection_cache[key],
+            view_id=request.view_id,
+            generation=request.generation,
         )
 
     @property

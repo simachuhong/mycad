@@ -1,0 +1,41 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_distinct_splines_with_same_five_samples_are_not_merged __________
+
+    def test_distinct_splines_with_same_five_samples_are_not_merged() -> None:
+        from math import comb
+    
+        from build123d import Edge
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.Geom import Geom_BSplineCurve
+        from OCP.gp import gp_Pnt
+        from OCP.TColgp import TColgp_Array1OfPnt
+        from OCP.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
+    
+        # y=t(t-.25)(t-.5)(t-.75)(t-1), represented exactly as degree-5 Bezier.
+        power = [0, .09375, -.78125, 2.1875, -2.5, 1]
+        bernstein = [sum(power[k]*comb(i,k)/comb(5,k) for k in range(i+1)) for i in range(6)]
+        edges: list[Edge] = []
+        for factor in (1, 2):
+            poles = TColgp_Array1OfPnt(1, 6)
+            weights = TColStd_Array1OfReal(1, 6)
+            for i, y in enumerate(bernstein, 1):
+                poles.SetValue(i, gp_Pnt((i-1)*2, factor*y*100, 0))
+                weights.SetValue(i, 1)
+            knots = TColStd_Array1OfReal(1, 2)
+            mults = TColStd_Array1OfInteger(1, 2)
+            for i, knot in enumerate((0,1),1):
+                knots.SetValue(i, knot)
+                mults.SetValue(i, 6)
+            curve = Geom_BSplineCurve(poles,weights,knots,mults,5)
+            edges.append(Edge(BRepBuilderAPI_MakeEdge(curve).Edge()))
+        result = project_shape(Compound(edges), request())
+>       assert len(result.curves) == 2
+E       AssertionError: assert 1 == 2
+E        +  where 1 = len((ProjectedCurve(curve_id='curve-0', geometry=SplineCurve(poles=((0.0, 0.0), (2.0, 1.875), (4.0, -4.0625), (6.0, 4.0625...(6, 6), weights=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0), periodic=False), visibility='visible', source=None, silhouette=False),))
+E        +    where (ProjectedCurve(curve_id='curve-0', geometry=SplineCurve(poles=((0.0, 0.0), (2.0, 1.875), (4.0, -4.0625), (6.0, 4.0625...(6, 6), weights=(1.0, 1.0, 1.0, 1.0, 1.0, 1.0), periodic=False), visibility='visible', source=None, silhouette=False),) = ProjectionResult(view_id=UUID('0dc2159f-d6c4-4089-95a0-c9c28c391c40'), source_fingerprint='fixture', generation=1, cur...1.0, 1.0, 1.0, 1.0, 1.0, 1.0), periodic=False), visibility='visible', source=None, silhouette=False),), diagnostics=()).curves
+
+tests/geom/test_drawing_projection.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED tests/geom/test_drawing_projection.py::test_distinct_splines_with_same_five_samples_are_not_merged
+1 failed in 16.53s
