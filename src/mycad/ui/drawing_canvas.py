@@ -11,98 +11,21 @@ from uuid import UUID
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
-    QFont,
     QHideEvent,
     QKeyEvent,
     QMouseEvent,
-    QPainterPath,
     QPen,
     QShowEvent,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene, QGraphicsView, QWidget
 
+from mycad.core.drawing_paper import PaperText, paper_texts, sheet_frame
 from mycad.core.drawing_projection import (
-    ArcCurve,
-    CurveGeometry,
     DrawingScene,
-    EllipseCurve,
-    LineCurve,
     Point2,
 )
-
-
-def curve_path(curve: CurveGeometry) -> QPainterPath:
-    path = QPainterPath()
-    if isinstance(curve, LineCurve):
-        path.moveTo(curve.start[0], -curve.start[1])
-        path.lineTo(curve.end[0], -curve.end[1])
-        return path
-    if isinstance(curve, ArcCurve | EllipseCurve):
-        rx = curve.radius if isinstance(curve, ArcCurve) else curve.major_radius
-        ry = curve.radius if isinstance(curve, ArcCurve) else curve.minor_radius
-        rotation = 0 if isinstance(curve, ArcCurve) else math.radians(curve.rotation_deg)
-        # Cubic Bezier conic rendering; exact DTO remains the export truth.
-        segments = max(1, math.ceil(abs(curve.sweep_deg) / 90))
-        step = math.radians(curve.sweep_deg) / segments
-
-        def point(t: float) -> QPointF:
-            x, y = rx * math.cos(t), ry * math.sin(t)
-            return QPointF(
-                curve.center[0] + x * math.cos(rotation) - y * math.sin(rotation),
-                -(curve.center[1] + x * math.sin(rotation) + y * math.cos(rotation)),
-            )
-
-        def tangent(t: float) -> QPointF:
-            x, y = -rx * math.sin(t), ry * math.cos(t)
-            return QPointF(
-                x * math.cos(rotation) - y * math.sin(rotation),
-                -(x * math.sin(rotation) + y * math.cos(rotation)),
-            )
-
-        t = math.radians(curve.start_deg)
-        path.moveTo(point(t))
-        for _ in range(segments):
-            k = 4 / 3 * math.tan(step / 4)
-            end = t + step
-            path.cubicTo(point(t) + tangent(t) * k, point(end) - tangent(end) * k, point(end))
-            t = end
-        return path
-    # Rational de Boor evaluation for display; no modification to exact spline data.
-    knots = tuple(
-        k for k, m in zip(curve.knots, curve.multiplicities, strict=True) for _ in range(m)
-    )
-    n, p = len(curve.poles) - 1, curve.degree
-    if curve.periodic:
-        raise ValueError("周期样条需要先规范化为非周期精确曲线")
-
-    def evaluate(u: float) -> Point2:
-        span = (
-            n
-            if u >= knots[n + 1]
-            else next(i for i in range(p, n + 1) if knots[i] <= u < knots[i + 1])
-        )
-        d = [
-            [
-                curve.poles[j][0] * curve.weights[j],
-                curve.poles[j][1] * curve.weights[j],
-                curve.weights[j],
-            ]
-            for j in range(span - p, span + 1)
-        ]
-        for r in range(1, p + 1):
-            for j in range(p, r - 1, -1):
-                i = span - p + j
-                denom = knots[i + p - r + 1] - knots[i]
-                a = (u - knots[i]) / denom if denom else 0
-                d[j] = [(1 - a) * x + a * y for x, y in zip(d[j - 1], d[j], strict=True)]
-        return d[p][0] / d[p][2], d[p][1] / d[p][2]
-
-    points = tuple(evaluate(knots[p] + (knots[n + 1] - knots[p]) * i / 160) for i in range(161))
-    path.moveTo(points[0][0], -points[0][1])
-    for x, y in points[1:]:
-        path.lineTo(x, -y)
-    return path
+from mycad.ui.drawing_render import add_paper_text, curve_path, paper_pen
 
 
 class DrawingCanvas(QGraphicsView):
@@ -183,32 +106,19 @@ class DrawingCanvas(QGraphicsView):
         w, h = scene.size_mm
         paper = graphics.addRect(0, -h, w, h, QPen(QColor("#929ba5"), 0.15), QColor("white"))
         paper.setZValue(-10)
-        m = scene.margin_mm
-        graphics.addRect(m, -h + m, w - 2 * m, h - 2 * m, QPen(QColor("#303942"), 0.3))
-        if scene.title:
-            box_height = max(16, 5 * len(scene.title) + 5)
-            graphics.addRect(
-                w - m - 90, -m - box_height, 90, box_height, QPen(QColor("#303942"), 0.25)
-            )
-            font = QFont("sans-serif")
-            font.setPointSizeF(2.5)
-            for index, (key, value) in enumerate(scene.title):
-                text = graphics.addText(f"{key}：{value}", font)
-                text.setTextWidth(86)
-                text.setPos(w - m - 88, -m - box_height + 2 + index * 5)
+        for line in sheet_frame(scene):
+            graphics.addPath(curve_path(line), paper_pen("FRAME"))
+        for text in paper_texts(scene):
+            if text.layer == "FRAME":
+                add_paper_text(graphics, text)
         for view in scene.views:
             for curve in view.curves:
-                pen = QPen(QColor("#26313c"), 0.25 / view.scale)
-                if curve.visibility == "hidden":
-                    pen.setStyle(Qt.PenStyle.DashLine)
-                    pen.setColor(QColor("#687789"))
-                elif curve.visibility == "tangent":
-                    pen.setStyle(Qt.PenStyle.DotLine)
+                pen = paper_pen(curve.visibility.upper(), view.scale)
                 status = self.view_statuses.get(view.view_id, "clean")
                 if status != "clean":
                     pen.setColor(QColor("#b77512" if status != "failed" else "#bc3540"))
                 try:
-                    path = curve_path(curve.geometry)
+                    path = curve_path(curve.geometry, tolerance=0.01 / view.scale)
                 except ValueError as error:
                     warning = graphics.addText(str(error))
                     warning.setDefaultTextColor(QColor("#b52028"))
@@ -224,18 +134,16 @@ class DrawingCanvas(QGraphicsView):
                 self._bounds[view.view_id] = bounds if previous is None else previous.united(bounds)
         for annotation in scene.resolved_annotations:
             color = QColor("#087589" if annotation.status == "resolved" else "#bc3540")
-            pen = QPen(color, 0.18)
-            if annotation.kind == "center":
-                pen.setStyle(Qt.PenStyle.DashDotLine)
+            pen = paper_pen("CENTER" if annotation.kind == "center" else "DIM")
+            pen.setColor(color)
             for geometry in annotation.curves:
                 item = graphics.addPath(curve_path(geometry), pen)
                 item.setData(2, annotation.annotation_id)
                 item.setZValue(3)
-            font = QFont("sans-serif")
-            font.setPointSizeF(2.5)
-            label = graphics.addText(annotation.text or "中心", font)
+            label = add_paper_text(
+                graphics, PaperText(annotation.position_mm, annotation.text or "中心")
+            )
             label.setDefaultTextColor(color)
-            label.setPos(annotation.position_mm[0], -annotation.position_mm[1])
             label.setData(2, annotation.annotation_id)
             label.setZValue(4)
             self._annotation_bounds[annotation.annotation_id] = label.sceneBoundingRect()

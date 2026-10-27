@@ -1,0 +1,16 @@
+
+==================================== ERRORS ====================================
+______________ ERROR collecting tests/core/test_drawing_curves.py ______________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/core/test_drawing_curves.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/core/test_drawing_curves.py:9: in <module>
+    from mycad.core.drawing_curves import cubic_segments
+E   ModuleNotFoundError: No module named 'mycad.core.drawing_curves'
+=========================== short test summary info ============================
+ERROR tests/core/test_drawing_curves.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.45s

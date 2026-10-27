@@ -17,7 +17,7 @@ attribution list is the union measured by:
 Development-only tooling (ruff, basedpyright, pytest, pytest-cov, hatchling,
 editables) is declared in a PEP 735 dependency group, is not part of either
 runtime closure, and is therefore not listed here. The default dependency
-closure excludes PySide6, pyqtgraph, PyOpenGL, Pillow, and PlaneGCS. Install
+closure excludes PySide6, pyqtgraph, PyOpenGL, Pillow, pypdf, and PlaneGCS. Install
 `mycad[desktop]` for the GUI, and `mycad[sketch-constraints]` for the optional
 sketch constraint backend.
 
@@ -53,7 +53,7 @@ and is therefore attributed on two lines:
       satisfy the LGPL obligations for those native libraries.
 
 --------------------------------------------------------------------------------
-Runtime dependency attribution (57 distributions in the all-platform union)
+Runtime dependency attribution (58 distributions in the all-platform union)
 --------------------------------------------------------------------------------
 
   anytree                        Apache-2.0
@@ -91,6 +91,9 @@ Runtime dependency attribution (57 distributions in the all-platform union)
       text); the distribution METADATA carries no License field.
   parso                          MIT
   pexpect                        ISC
+  pypdf                          BSD-3-Clause (optional `desktop` extra)
+      Evidence: pypdf-6.10.0.dist-info/licenses/LICENSE, standard 3-clause
+      BSD text; original copyright Mathieu Fenniak and contributors.
   pillow                         MIT-CMU (optional `desktop` extra)
       Evidence: pillow-12.3.0.dist-info/METADATA License-Expression;
       used by ezdxf's drawing frontend for the DXF output preview.

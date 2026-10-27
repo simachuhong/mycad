@@ -1,0 +1,27 @@
+
+==================================== ERRORS ====================================
+____________ ERROR collecting tests/formats/test_drawing_export.py _____________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/formats/test_drawing_export.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/formats/test_drawing_export.py:10: in <module>
+    from mycad.formats.drawing_export import export_drawing_dxf
+E   ModuleNotFoundError: No module named 'mycad.formats.drawing_export'
+________________ ERROR collecting tests/ui/test_drawing_pdf.py _________________
+ImportError while importing test module '/media/sima/Data/projects/MyCAD/tests/ui/test_drawing_pdf.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib/python3.12/importlib/__init__.py:90: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/ui/test_drawing_pdf.py:13: in <module>
+    from mycad.ui.drawing_pdf import export_drawing_pdf
+E   ModuleNotFoundError: No module named 'mycad.ui.drawing_pdf'
+=========================== short test summary info ============================
+ERROR tests/formats/test_drawing_export.py
+ERROR tests/ui/test_drawing_pdf.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 errors in 2.13s

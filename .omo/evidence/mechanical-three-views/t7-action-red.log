@@ -1,0 +1,48 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_export_action_uses_current_clean_scene_and_blocks_stale _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x70695b165400>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-104/test_export_action_uses_curren0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x706985b06f30>
+
+    def test_export_action_uses_current_clean_scene_and_blocks_stale(qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from uuid import uuid4
+    
+        from PySide6.QtWidgets import QFileDialog
+    
+        from mycad.app import build_app, new_document
+        from mycad.core.drawing import DrawingSheet, DrawingView
+        from mycad.core.drawing_codec import drawing_object_mapping
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 80, "size_y": 30, "size_z": 10})
+        sheet = DrawingSheet(uuid4())
+        view = DrawingView(uuid4(), sheet.sheet_id, anchor_mm=(100, 100), scale=0.5)
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(sheet))
+        loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.updates.sync(bench.session_id, services.kernel.drawing_source_fingerprint, {view.view_id: view.basis})
+        batch = bench.updates.begin()
+        assert batch is not None
+        bench.updates.finish(batch, (services.kernel.project_drawing(batch.requests[0]),))
+        window.workspace_tabs.activate("drawing")
+        target = tmp_path / "action.pdf"
+        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args, **_kwargs: (str(target), "PDF"))
+        before = len(loaded.document.commands)
+>       bench.pdf_action.trigger()
+        ^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingWorkbench' object has no attribute 'pdf_action'. Did you mean: 'addAction'?
+
+tests/ui/test_drawing_pdf.py:83: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_pdf.py::test_export_action_uses_current_clean_scene_and_blocks_stale
+1 failed, 3 deselected in 11.22s

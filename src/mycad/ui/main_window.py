@@ -4004,6 +4004,9 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_export_document(self) -> None:
+        if self.active_workspace == "drawing":
+            self.drawing_workbench.choose_export("pdf")
+            return
         if self._services is None:
             self.status_command.setText("未组合应用服务，无法导出")
             return

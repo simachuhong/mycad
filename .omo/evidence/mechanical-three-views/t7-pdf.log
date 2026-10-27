@@ -1,0 +1,46 @@
+FF..........................                                             [100%]
+=================================== FAILURES ===================================
+____________________ test_pdf_media_box_and_vector_content _____________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77ce6e38d910>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-103/test_pdf_media_box_and_vector_0')
+
+    def test_pdf_media_box_and_vector_content(qtbot: QtBot, tmp_path: Path) -> None:
+        path = tmp_path / "drawing.pdf"
+        export_drawing_pdf(drawing_scene(), path)
+        document = QPdfDocument()
+        assert document.load(str(path)) == QPdfDocument.Error.None_
+        qtbot.waitUntil(lambda: document.pageCount() == 1)
+        size = document.pagePointSize(0)
+>       assert (size.width(), size.height()) == pytest.approx(
+            (297 * 72 / 25.4, 210 * 72 / 25.4), abs=0.15
+        )
+E       assert (842.0, 595.0) == approx((841.8...11812 ± 0.15))
+E         
+E         comparison failed. Mismatched elements: 1 / 2:
+E         Max absolute difference: 0.2755905511811534
+E         Max relative difference: 0.00046317739694311493
+E         Index | Obtained | Expected                
+E         1     | 595.0    | 595.2755905511812 ± 0.15
+
+tests/ui/test_drawing_pdf.py:24: AssertionError
+_____________________ test_chinese_title_and_curve_output ______________________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x77ce6e38eae0>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-103/test_chinese_title_and_curve_o0')
+
+    def test_chinese_title_and_curve_output(qtbot: QtBot, tmp_path: Path) -> None:
+        path = tmp_path / "chinese.pdf"
+        export_drawing_pdf(drawing_scene(), path)
+        document = QPdfDocument()
+        assert document.load(str(path)) == QPdfDocument.Error.None_
+        qtbot.waitUntil(lambda: document.pageCount() == 1)
+        text = document.getAllText(0).text()
+>       assert "法兰工程图" in text and "MC-001" in text
+E       AssertionError: assert ('法兰工程图' in '名称：法兰⼯程图\r\n图号：MC-\r\r\x0e\r\n⽐例：1:2\r\n\x14\r.\r\r mm')
+
+tests/ui/test_drawing_pdf.py:41: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_pdf.py::test_pdf_media_box_and_vector_content - ...
+FAILED tests/ui/test_drawing_pdf.py::test_chinese_title_and_curve_output - As...
+2 failed, 26 passed in 28.27s

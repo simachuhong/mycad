@@ -180,12 +180,12 @@
 
 **Interfaces:** 使用 T1 `build_drawing_scene` 和两个显式 export 函数。DXF 不改变现有单草图 provider 行为；PDF 首版使用 ui 内 QPdfWriter，headless PDF 不在本包承诺。
 
-- [ ] RED：`test_dxf_sheet_blocks_scale_and_units`、`test_export_matches_frozen_scene`、`test_invalid_scene_preserves_existing_file`、`test_pdf_media_box_and_vector_content`、`test_chinese_title_and_curve_output`。
-- [ ] 运行 `uv run pytest tests/formats/test_drawing_export.py -q` 和 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_pdf.py -q`，确认失败。
-- [ ] DXF 视图局部真实 mm 建块、纸空间按比例插入；纸张图框、标题、线宽、字高及标注用纸上 mm。提供 visible/hidden/tangent/center/DIM 线层映射，显式保留精确椭圆和样条。
-- [ ] PDF 使用冻结 DrawingScene 矢量绘制到正确 MediaBox；采用可用中文字体并验证字符，禁止截图输出。预览同一输出场景/实际字节，不自动 fit 改输出比例。
-- [ ] clean 且无失关联/缺失几何才允许最终出图；生成临时文件，完整成功后替换目标。标明 DXF 是静态交付，不宣称保存 AutoCAD VIEWBASE/跨软件关联。
-- [ ] GREEN 跑同组；解析 DXF 数值验证 80 mm 在 1:2 纸上 40 mm、尺寸文本 80；纸上定位目标≤0.05 mm。外部查看器人工核对 DXF/PDF 线型、中文、页尺寸和打印实际大小。
+- [x] RED：`test_dxf_sheet_blocks_scale_and_units`、`test_export_matches_frozen_scene`、`test_invalid_scene_preserves_existing_file`、`test_pdf_media_box_and_vector_content`、`test_chinese_title_and_curve_output`。
+- [x] 运行 `uv run pytest tests/formats/test_drawing_export.py -q` 和 `QT_QPA_PLATFORM=offscreen uv run pytest tests/ui/test_drawing_pdf.py -q`，确认失败。
+- [x] DXF 视图局部真实 mm 建块、纸空间按比例插入；纸张图框、标题、线宽、字高及标注用纸上 mm。提供 visible/hidden/tangent/center/DIM 线层映射，显式保留精确椭圆和样条。
+- [x] PDF 使用冻结 DrawingScene 矢量绘制到正确 MediaBox；采用可用中文字体并验证字符，禁止截图输出。预览同一输出场景/实际字节，不自动 fit 改输出比例。
+- [x] clean 且无失关联/缺失几何才允许最终出图；生成临时文件，完整成功后替换目标。标明 DXF 是静态交付，不宣称保存 AutoCAD VIEWBASE/跨软件关联。
+- [x] GREEN 跑同组；解析 DXF 数值验证 80 mm 在 1:2 纸上 40 mm、尺寸文本 80；纸上定位目标≤0.05 mm。外部查看器人工核对 DXF/PDF 线型、中文、页尺寸和打印实际大小。
 
 ### Task 8: T8 — 贯通验收、文档和发布门
 

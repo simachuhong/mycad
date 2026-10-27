@@ -1,0 +1,20 @@
+Title:           法兰工程图
+Author:          
+Creator:         MyCAD
+Producer:        Qt 6.12.0
+CreationDate:    Tue Oct 27 14:35:23 2026 CST
+ModDate:         Tue Oct 27 14:35:23 2026 CST
+Custom Metadata: no
+Metadata Stream: yes
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           1
+Encrypted:       no
+Page size:       841.89 x 595.276 pts (A4)
+Page rot:        0
+File size:       15592 bytes
+Optimized:       no
+PDF version:     1.7

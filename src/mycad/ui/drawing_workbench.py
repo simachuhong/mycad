@@ -7,6 +7,7 @@ from __future__ import annotations
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, cast, override
 from uuid import UUID, uuid4
 
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QLabel,
     QLineEdit,
@@ -31,7 +33,9 @@ from PySide6.QtWidgets import (
 from mycad import app as mycad_app
 from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView
 from mycad.core.drawing_codec import apply_drawing_command, drawing_object_mapping
+from mycad.core.drawing_paper import validate_drawing_output
 from mycad.core.drawing_projection import (
+    DrawingScene,
     DrawingSourceSnapshot,
     Point2,
     ProjectionResult,
@@ -40,8 +44,10 @@ from mycad.core.drawing_projection import (
     projected_basis,
 )
 from mycad.core.persistence import LoadedDocument
+from mycad.formats.drawing_export import export_drawing_dxf
 from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
 from mycad.ui.drawing_canvas import DrawingCanvas
+from mycad.ui.drawing_pdf import export_drawing_pdf
 from mycad.ui.drawing_tools import ViewPlacement, move_view, scale_view, set_view_alignment
 from mycad.ui.drawing_updates import ProjectionBatch, ProjectionUpdates
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
@@ -92,6 +98,10 @@ class DrawingWorkbench(QMainWindow):
         self.sheet_action = QAction("新建图纸", self)
         self.base_action = QAction("基准与投影视图", self)
         self.update_action = QAction("更新视图", self)
+        self.dxf_action = QAction("导出 DXF", self)
+        self.pdf_action = QAction("导出 PDF", self)
+        self.dxf_action.triggered.connect(lambda: self.choose_export("dxf"))
+        self.pdf_action.triggered.connect(lambda: self.choose_export("pdf"))
         self.delete_action = QAction("删除视图", self)
         self.confirm_delete_action = QAction("确认删除（Enter）", self)
         self.confirm_delete_action.setVisible(False)
@@ -103,6 +113,8 @@ class DrawingWorkbench(QMainWindow):
             self.delete_action,
             self.confirm_delete_action,
             self.cancel_update_action,
+            self.dxf_action,
+            self.pdf_action,
         ):
             self.toolbar.addAction(action)
             action.setEnabled(False)
@@ -241,6 +253,8 @@ class DrawingWorkbench(QMainWindow):
             self.base_action,
             self.update_action,
             self.cancel_update_action,
+            self.dxf_action,
+            self.pdf_action,
         ):
             action.setEnabled(enabled)
         self.refresh()
@@ -642,6 +656,61 @@ class DrawingWorkbench(QMainWindow):
         self._render()
         self.request_update()
         self._set_message("视图放置已结束。")
+
+    def choose_export(self, kind: str) -> None:
+        try:
+            self.output_scene()
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, f"导出工程图 {kind.upper()}", f"工程图.{kind}", f"{kind.upper()} (*.{kind})"
+        )
+        if filename:
+            path = Path(filename)
+            if path.suffix.lower() != f".{kind}":
+                path = path.with_name(path.name + f".{kind}")
+            self.export_to(kind, path)
+
+    def output_scene(self) -> DrawingScene:
+        if self.services is None or self.unit is None or self.unit.is_busy or self.sheet_id is None:
+            raise ValueError("当前图纸尚未就绪，请等待更新完成")
+        if self.annotations.pending or (self.placement is not None and self.placement.pending):
+            raise ValueError("图中预览尚未提交，请先完成或取消再出图")
+        current = self.services.kernel.drawing_state
+        views = [view for view in current.views if view.sheet_id == self.sheet_id]
+        if any(not self._annotation_source_clean(view.view_id) for view in views):
+            raise ValueError("视图已过期或尚未生成，请更新后再出图")
+        scene = build_drawing_scene(current, self.sheet_id, self.projections)
+        validate_drawing_output(scene)
+        return scene
+
+    def export_to(self, kind: str, path: Path) -> None:
+        try:
+            scene = self.output_scene()
+            if kind not in ("dxf", "pdf"):
+                raise ValueError("工程图仅支持 DXF/PDF 输出")
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        assert self.unit is not None
+        exporter = export_drawing_dxf if kind == "dxf" else export_drawing_pdf
+
+        def completed(result: ExecutionResult) -> None:
+            if result.error:
+                self._set_message(f"出图失败，原文件未修改：{result.error}")
+            else:
+                self._set_message(
+                    f"已导出 {path.name}；按图纸实际大小输出。DXF 为静态交付，不包含跨软件模型关联。"
+                )
+
+        if self.unit.submit(
+            lambda: exporter(scene, path),
+            operation=f"export-drawing-{kind}",
+            session_id=self.session_id,
+            on_complete=completed,
+        ):
+            self._set_message("正在生成矢量图纸…")
 
     def _annotation_source_clean(self, identity: UUID) -> bool:
         if self.services is None or self.unit is None or self.unit.is_busy:
