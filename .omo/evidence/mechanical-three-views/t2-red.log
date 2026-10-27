@@ -1,0 +1,101 @@
+F..FF                                                                    [100%]
+=================================== FAILURES ===================================
+_________________ test_group_creation_is_atomic_and_replayable _________________
+
+    def test_group_creation_is_atomic_and_replayable() -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        sheet, base, child = (uuid4() for _ in range(3))
+>       loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)}, "test")
+
+tests/core/test_drawing_commands.py:17: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/bus.py:303: in execute
+    result = self._execute_one(
+src/mycad/core/bus.py:337: in _execute_one
+    spec = self._registry.get(command_id, version)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <mycad.commands.registry.CommandRegistry object at 0x7ca5b1ada5d0>
+command_id = 'drawing.sheet.create', version = None
+
+    def get(self, command_id: str, version: int | None = None) -> CommandSpec:
+        """Return the spec for ``command_id`` (latest version by default)."""
+        versions = [v for (cid, v) in self._specs if cid == command_id]
+        if not versions:
+>           raise UnknownCommandError(f"unknown command id {command_id!r}", identifier=command_id)
+E           mycad.core.exceptions.UnknownCommandError: unknown command id 'drawing.sheet.create'
+
+src/mycad/commands/registry.py:63: UnknownCommandError
+_____________ test_part_archive_roundtrip_and_old_audit_preserved ______________
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-51/test_part_archive_roundtrip_an0')
+
+    def test_part_archive_roundtrip_and_old_audit_preserved(tmp_path: Path) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
+        old = loaded.document.commands[0]
+        assert loaded.document.archive_version == 1
+        sheet = uuid4()
+>       loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)}, "test")
+
+tests/core/test_drawing_archive.py:20: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/bus.py:303: in execute
+    result = self._execute_one(
+src/mycad/core/bus.py:337: in _execute_one
+    spec = self._registry.get(command_id, version)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <mycad.commands.registry.CommandRegistry object at 0x7ca5b1adbef0>
+command_id = 'drawing.sheet.create', version = None
+
+    def get(self, command_id: str, version: int | None = None) -> CommandSpec:
+        """Return the spec for ``command_id`` (latest version by default)."""
+        versions = [v for (cid, v) in self._specs if cid == command_id]
+        if not versions:
+>           raise UnknownCommandError(f"unknown command id {command_id!r}", identifier=command_id)
+E           mycad.core.exceptions.UnknownCommandError: unknown command id 'drawing.sheet.create'
+
+src/mycad/commands/registry.py:63: UnknownCommandError
+_________________ test_layout_command_keeps_geometry_identity __________________
+
+    def test_layout_command_keeps_geometry_identity() -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        kernel = services.kernel
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8}, "test")
+        before = kernel.viewport_data()[0]
+        feature = kernel.current_feature_id
+        bodies = kernel.body_ids
+        sheet = uuid4()
+>       loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)}, "test")
+
+tests/geom/test_drawing_state.py:19: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/core/bus.py:303: in execute
+    result = self._execute_one(
+src/mycad/core/bus.py:337: in _execute_one
+    spec = self._registry.get(command_id, version)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <mycad.commands.registry.CommandRegistry object at 0x7ca5b1ec2fc0>
+command_id = 'drawing.sheet.create', version = None
+
+    def get(self, command_id: str, version: int | None = None) -> CommandSpec:
+        """Return the spec for ``command_id`` (latest version by default)."""
+        versions = [v for (cid, v) in self._specs if cid == command_id]
+        if not versions:
+>           raise UnknownCommandError(f"unknown command id {command_id!r}", identifier=command_id)
+E           mycad.core.exceptions.UnknownCommandError: unknown command id 'drawing.sheet.create'
+
+src/mycad/commands/registry.py:63: UnknownCommandError
+=========================== short test summary info ============================
+FAILED tests/core/test_drawing_commands.py::test_group_creation_is_atomic_and_replayable
+FAILED tests/core/test_drawing_archive.py::test_part_archive_roundtrip_and_old_audit_preserved
+FAILED tests/geom/test_drawing_state.py::test_layout_command_keeps_geometry_identity
+3 failed, 2 passed in 9.21s

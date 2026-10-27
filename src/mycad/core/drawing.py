@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from uuid import UUID
 
-from mycad.core.drawing_projection import Point2, ViewBasis, ViewDirection, finite
+from mycad.core.drawing_projection import Point2, ViewBasis, ViewDirection, finite, projected_basis
 from mycad.core.drawing_references import DrawingGeometryReference
 
 ProjectionAngle = Literal["first", "third"]
@@ -174,6 +174,12 @@ class DrawingState:
             if view.view_id == identity:
                 return view
         raise ValueError(f"missing view {identity}")
+
+    def effective_basis(self, identity: UUID) -> ViewBasis:
+        view = self.view(identity)
+        if view.parent_id is not None:
+            return projected_basis(self.effective_basis(view.parent_id), view.direction)
+        return view.basis
 
     def effective_scale(self, identity: UUID) -> float:
         view = self.view(identity)

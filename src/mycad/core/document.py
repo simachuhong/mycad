@@ -61,6 +61,9 @@ AffectedObject = Literal[
     "body_pair",
     "body_transform",
     "body_pattern",
+    "drawing_sheet",
+    "drawing_view",
+    "drawing_annotation",
 ]
 
 # Appendix B.2 fixed mapping (command id -> affected_object), single source.
@@ -78,6 +81,15 @@ AFFECTED_OBJECTS: Mapping[str, str] = {
     "modify.boolean_bodies": "body_pair",
     "modify.body_transform": "body_transform",
     "modify.body_pattern": "body_pattern",
+    "drawing.sheet.create": "drawing_sheet",
+    "drawing.sheet.update": "drawing_sheet",
+    "drawing.sheet.delete": "drawing_sheet",
+    "drawing.view.create": "drawing_view",
+    "drawing.view.update": "drawing_view",
+    "drawing.view.delete": "drawing_view",
+    "drawing.annotation.create": "drawing_annotation",
+    "drawing.annotation.update": "drawing_annotation",
+    "drawing.annotation.delete": "drawing_annotation",
 }
 
 

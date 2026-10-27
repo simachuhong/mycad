@@ -20,6 +20,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import cast
 
+from mycad.builtin_commands.drawing_specs import DRAWING_COMMAND_SPECS
 from mycad.commands.spec import CliSyntax, CommandSpec
 
 __all__ = ["BUILTIN_COMMAND_SPECS"]
@@ -1113,4 +1114,5 @@ BUILTIN_COMMAND_SPECS = (
         min_archive_version=2,
         undo_compensation="history_replay",
     ),
+    *DRAWING_COMMAND_SPECS,
 )

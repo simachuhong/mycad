@@ -26,6 +26,8 @@ from typing import cast
 
 from build123d import CenterOf, Edge, Face, GeomType, Part
 
+from mycad.core.drawing import DrawingState
+from mycad.core.drawing_codec import apply_drawing_command
 from mycad.core.exceptions import (
     GeometryBuildError,
     GeomVersionError,
@@ -209,6 +211,8 @@ class BuildKernel:
     """
 
     def __init__(self) -> None:
+        self._drawing_state = DrawingState()
+        self._drawing_revision = 0
         self._part: Part | None = None
         self._snapshots: list[tuple[str, int, Part | None]] = []
         self._sketches: dict[str, Sketch] = {}
@@ -246,6 +250,8 @@ class BuildKernel:
         # kernel first, so full replay re-populates snapshots in ordinal order.
 
         self._part = None
+        self._drawing_state = DrawingState()
+        self._drawing_revision = 0
         self._snapshots = []
         self._sketches = {}
         self._drawing_layers_override = None
@@ -284,7 +290,9 @@ class BuildKernel:
         self._face_topology_ids.clear()
         self._vertex_topology_ids.clear()
         self._history_body_ids.clear()
-        self._feature_ids = [self._identity_scope.new_feature_id() for _snapshot in snapshots]
+        self._feature_ids = [
+            self._identity_scope.new_feature_id() for _feature in candidate._feature_ids
+        ]
         solid_count = 0 if part is None else len(part.solids())
         self._body_ids = tuple(self._identity_scope.new_body_id() for _ in range(solid_count))
         current_revision = max(self._geometry_revision, candidate._geometry_revision) + 1
@@ -299,6 +307,8 @@ class BuildKernel:
         self._part, self._snapshots, self._sketches = part, snapshots, sketches
         self._drawing_layers_override = candidate._drawing_layers_override
         self._dimension_layer = candidate._dimension_layer
+        self._drawing_state = candidate._drawing_state
+        self._drawing_revision = candidate._drawing_revision
         self._operations = deepcopy(candidate._operations)
         self._body_origins = candidate._body_origins
         self._current_mesh_cache.clear()
@@ -335,6 +345,17 @@ class BuildKernel:
 
         checked = checked_mapping(params, command_id)
 
+        if command_id.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation.")):
+            try:
+                candidate_drawing = apply_drawing_command(self._drawing_state, command_id, checked)
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(str(exc), command_id=command_id) from exc
+            self._drawing_state = candidate_drawing
+            self._drawing_revision += 1
+            self._snapshots.append(
+                (f"{command_id}:{len(self._snapshots)}", self._geometry_revision, self._part)
+            )
+            return
         if command_id == "drawing.layers.set":
             self._set_drawing_layers(checked)
             return
@@ -680,6 +701,15 @@ class BuildKernel:
         )
 
     @property
+    def drawing_state(self) -> DrawingState:
+        """Immutable engineering drawing objects reconstructed by command replay."""
+        return self._drawing_state
+
+    @property
+    def drawing_revision(self) -> int:
+        return self._drawing_revision
+
+    @property
     def drawing_layers(self) -> SketchLayerTable:
         """Shared drawing properties, including the default annotation layer."""
         tables = tuple(sketch.layers for sketch in self._sketches.values())
@@ -886,7 +916,7 @@ class BuildKernel:
 
     @property
     def feature_ids(self) -> tuple[FeatureId, ...]:
-        """Runtime feature identities aligned with the current replay history."""
+        """Runtime identities of geometry/sketch results; drawing-only checkpoints add none."""
 
         return tuple(self._feature_ids)
 

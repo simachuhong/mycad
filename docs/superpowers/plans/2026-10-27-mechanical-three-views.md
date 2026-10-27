@@ -113,14 +113,14 @@
 
 **Files:** 新增 `builtin_commands/drawing_specs.py`、`tests/core/test_drawing_commands.py`、`tests/core/test_drawing_archive.py`、`tests/geom/test_drawing_state.py`；修改 specs/defs 注册入口、geom/kernel.py、core/persistence.py 与必要 schema 选择路径、app.py。
 
-**Interfaces:** 注册 `drawing.sheet.create/update/delete`、`drawing.view.create/update/delete`、`drawing.annotation.create/update/delete`（首版命令版本 1）；参数 schema 引用 T1 数据，不收任意可执行代码。沿用 Bus execute/execute_batch。
+**Interfaces:** 注册 `drawing.sheet.create/update/delete`、`drawing.view.create/update/delete`、`drawing.annotation.create/update/delete`（首版命令版本 1）；参数 schema 引用 T1 数据，不收任意可执行代码。沿用 Bus execute/execute_batch。一组放置/更新使用单条命令的 views 数组，保证一个历史项和一次撤销；execute_batch 保证失败回滚。
 
-- [ ] RED：`test_group_creation_is_atomic_and_replayable` 在第二子视图失败后状态/历史完全回滚；`test_layout_command_keeps_geometry_identity` 比较前后几何指纹与有效选择；`test_part_archive_roundtrip_and_old_audit_preserved` 检查六字段、amendments；`test_drawing2d_rejects_engineering_commands`。
-- [ ] 运行 `uv run pytest tests/core/test_drawing_commands.py tests/core/test_drawing_archive.py tests/geom/test_drawing_state.py -q`，记录预期失败。
-- [ ] BuildKernel 组合 DrawingState、分离文档/几何/布局 revision；工程图命令只改图纸状态。reset、重放、候选 install、事务快照全部包含 DrawingState，图纸移动不创建新实体来源。
-- [ ] 接入独立非几何历史检查点，确保 state_id/ordinal 查询仍有效；禁止通过过滤历史后重编号破坏引用。
-- [ ] 新工程图 part 以 v3 存档，旧 v1/v2 在保存含新命令的文档时升级；打开不写回。仅新命令 params 保存对象，缓存不入档；未知命令版本给出明确错误。
-- [ ] GREEN 跑同组；追加既有 persistence/undo/app 候选加载相关 scoped 测试。提交前检查仅本包文件差异，保留用户前序修改。
+- [x] RED：`test_group_creation_is_atomic_and_replayable` 在第二子视图失败后状态/历史完全回滚；`test_layout_command_keeps_geometry_identity` 比较前后几何指纹与有效选择；`test_part_archive_roundtrip_and_old_audit_preserved` 检查六字段、amendments；`test_drawing2d_rejects_engineering_commands`。
+- [x] 运行 `uv run pytest tests/core/test_drawing_commands.py tests/core/test_drawing_archive.py tests/geom/test_drawing_state.py -q`，记录预期失败。
+- [x] BuildKernel 组合 DrawingState、分离文档/几何/布局 revision；工程图命令只改图纸状态。reset、重放、候选 install、事务快照全部包含 DrawingState，图纸移动不创建新实体来源。
+- [x] 接入独立非几何历史检查点，确保 state_id/ordinal 查询仍有效；禁止通过过滤历史后重编号破坏引用。
+- [x] 新工程图 part 以 v3 存档，旧 v1/v2 在保存含新命令的文档时升级；打开不写回。仅新命令 params 保存对象，缓存不入档；未知命令版本给出明确错误。
+- [x] GREEN 跑同组；追加既有 persistence/undo/app 候选加载相关 scoped 测试。提交前检查仅本包文件差异，保留用户前序修改。
 
 ### Task 3: T3 — 精确投影与可追踪曲线
 

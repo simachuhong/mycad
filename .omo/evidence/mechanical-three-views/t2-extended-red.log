@@ -1,0 +1,88 @@
+...FFF                                                                   [100%]
+=================================== FAILURES ===================================
+__________________________ test_drawing_cli_roundtrip __________________________
+
+    def test_drawing_cli_roundtrip() -> None:
+        from mycad.commands.grammar import parse_line, to_cli
+    
+        services = build_app(discoverers=[])
+        params = {"views": [{"view_id": str(uuid4()), "sheet_id": str(uuid4())}]}
+>       line = to_cli("drawing.view.create", params, services.registry)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_drawing_commands.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+command_id = 'drawing.view.create'
+params = {'views': [{'view_id': '3073ba10-7595-4ef9-8033-f87d01ada69a', 'sheet_id': '6f1ec264-5056-4d5a-9dfe-aa8f32731493'}]}
+registry = <mycad.commands.registry.CommandRegistry object at 0x7336d06d7a10>
+
+    def to_cli(command_id: str, params: Mapping[str, object], registry: CommandRegistry) -> str:
+        """Serialize validated+normalized params to the canonical CLI line.
+    
+        Emits ALL keys including default-filled ones, in schema ``properties``
+        declaration order (recursive; root ``$ref`` -> referenced def order).
+        None-valued keys are omitted (normalize_params already deleted them).
+        """
+        spec = registry.get(command_id)
+>       verb = spec.cli.verb_aliases[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+E       IndexError: tuple index out of range
+
+src/mycad/commands/grammar.py:641: IndexError
+____________ test_confirmed_drawing_batch_rolls_back_missing_parent ____________
+
+    def test_confirmed_drawing_batch_rolls_back_missing_parent() -> None:
+        from mycad.agent.plan_types import Plan
+        from mycad.core.document import PlannedCommand
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        sheet = str(uuid4())
+        plan = Plan(steps=[
+>           PlannedCommand("drawing.sheet.create", 1, {"sheet_id": sheet}, "Create sheet", "drawing_sheet"),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            PlannedCommand("drawing.view.create", 1, {
+                "view_id": str(uuid4()), "sheet_id": sheet, "parent_id": str(uuid4())
+            }, "Create view", "drawing_view"),
+        ])
+
+tests/core/test_drawing_commands.py:77: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<string>:8: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PlannedCommand(id='drawing.sheet.create', version=1, params={'sheet_id': '59c8cdef-0daa-441b-8885-1ece291dd266'}, summary_en='Create sheet', affected_object='drawing_sheet')
+
+    def __post_init__(self) -> None:
+        if self.id not in AFFECTED_OBJECTS:
+>           raise UnknownCommandError(f"unknown command id {self.id!r}", identifier=self.id)
+E           mycad.core.exceptions.UnknownCommandError: unknown command id 'drawing.sheet.create'
+
+src/mycad/core/document.py:101: UnknownCommandError
+__________________ test_projected_orientation_follows_parent ___________________
+
+    def test_projected_orientation_follows_parent() -> None:
+        from mycad.core.drawing_projection import ViewBasis, projected_basis
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        sheet, base, child = (str(uuid4()) for _ in range(3))
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet})
+        loaded.bus.execute("drawing.view.create", {"views": [
+            {"view_id": base, "sheet_id": sheet},
+            {"view_id": child, "sheet_id": sheet, "parent_id": base, "direction": "top"},
+        ]})
+        from uuid import UUID
+        state = services.kernel.drawing_state
+>       assert state.effective_basis(UUID(child)) == projected_basis(ViewBasis(), "top")
+               ^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingState' object has no attribute 'effective_basis'. Did you mean: 'effective_scale'?
+
+tests/core/test_drawing_commands.py:103: AttributeError
+=========================== short test summary info ============================
+FAILED tests/core/test_drawing_commands.py::test_drawing_cli_roundtrip - Inde...
+FAILED tests/core/test_drawing_commands.py::test_confirmed_drawing_batch_rolls_back_missing_parent
+FAILED tests/core/test_drawing_commands.py::test_projected_orientation_follows_parent
+3 failed, 3 passed in 9.49s

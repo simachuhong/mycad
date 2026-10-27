@@ -1,0 +1,68 @@
+........................FF............F...........F..................... [ 48%]
+........................................................................ [ 97%]
+....                                                                     [100%]
+=================================== FAILURES ===================================
+_________ test_registry_holds_the_appendix_a1_ids_and_released_p2_ids __________
+
+    def test_registry_holds_the_appendix_a1_ids_and_released_p2_ids() -> None:
+        registry = _builtin_registry()
+>       assert _registered_ids(registry) == sorted(EXPECTED_IDS)
+E       AssertionError: assert ['drawing.ann....delete', ...] == ['drawing.lay...pattern', ...]
+E         
+E         At index 0 diff: 'drawing.annotation.create' != 'drawing.layers.set'
+E         Left contains 9 more items, first extra item: 'modify.body_transform'
+E         Use -v to get more diff
+
+tests/builtin_commands/test_specs.py:745: AssertionError
+____________________ test_builtin_ids_follow_catalog_order _____________________
+
+    def test_builtin_ids_follow_catalog_order() -> None:
+>       assert BUILTIN_COMMAND_IDS == EXPECTED_IDS
+E       AssertionError: assert ('feature.box...pattern', ...) == ('feature.box...pattern', ...)
+E         
+E         Left contains 9 more items, first extra item: 'drawing.sheet.create'
+E         Use -v to get more diff
+
+tests/builtin_commands/test_specs.py:749: AssertionError
+______________________ test_affected_objects_static_shape ______________________
+
+    def test_affected_objects_static_shape() -> None:
+        assert len(AFFECTED_OBJECTS) == 13
+        ids = _registered_ids(_builtin_registry())
+        # User-confirmed drawing/constraint operations are not agent PlannedCommands.
+>       assert set(AFFECTED_OBJECTS) == set(ids) - {
+            "sketch.create",
+            "sketch.constraint.add",
+            "sketch.constraint.update",
+            "drawing.layers.set",
+        }
+E       AssertionError: assert {'feature.box...revolve', ...} == {'drawing.ann....update', ...}
+E         
+E         Extra items in the right set:
+E         'drawing.annotation.create'
+E         'drawing.annotation.update'
+E         'drawing.sheet.create'
+E         'drawing.view.create'
+E         'drawing.view.delete'...
+E         
+E         ...Full output truncated (5 lines hidden), use '-vv' to show
+
+tests/builtin_commands/test_specs.py:860: AssertionError
+___________ test_build_app_registers_p0_and_released_p2_builtin_ids ____________
+
+    def test_build_app_registers_p0_and_released_p2_builtin_ids() -> None:
+        services = build_app(discoverers=[])
+>       assert sorted(_registered_ids(services)) == BUILTIN_IDS
+E       AssertionError: assert ['drawing.ann....delete', ...] == ['drawing.lay...pattern', ...]
+E         
+E         At index 0 diff: 'drawing.annotation.create' != 'drawing.layers.set'
+E         Left contains 9 more items, first extra item: 'modify.body_transform'
+E         Use -v to get more diff
+
+tests/app/test_composition.py:46: AssertionError
+=========================== short test summary info ============================
+FAILED tests/builtin_commands/test_specs.py::test_registry_holds_the_appendix_a1_ids_and_released_p2_ids
+FAILED tests/builtin_commands/test_specs.py::test_builtin_ids_follow_catalog_order
+FAILED tests/builtin_commands/test_specs.py::test_affected_objects_static_shape
+FAILED tests/app/test_composition.py::test_build_app_registers_p0_and_released_p2_builtin_ids
+4 failed, 144 passed in 13.33s

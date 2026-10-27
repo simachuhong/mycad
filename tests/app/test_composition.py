@@ -17,7 +17,16 @@ from mycad.core.persistence import LoadedDocument, save_document
 from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
 
 BUILTIN_IDS: list[str] = [
+    "drawing.annotation.create",
+    "drawing.annotation.delete",
+    "drawing.annotation.update",
     "drawing.layers.set",
+    "drawing.sheet.create",
+    "drawing.sheet.delete",
+    "drawing.sheet.update",
+    "drawing.view.create",
+    "drawing.view.delete",
+    "drawing.view.update",
     "feature.box",
     "feature.cylinder",
     "feature.extrude",
