@@ -13,7 +13,7 @@ from PySide6.QtGui import QPageLayout, QPageSize, QPainter, QPdfWriter
 from mycad.core.drawing_paper import paper_texts, validate_drawing_output
 from mycad.core.drawing_projection import DrawingScene
 from mycad.formats.drawing_export import atomic_drawing_output
-from mycad.ui.drawing_render import paint_drawing
+from mycad.ui.drawing_render import paint_drawing, validate_paper_glyphs
 
 
 def _normalize_pdf(path: Path, scene: DrawingScene) -> None:
@@ -74,6 +74,7 @@ def _normalize_pdf(path: Path, scene: DrawingScene) -> None:
 
 def export_drawing_pdf(scene: DrawingScene, target: Path) -> None:
     validate_drawing_output(scene)
+    validate_paper_glyphs(scene)
 
     def write(path: Path) -> None:
         writer = QPdfWriter(str(path))

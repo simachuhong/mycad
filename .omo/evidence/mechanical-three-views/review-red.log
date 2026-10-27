@@ -1,0 +1,291 @@
+FEFEF                                                                    [100%]
+==================================== ERRORS ====================================
+_ ERROR at teardown of test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[undo] _
+TEARDOWN ERROR: Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+
+----------------------------- Captured stderr call -----------------------------
+Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+_ ERROR at teardown of test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[delete] _
+TEARDOWN ERROR: Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+
+----------------------------- Captured stderr call -----------------------------
+Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+=================================== FAILURES ===================================
+____ test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[undo] ____
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e668d29c5f0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7e66b7d83ec0>
+remove = 'undo'
+
+    @pytest.mark.parametrize("remove", ["undo", "delete"])
+    def test_removing_placement_sheet_cancels_draft_and_allows_undo_redo(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, remove: str
+    ) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+        survivor, target = uuid4(), uuid4()
+        for identity in (survivor, target):
+            loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.sheet_id = target
+        bench.begin_placement()
+        assert bench.placement is not None
+        bench.placement.click((80, 80))
+        if remove == "undo":
+            loaded.bus.undo()
+        else:
+            loaded.bus.execute("drawing.sheet.delete", {"sheet_id": str(target)})
+>       bench.refresh()
+
+tests/ui/test_drawing_views.py:262: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/ui/drawing_workbench.py:295: in refresh
+    self._render()
+src/mycad/ui/drawing_workbench.py:595: in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/dataclasses.py:1581: in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:6: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = DrawingState(sheets=(DrawingSheet(sheet_id=UUID('4041cc6d-922f-44a2-ac7d-ab043a8b1b48'), name='工程图1', size_mm=(297.0, ...1.0, inherit_scale=True, aligned=True, hidden_lines=True, tangent_lines=False, inherit_display=True),), annotations=())
+
+    def __post_init__(self) -> None:
+        sheet_ids = [sheet.sheet_id for sheet in self.sheets]
+        view_ids = [view.view_id for view in self.views]
+        annotation_ids = [annotation.annotation_id for annotation in self.annotations]
+        ids = [*sheet_ids, *view_ids, *annotation_ids]
+        if len(set(ids)) != len(ids):
+            raise ValueError("drawing object identities must be unique")
+        for view in self.views:
+            if view.sheet_id not in sheet_ids:
+>               raise ValueError("view references a missing sheet")
+E               ValueError: view references a missing sheet
+
+src/mycad/core/drawing.py:153: ValueError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+----------------------------- Captured stderr call -----------------------------
+Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+___ test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[delete] ___
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e668d1ae930>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7e668d1ae390>
+remove = 'delete'
+
+    @pytest.mark.parametrize("remove", ["undo", "delete"])
+    def test_removing_placement_sheet_cancels_draft_and_allows_undo_redo(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, remove: str
+    ) -> None:
+        from mycad.app import build_app, new_document
+        from mycad.ui.main_window import MainWindow
+    
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+        survivor, target = uuid4(), uuid4()
+        for identity in (survivor, target):
+            loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.bind_document(loaded)
+        bench.sheet_id = target
+        bench.begin_placement()
+        assert bench.placement is not None
+        bench.placement.click((80, 80))
+        if remove == "undo":
+            loaded.bus.undo()
+        else:
+            loaded.bus.execute("drawing.sheet.delete", {"sheet_id": str(target)})
+>       bench.refresh()
+
+tests/ui/test_drawing_views.py:262: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/mycad/ui/drawing_workbench.py:295: in refresh
+    self._render()
+src/mycad/ui/drawing_workbench.py:595: in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/dataclasses.py:1581: in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:6: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = DrawingState(sheets=(DrawingSheet(sheet_id=UUID('70a31553-4452-41db-905a-0380bb6b12c2'), name='工程图1', size_mm=(297.0, ...1.0, inherit_scale=True, aligned=True, hidden_lines=True, tangent_lines=False, inherit_display=True),), annotations=())
+
+    def __post_init__(self) -> None:
+        sheet_ids = [sheet.sheet_id for sheet in self.sheets]
+        view_ids = [view.view_id for view in self.views]
+        annotation_ids = [annotation.annotation_id for annotation in self.annotations]
+        ids = [*sheet_ids, *view_ids, *annotation_ids]
+        if len(set(ids)) != len(ids):
+            raise ValueError("drawing object identities must be unique")
+        for view in self.views:
+            if view.sheet_id not in sheet_ids:
+>               raise ValueError("view references a missing sheet")
+E               ValueError: view references a missing sheet
+
+src/mycad/core/drawing.py:153: ValueError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+----------------------------- Captured stderr call -----------------------------
+Exceptions caught in Qt event loop:
+________________________________________________________________________________
+Traceback (most recent call last):
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/main_window.py", line 3236, in _dispatch_core_event
+    self.drawing_workbench.refresh()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 295, in refresh
+    self._render()
+  File "/media/sima/Data/projects/MyCAD/src/mycad/ui/drawing_workbench.py", line 595, in _render
+    state = replace(state, views=(*state.views, *views))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/dataclasses.py", line 1581, in replace
+    return obj.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 6, in __init__
+  File "/media/sima/Data/projects/MyCAD/src/mycad/core/drawing.py", line 153, in __post_init__
+    raise ValueError("view references a missing sheet")
+ValueError: view references a missing sheet
+________________________________________________________________________________
+______ test_missing_visible_glyphs_reject_pdf_and_preserve_existing_file _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7e6688390590>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-127/test_missing_visible_glyphs_re0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7e66883901d0>
+
+    def test_missing_visible_glyphs_reject_pdf_and_preserve_existing_file(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF
+    
+        from mycad.ui import drawing_render
+    
+        font: QFont | None = None
+        for family in QFontDatabase.families():
+            candidate = QFont(family)
+            candidate.setPixelSize(100)
+            candidate.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)
+            metrics = QFontMetricsF(candidate)
+            if metrics.inFontUcs4(ord("A")) and not metrics.inFontUcs4(ord("法")):
+                font = candidate
+                break
+        assert font is not None, "Regression requires a Latin font without CJK glyphs"
+    
+        def latin_only() -> QFont:
+            assert font is not None
+            return font
+    
+        monkeypatch.setattr(drawing_render, "paper_font", latin_only)
+        path = tmp_path / "existing.pdf"
+        path.write_bytes(b"valid-original")
+>       with pytest.raises(ValueError, match="字形|字体|缺字"):
+E       Failed: DID NOT RAISE ValueError
+
+tests/ui/test_drawing_pdf.py:193: Failed
+=========================== short test summary info ============================
+ERROR tests/ui/test_drawing_views.py::test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[undo]
+ERROR tests/ui/test_drawing_views.py::test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[delete]
+FAILED tests/ui/test_drawing_views.py::test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[undo]
+FAILED tests/ui/test_drawing_views.py::test_removing_placement_sheet_cancels_draft_and_allows_undo_redo[delete]
+FAILED tests/ui/test_drawing_pdf.py::test_missing_visible_glyphs_reject_pdf_and_preserve_existing_file
+3 failed, 16 deselected, 2 errors in 12.49s

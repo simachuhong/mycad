@@ -36,3 +36,17 @@
 全量首轮：2085通过、10失败（1168.65s，`final-pytest.log`）。9项是新增9条工程图命令/3类角色/ADR012后的旧固定目录断言；已更新独立期望清单，57项专项通过。另1项旋转鼠标测试在基线77ca873临时归档中同样失败（`t8-rotation-baseline.log`），系整数像素与理想毫米中心差0.1mm。产品旋转实现未改；测试改为绕实际点击中心的精确90°结果，15项交互回归通过。没有放宽几何容差。当前还需独立审查及最终修复后门槛。
 
 最终X11复测 `t8-desktop-final.log`：1项通过26.69s。重开后显式切回工程图页，最终桌面截图已替换并检查，显示三个常驻Tab、纸上三视图及80/8标注、右侧可浮动Tab容器、底部共享控制台。
+
+最终静态复查：全树 `ruff check .` 通过，`ruff format --check .` 407文件通过，`basedpyright` 0错误/0警告。见 `final-recheck-{ruff,format,types}.log`。独立审查范围为基线77ca873至ee24bc6；源码冻结，待审查结果。
+
+独立审查确认2项Important、无Critical/Minor（`final-review.md`）。已完成一轮修复：目标图纸消失时取消未提交视图预览；PDF按实际Qt排版/回退字形拒绝缺字。`review-red.log`重现两类失败；`review-green.log`19项通过；增补真实回退字体检查后`review-font-fallback.log`9项PDF检查通过。仅DejaVu的隔离Fontconfig子进程确认中文不可绘制、导出明确拒绝且原文件未改（`review-fontconfig.log`）。修复路径lint/format/type通过，最终整套回归进行中。
+
+## 最终验收结论
+
+**本机、已批准首版范围内的 P0/P1 发布门通过。** T0–T8 已实施；独立审查的2项Important均以RED→GREEN修复，无Critical或延后Minor。未扩大到通用拓扑命名、装配或商业CAD认证。
+
+最终整套命令：`QT_QPA_PLATFORM=offscreen uv run pytest -q --durations=10` → **2101 passed in 1153.00s（19分13秒）**，见 `final-repaired-pytest.log`。几何/900边完整传输/UI心跳性能门包含其中并通过。全树lint、格式、严格类型复查通过；两项审查修复路径再次lint/format/type通过。
+
+验证覆盖：模型/图纸历史隔离、有限来源关联与歧义拒绝、迟到结果防护、图中放置与手柄、撤销/重做及保存重开、1:2数值/纸面比例、中文及真实字体回退、缺字拒绝、原文件保护和旧二维工作区兼容。最终可复核界面见 `flange-three-views-desktop.png`，成图见 `flange-three-views.pdf`/`flange-three-views-pdf.png`。
+
+保留分支 `codex/phase2-foundation` 与现有工作目录，不合并、不推送。Windows及AutoCAD/Solid Edge实机验收仍未完成；本轮现有用户MyCAD进程未重启，新功能需重启后加载。

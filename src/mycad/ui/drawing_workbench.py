@@ -261,10 +261,23 @@ class DrawingWorkbench(QMainWindow):
         if not enabled:
             self._set_message("独立二维图不包含三维模型；请在平面草图中绘制。")
 
+    def _reconcile_placement(self) -> None:
+        if self.placement is None or self.placement.sheet.sheet_id in {
+            sheet.sheet_id for sheet in self.state.sheets
+        }:
+            return
+        self.placement = None
+        self._ghost = None
+        self._placement_stale = False
+        self._pending = False
+        self.canvas.placing = False
+        self._set_message("目标图纸已删除或撤销，未提交的视图放置已取消。")
+
     def refresh(self) -> None:
         if self.services is None:
             return
         self.state = self.services.kernel.drawing_state
+        self._reconcile_placement()
         if (
             self.placement is not None
             and self._placement_source_fingerprint
@@ -430,6 +443,7 @@ class DrawingWorkbench(QMainWindow):
     def _sync_targets(self) -> str:
         assert self.services is not None
         self.state = self.services.kernel.drawing_state
+        self._reconcile_placement()
         fingerprint = self.services.kernel.drawing_source_fingerprint
         if (
             self.placement is not None
@@ -573,6 +587,11 @@ class DrawingWorkbench(QMainWindow):
         self._set_message("已停止接收本次投影结果；正在运行的后台任务会自行结束。")
 
     def _render(self) -> None:
+        self._reconcile_placement()
+        if self.sheet_id not in {sheet.sheet_id for sheet in self.state.sheets}:
+            self.sheet_id = self.state.sheets[0].sheet_id if self.state.sheets else None
+            if self.sheet_id is not None:
+                self._load_sheet_settings()
         if self.sheet_id is None:
             self.canvas.clear_scene()
             return

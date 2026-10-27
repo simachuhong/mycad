@@ -163,3 +163,56 @@ def test_pdf_line_position_and_length_in_physical_millimetres(qtbot: QtBot, tmp_
         a == pytest.approx((60, 130), abs=0.05) and b == pytest.approx((100, 130), abs=0.05)
         for a, b in segments
     )
+
+
+def test_missing_visible_glyphs_reject_pdf_and_preserve_existing_file(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF
+
+    from mycad.ui import drawing_render
+
+    font: QFont | None = None
+    for family in QFontDatabase.families():
+        candidate = QFont(family)
+        candidate.setPixelSize(100)
+        candidate.setStyleStrategy(QFont.StyleStrategy.NoFontMerging)
+        metrics = QFontMetricsF(candidate)
+        if metrics.inFontUcs4(ord("A")) and not metrics.inFontUcs4(ord("法")):
+            font = candidate
+            break
+    assert font is not None, "Regression requires a Latin font without CJK glyphs"
+
+    def latin_only() -> QFont:
+        assert font is not None
+        return font
+
+    monkeypatch.setattr(drawing_render, "paper_font", latin_only)
+    path = tmp_path / "existing.pdf"
+    path.write_bytes(b"valid-original")
+    with pytest.raises(ValueError, match="字形|字体|缺字"):
+        export_drawing_pdf(drawing_scene(), path)
+    assert path.read_bytes() == b"valid-original"
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_pdf_glyph_preflight_accepts_real_font_fallback(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtGui import QFont, QRawFont
+
+    from mycad.ui import drawing_render
+
+    font = QFont("Arial")
+    font.setPixelSize(100)
+    assert not QRawFont.fromFont(font).supportsCharacter("法")
+
+    def with_fallback() -> QFont:
+        return font
+
+    monkeypatch.setattr(drawing_render, "paper_font", with_fallback)
+    path = tmp_path / "fallback.pdf"
+    export_drawing_pdf(drawing_scene(), path)
+    document = QPdfDocument()
+    assert document.load(str(path)) == QPdfDocument.Error.None_
+    assert "法兰工程图" in document.getAllText(0).text()

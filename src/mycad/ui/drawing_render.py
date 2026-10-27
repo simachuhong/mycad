@@ -3,7 +3,16 @@
 """Shared paper-space vector primitives and physical typography."""
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QFontMetricsF,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QTextLayout,
+)
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsTextItem
 
 from mycad.core.drawing_curves import cubic_segments
@@ -52,6 +61,27 @@ def paper_font() -> QFont:
     font.setPixelSize(100)
     font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     return font
+
+
+def validate_paper_glyphs(scene: DrawingScene) -> None:
+    """Check actual shaping and fallback runs, independently of PDF ActualText."""
+    font = paper_font()
+    for text in paper_texts(scene):
+        for value in text.text.splitlines():
+            if not value.strip():
+                continue
+            layout = QTextLayout(value, font)
+            layout.beginLayout()
+            line = layout.createLine()
+            if line.isValid():
+                line.setLineWidth(1e9)
+            layout.endLayout()
+            runs = layout.glyphRuns()
+            if not runs or any(0 in run.glyphIndexes() for run in runs):
+                raise ValueError(
+                    "图纸含当前字体无法绘制的字形；请安装 Noto Sans CJK SC "
+                    "或包含所需字符的字体后重试，原文件未修改。"
+                )
 
 
 def paper_pen(layer: str, scale: float = 1) -> QPen:

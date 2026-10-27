@@ -231,3 +231,47 @@ def test_opened_sheet_fits_on_first_activation_only(qtbot: QtBot) -> None:
     window.workspace_tabs.activate("drawing")
     qtbot.wait(50)
     assert canvas.transform() == transform
+
+
+@pytest.mark.parametrize("remove", ["undo", "delete"])
+def test_removing_placement_sheet_cancels_draft_and_allows_undo_redo(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, remove: str
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    survivor, target = uuid4(), uuid4()
+    for identity in (survivor, target):
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    bench.sheet_id = target
+    bench.begin_placement()
+    assert bench.placement is not None
+    bench.placement.click((80, 80))
+    if remove == "undo":
+        loaded.bus.undo()
+    else:
+        loaded.bus.execute("drawing.sheet.delete", {"sheet_id": str(target)})
+    bench.refresh()
+    assert bench.sheet_id == survivor
+    assert bench.placement is None
+    assert not bench.canvas.placing
+    assert "图纸" in bench.hint.text() and "取消" in bench.hint.text()
+    if remove == "undo":
+        loaded.bus.redo()
+    else:
+        loaded.bus.undo()
+    bench.refresh()
+    assert services.kernel.drawing_state.sheet(target).sheet_id == target
+    assert bench.placement is None  # Restoring the sheet must not resurrect an unsubmitted draft.
+    bench.sheet_id = target
+    bench.begin_placement()
+    assert bench.placement is not None
+    bench.cancel_placement()
