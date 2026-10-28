@@ -37,6 +37,8 @@ def _project(
     snapshot: DrawingSourceSnapshot, requests: tuple[DrawingProjectionRequest, ...]
 ) -> tuple[ProjectionResult, ...]:
     global _shape, _fingerprint, _sources
+    if any(r.source != "current_part" for r in requests):
+        raise ValueError("HLR requires a solid source")
     if any(r.source_fingerprint != snapshot.source_fingerprint for r in requests):
         raise ValueError("Projection request does not match source snapshot")
     if _fingerprint != snapshot.source_fingerprint or _shape is None:

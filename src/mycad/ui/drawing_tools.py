@@ -5,14 +5,20 @@
 import math
 from uuid import UUID, uuid4
 
-from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView
+from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView, SourceBinding
 from mycad.core.drawing_projection import Point2, ViewBasis, ViewDirection
 
 
 class ViewPlacement:
     def __init__(
-        self, sheet: DrawingSheet, *, scale: float = 1, basis: ViewBasis | None = None
+        self,
+        sheet: DrawingSheet,
+        *,
+        scale: float = 1,
+        basis: ViewBasis | None = None,
+        source: SourceBinding | None = None,
     ) -> None:
+        self.source = source or SourceBinding()
         self.sheet = sheet
         self.scale = scale
         self.basis = basis or ViewBasis()
@@ -28,10 +34,13 @@ class ViewPlacement:
             return DrawingView(
                 self.base_id,
                 self.sheet.sheet_id,
+                source=self.source,
                 basis=self.basis,
                 anchor_mm=point,
                 scale=self.scale,
             )
+        if self.source.kind == "sketch":
+            return None
         base = self.pending[0]
         dx, dy = point[0] - base.anchor_mm[0], point[1] - base.anchor_mm[1]
         if max(abs(dx), abs(dy)) < 5:

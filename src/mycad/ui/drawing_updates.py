@@ -28,7 +28,14 @@ class ProjectionUpdates:
         self._active: ProjectionBatch | None = None
         self._generation = 0
 
-    def sync(self, session_id: int, fingerprint: str, bases: Mapping[UUID, ViewBasis]) -> None:
+    def sync(
+        self,
+        session_id: int,
+        fingerprint: str,
+        bases: Mapping[UUID, ViewBasis],
+        *,
+        sketch_ids: Mapping[UUID, str | None] | None = None,
+    ) -> None:
         if session_id != self.session_id:
             self.session_id = session_id
             self.results.clear()
@@ -42,16 +49,23 @@ class ProjectionUpdates:
             self._failed.pop(identity, None)
             self._cancelled = {pair for pair in self._cancelled if pair[0] != identity}
         for identity, basis in bases.items():
+            sketch_id = (sketch_ids or {}).get(identity)
             previous = self._desired.get(identity)
             if (
                 previous is not None
                 and previous.source_fingerprint == fingerprint
                 and previous.basis == basis
+                and previous.sketch_id == sketch_id
             ):
                 continue
             self._generation += 1
             self._desired[identity] = DrawingProjectionRequest(
-                identity, fingerprint, self._generation, basis
+                identity,
+                fingerprint,
+                self._generation,
+                basis,
+                "sketch" if sketch_id is not None else "current_part",
+                sketch_id,
             )
             self._failed.pop(identity, None)
             self._cancelled = {pair for pair in self._cancelled if pair[0] != identity}
@@ -88,7 +102,9 @@ class ProjectionUpdates:
             for identity, request in self._desired.items()
         )
 
-    def begin(self) -> ProjectionBatch | None:
+    def begin(
+        self, *, source: Literal["current_part", "sketch"] | None = None
+    ) -> ProjectionBatch | None:
         if self._active is not None:
             return None
         requests = tuple(
@@ -96,6 +112,7 @@ class ProjectionUpdates:
             for identity, request in self._desired.items()
             if self.status(identity) == "stale"
             and (identity, request.generation) not in self._cancelled
+            and (source is None or request.source == source)
         )
         if not requests:
             return None
@@ -150,7 +167,12 @@ class ProjectionUpdates:
             if self.status(identity) in ("failed", "stale"):
                 self._generation += 1
                 self._desired[identity] = DrawingProjectionRequest(
-                    identity, request.source_fingerprint, self._generation, request.basis
+                    identity,
+                    request.source_fingerprint,
+                    self._generation,
+                    request.basis,
+                    request.source,
+                    request.sketch_id,
                 )
         self._failed.clear()
         self._cancelled.clear()

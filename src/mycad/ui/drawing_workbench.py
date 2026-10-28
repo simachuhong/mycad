@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from mycad import app as mycad_app
-from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView
+from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView, SourceBinding
 from mycad.core.drawing_codec import apply_drawing_command, drawing_object_mapping
 from mycad.core.drawing_paper import validate_drawing_output
 from mycad.core.drawing_projection import (
@@ -46,6 +46,7 @@ from mycad.core.drawing_projection import (
     build_drawing_scene,
     projected_basis,
 )
+from mycad.core.drawing_sketch import project_sketch
 from mycad.core.persistence import LoadedDocument
 from mycad.formats.drawing_export import export_drawing_dxf
 from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
@@ -97,7 +98,7 @@ class DrawingWorkbench(QMainWindow):
         self._source_snapshot: DrawingSourceSnapshot | None = None
         self._worker: mycad_app.DrawingProjectionWorker | None = None
         self._dock_visible = True
-        self._start_after_sheet = False
+        self._start_after_sheet: SourceBinding | None = None
         self.canvas = DrawingCanvas()
         self.pages = QStackedWidget()
         self.pages.addWidget(self.canvas)
@@ -119,7 +120,7 @@ class DrawingWorkbench(QMainWindow):
         page_layout.addStretch()
         page_layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
         page_layout.addStretch()
-        heading = QLabel("从模型生成工程图")
+        heading = QLabel("创建工程图视图")
         heading.setStyleSheet("font-size: 22px; font-weight: 600;")
         start_layout.addWidget(heading)
         self.start_description = QLabel()
@@ -127,6 +128,8 @@ class DrawingWorkbench(QMainWindow):
         start_layout.addWidget(self.start_description)
         self.generate_button = QPushButton("从当前三维模型生成投影视图")
         self.generate_button.clicked.connect(self.begin_placement)
+        self.sketch_view_button = QPushButton("放置草图平面视图")
+        self.sketch_view_button.clicked.connect(self.begin_sketch_placement)
         self.sketch_button = QPushButton("前往平面草图")
         self.sketch_button.clicked.connect(self.sketch_requested.emit)
         self.model_button = QPushButton("前往 3D图 · 拉伸 / 旋转建模")
@@ -136,6 +139,7 @@ class DrawingWorkbench(QMainWindow):
         self.new_button = QPushButton("新建零件…")
         self.new_button.clicked.connect(self.new_requested.emit)
         for button in (
+            self.sketch_view_button,
             self.generate_button,
             self.sketch_button,
             self.model_button,
@@ -151,8 +155,8 @@ class DrawingWorkbench(QMainWindow):
             "QPushButton:disabled { border: 1px solid palette(mid); }"
         )
         steps = QLabel(
-            "1. 在右侧选择纸张、投影法和比例。\n"
-            "2. 点击生成，在图中单击放置主视图，再沿方向放置投影视图。\n"
+            "1. 在右侧选择草图来源、纸张和比例；三维投影可另选投影法。\n"
+            "2. 点击对应入口，在图中单击放置平面视图或三维投影视图。\n"
             "3. Enter 完成，Esc 取消；随后可在图中选择轮廓添加标注。"
         )
         steps.setWordWrap(True)
@@ -164,6 +168,8 @@ class DrawingWorkbench(QMainWindow):
         self.toolbar = self.addToolBar("工程图")
         self.toolbar.setObjectName("drawingToolbar")
         self.sheet_action = QAction("新建图纸", self)
+        self.sketch_view_action = QAction("放置草图平面视图", self)
+        self.sketch_view_action.triggered.connect(self.begin_sketch_placement)
         self.base_action = QAction("从模型生成投影", self)
         self.update_action = QAction("更新视图", self)
         self.dxf_action = QAction("导出 DXF", self)
@@ -176,6 +182,7 @@ class DrawingWorkbench(QMainWindow):
         self.cancel_update_action = QAction("取消更新", self)
         for action in (
             self.sheet_action,
+            self.sketch_view_action,
             self.base_action,
             self.update_action,
             self.delete_action,
@@ -195,6 +202,8 @@ class DrawingWorkbench(QMainWindow):
         self.settings_tabs = QTabWidget()
         settings = QWidget()
         form = QFormLayout(settings)
+        self.sketch_source = QComboBox()
+        self.sketch_source.setToolTip("选择当前文档中已完成的草图；按草图局部 U/V 坐标放到图纸。")
         self.paper = QComboBox()
         self.paper.addItems(["A4 横向", "A4 纵向", "A3 横向", "A3 纵向"])
         self.angle = QComboBox()
@@ -210,6 +219,7 @@ class DrawingWorkbench(QMainWindow):
         self.hint = QLabel("先创建图纸，再在画布放置基准和投影视图。Enter 完成，Esc 取消。")
         self.hint.setWordWrap(True)
         for name, widget in [
+            ("草图来源", self.sketch_source),
             ("纸张", self.paper),
             ("投影法", self.angle),
             ("比例", self.scale),
@@ -303,6 +313,8 @@ class DrawingWorkbench(QMainWindow):
         self.annotations.cancel()
         self.annotations.select(None)
         self.loaded, self.session_id = loaded, session_id
+        self._start_after_sheet = None
+        self._ghost = None
         self.placement = None
         self._placement_stale = False
         self.canvas.placing = False
@@ -315,10 +327,11 @@ class DrawingWorkbench(QMainWindow):
         self.canvas.deletion_preview.clear()
         self._pending = False
         self._snapshot_inflight = False
-        enabled = loaded.document.document_type == "part"
+        enabled = True
         self.annotation_toolbar.setEnabled(enabled)
         for action in (
             self.sheet_action,
+            self.sketch_view_action,
             self.base_action,
             self.update_action,
             self.cancel_update_action,
@@ -327,8 +340,6 @@ class DrawingWorkbench(QMainWindow):
         ):
             action.setEnabled(enabled)
         self.refresh()
-        if not enabled:
-            self._set_message("独立二维图不包含三维模型；请在平面草图中绘制。")
 
     def _has_projection_source(self) -> bool:
         return bool(
@@ -341,6 +352,9 @@ class DrawingWorkbench(QMainWindow):
     def _update_start_page(self) -> None:
         has_source = self._has_projection_source()
         busy = self.unit is not None and self.unit.is_busy
+        has_sketch = self.sketch_source.count() > 0 and self.loaded is not None
+        self.sketch_view_button.setEnabled(has_sketch and not busy)
+        self.sketch_view_action.setEnabled(has_sketch and not busy)
         self.generate_button.setEnabled(has_source and not busy)
         self.base_action.setEnabled(has_source and not busy)
         self.open_button.setEnabled(self.services is not None and not busy)
@@ -350,18 +364,18 @@ class DrawingWorkbench(QMainWindow):
             self.loaded is not None and self.loaded.document.document_type == "part" and not busy
         )
         if self.loaded is None:
-            description = "先新建零件，或打开已有零件文件，再从三维模型生成投影视图。"
+            description = "先新建或打开文件；完成草图后可直接放到图纸，也可从三维实体生成投影。"
         elif self.loaded.document.document_type != "part":
             description = (
-                "当前是独立二维图，可返回平面草图继续绘制。"
-                "机械三视图需要三维实体；请打开零件文件，或新建零件后建模。"
+                "当前是独立二维图。选择右侧已完成的草图，点击“放置草图平面视图”即可入纸。"
+                "若来源列表为空，请先返回平面草图绘制并点击“完成草图”。"
             )
         elif has_source:
-            description = "当前零件已有三维模型。点击下方按钮创建图纸并在画布中放置投影视图。"
+            description = "可以直接放置已完成的草图平面视图，也可以从当前三维模型生成投影视图。"
         else:
             description = (
-                "当前零件还没有三维实体。先在平面草图绘制并完成草图，"
-                "再到 3D图使用拉伸或旋转生成实体，然后返回此页生成三视图。"
+                "完成草图后，可直接点击“放置草图平面视图”入纸，无需建模。"
+                "如需机械三视图，请到 3D图使用拉伸或旋转生成实体后再投影。"
             )
         self.start_description.setText(description)
         empty = self.placement is None and not any(
@@ -381,10 +395,26 @@ class DrawingWorkbench(QMainWindow):
         self.canvas.placing = False
         self._set_message("目标图纸已删除或撤销，未提交的视图放置已取消。")
 
+    def _refresh_sketch_sources(self) -> None:
+        selected = self.sketch_source.currentData()
+        self.sketch_source.clear()
+        if self.services is None or self.loaded is None:
+            return
+        for index, sketch in enumerate(self.services.kernel.sketches, start=1):
+            if sketch.entities:
+                self.sketch_source.addItem(
+                    f"草图 {index} · {sketch.sketch_id[:8]} · {len(sketch.entities)} 图元",
+                    sketch.sketch_id,
+                )
+        index = self.sketch_source.findData(selected)
+        if index >= 0:
+            self.sketch_source.setCurrentIndex(index)
+
     def refresh(self) -> None:
         if self.services is None:
             return
         self.state = self.services.kernel.drawing_state
+        self._refresh_sketch_sources()
         self._reconcile_placement()
         if (
             self.placement is not None
@@ -427,6 +457,7 @@ class DrawingWorkbench(QMainWindow):
 
         def finish(result: ExecutionResult) -> None:
             if result.error:
+                self._start_after_sheet = None
                 self._set_message(f"工程图操作失败：{result.error}")
                 return
             self.refresh()
@@ -442,7 +473,7 @@ class DrawingWorkbench(QMainWindow):
             self._set_message("当前操作尚未结束，请稍后再试；图中草稿已保留。")
 
     def create_sheet(self) -> None:
-        if self.loaded is None or self.loaded.document.document_type != "part":
+        if self.loaded is None:
             return
         paper = "A4" if self.paper.currentIndex() < 2 else "A3"
         sheet = DrawingSheet.for_paper(uuid4(), paper, landscape=self.paper.currentIndex() % 2 == 0)
@@ -457,9 +488,10 @@ class DrawingWorkbench(QMainWindow):
         def done() -> None:
             self.sheet_id = sheet.sheet_id
             self._render()
-            if self._start_after_sheet:
-                self._start_after_sheet = False
-                self.begin_placement()
+            source = self._start_after_sheet
+            self._start_after_sheet = None
+            if source is not None:
+                self._begin_source_placement(source)
 
         self._execute("drawing.sheet.create", drawing_object_mapping(sheet), done)
 
@@ -518,24 +550,41 @@ class DrawingWorkbench(QMainWindow):
             )
 
     def begin_placement(self) -> None:
-        self.annotations.cancel()
-        if self.loaded is None or self.loaded.document.document_type != "part":
-            return
         if not self._has_projection_source():
-            self._set_message("当前没有可投影的三维实体；请先完成草图并拉伸或旋转建模。")
+            self._set_message("当前没有可投影的三维实体；可直接放置草图平面视图，或先拉伸建模。")
             self._update_start_page()
             return
+        self._begin_source_placement(SourceBinding())
+
+    def begin_sketch_placement(self) -> None:
+        identity = self.sketch_source.currentData()
+        if not isinstance(identity, str):
+            self._set_message("请先在平面草图中绘制并完成草图，再选择右侧草图来源。")
+            return
+        self._begin_source_placement(SourceBinding("sketch", identity))
+
+    def _begin_source_placement(self, source: SourceBinding) -> None:
+        if self.loaded is None or self.services is None:
+            return
+        if self.placement is not None or self._start_after_sheet is not None:
+            self._set_message("请先按 Enter 完成当前放置，或按 Esc 取消后重新选择来源。")
+            return
+        self.annotations.cancel()
+        if source.kind == "sketch" and source.sketch_id not in {
+            sketch.sketch_id for sketch in self.services.kernel.sketches if sketch.entities
+        }:
+            self._set_message("草图来源不存在或为空，请先完成草图。")
+            return
         if self.sheet_id is None:
-            self._start_after_sheet = True
+            self._start_after_sheet = source
             self.create_sheet()
             return
         directions = ("front", "back", "top", "bottom", "left", "right")
         basis = projected_basis(ViewBasis(), directions[self.direction.currentIndex()])
         self._placement_stale = False
-        if self.services is not None:
-            self._placement_source_fingerprint = self.services.kernel.drawing_source_fingerprint
+        self._placement_source_fingerprint = self.services.kernel.drawing_source_fingerprint
         self.placement = ViewPlacement(
-            self.state.sheet(self.sheet_id), scale=self.scale.value(), basis=basis
+            self.state.sheet(self.sheet_id), scale=self.scale.value(), basis=basis, source=source
         )
         self.canvas.placing = False
         self._set_message("正在准备投影；完成后在画布单击放置基准视图。")
@@ -548,10 +597,11 @@ class DrawingWorkbench(QMainWindow):
         if self.placement is not None and not self._placement_stale:
             placement = self.placement
             bases[placement.base_id] = placement.basis
-            for direction in ("top", "bottom", "left", "right"):
-                bases[placement.projected_id(direction)] = projected_basis(
-                    placement.basis, direction
-                )
+            if placement.source.kind == "current_part":
+                for direction in ("top", "bottom", "left", "right"):
+                    bases[placement.projected_id(direction)] = projected_basis(
+                        placement.basis, direction
+                    )
         return bases
 
     def _sync_targets(self) -> str:
@@ -567,7 +617,10 @@ class DrawingWorkbench(QMainWindow):
             self._placement_stale = True
             self.canvas.placing = False
             self._set_message("模型已变更，草稿已保留；请点更新视图以更新预览后继续。")
-        self.updates.sync(self.session_id, fingerprint, self._target_bases())
+        sketch_ids = {v.view_id: v.source.sketch_id for v in self.state.views}
+        if self.placement is not None:
+            sketch_ids[self.placement.base_id] = self.placement.source.sketch_id
+        self.updates.sync(self.session_id, fingerprint, self._target_bases(), sketch_ids=sketch_ids)
         return fingerprint
 
     def update_requested(self) -> None:
@@ -578,17 +631,31 @@ class DrawingWorkbench(QMainWindow):
         self.request_update()
 
     def request_update(self) -> None:
-        if (
-            self.services is None
-            or self.unit is None
-            or self.loaded is None
-            or self.loaded.document.document_type != "part"
-        ):
+        if self.services is None or self.unit is None or self.loaded is None:
             return
         if self.unit.is_busy:
             self._pending = True
             return
         fingerprint = self._sync_targets()
+        batch = self.updates.begin(source="sketch")
+        if batch is not None:
+            sketches = {sketch.sketch_id: sketch for sketch in self.services.kernel.sketches}
+            results: list[ProjectionResult] = []
+            for request in batch.requests:
+                sketch = sketches.get(request.sketch_id or "")
+                if sketch is None:
+                    results.append(
+                        ProjectionResult(
+                            request.view_id,
+                            fingerprint,
+                            request.generation,
+                            (),
+                            ("草图来源不存在，请重新选择来源",),
+                        )
+                    )
+                else:
+                    results.append(project_sketch(sketch, request))
+            self._projection_ready(self.updates.finish(batch, tuple(results)))
         self._pending = self.updates.has_pending
         self._render()
         if not self._pending or self._future is not None or self._snapshot_inflight:
@@ -606,7 +673,7 @@ class DrawingWorkbench(QMainWindow):
         def captured(result: ExecutionResult) -> None:
             self._snapshot_inflight = False
             if result.error or not isinstance(result.value, DrawingSourceSnapshot):
-                batch = self.updates.begin()
+                batch = self.updates.begin(source="current_part")
                 if batch is not None:
                     self.updates.finish(
                         batch, (), error=result.error or "Source snapshot unavailable"
@@ -629,7 +696,7 @@ class DrawingWorkbench(QMainWindow):
     def _submit_projection(self) -> None:
         if self._source_snapshot is None:
             return
-        batch = self.updates.begin()
+        batch = self.updates.begin(source="current_part")
         if batch is None:
             return
         try:
@@ -677,23 +744,29 @@ class DrawingWorkbench(QMainWindow):
                 self._worker.restart()
             self._set_message(f"投影失败，旧结果已标记过期：{error}")
             accepted = 0
-        if accepted:
-            if (
-                self.placement is not None
-                and not self._placement_stale
-                and self.updates.status(self.placement.base_id) == "clean"
-            ):
-                self.canvas.placing = True
-                self._set_message(
-                    "单击放置基准视图，再沿方向放置投影视图；Enter 完成整组，Esc 取消。"
-                )
-                if self.isVisible():
-                    self.canvas.setFocus()
-            elif not self._placement_stale:
-                self._set_message("工程图已更新。")
+        self._projection_ready(accepted)
         self._render()
         if self.updates.has_pending:
             self.request_update()
+
+    def _projection_ready(self, accepted: int) -> None:
+        if not accepted:
+            return
+        if (
+            self.placement is not None
+            and not self._placement_stale
+            and self.updates.status(self.placement.base_id) == "clean"
+        ):
+            self.canvas.placing = True
+            self._set_message(
+                "单击放置草图平面视图；Enter 完成，Esc 取消。"
+                if self.placement.source.kind == "sketch"
+                else "单击放置基准视图，再沿方向放置投影视图；Enter 完成整组，Esc 取消。"
+            )
+            if self.isVisible():
+                self.canvas.setFocus()
+        elif not self._placement_stale:
+            self._set_message("工程图已更新。")
 
     def cancel_update(self) -> None:
         self.updates.cancel()
@@ -742,14 +815,15 @@ class DrawingWorkbench(QMainWindow):
         issues = list(scene.issues)
         for view in state.views:
             status = self.updates.status(view.view_id)
+            name = "草图平面视图" if view.source.kind == "sketch" else names[view.direction]
             item = self._view_items.get(view.view_id)
             if item is not None:
                 item.setText(
                     0,
-                    f"{names[view.direction]} · {self.state.effective_scale(view.view_id):g}:1 · {labels[status]}",
+                    f"{name} · {self.state.effective_scale(view.view_id):g}:1 · {labels[status]}",
                 )
             if view.sheet_id == self.sheet_id and status != "clean":
-                issues.append(f"{names[view.direction]} {str(view.view_id)[:8]}：{labels[status]}")
+                issues.append(f"{name} {str(view.view_id)[:8]}：{labels[status]}")
         self.canvas.set_scene(replace(scene, issues=tuple(dict.fromkeys(issues))))
 
     def _move(self, point: object) -> None:
@@ -784,6 +858,7 @@ class DrawingWorkbench(QMainWindow):
             )
 
     def cancel_placement(self) -> None:
+        self._start_after_sheet = None
         self.placement = None
         self._placement_stale = False
         self._ghost = None
@@ -859,6 +934,7 @@ class DrawingWorkbench(QMainWindow):
             and identity in {v.view_id for v in current.views}
             and identity in {v.view_id for v in self.state.views}
             and current.effective_basis(identity) == self.state.effective_basis(identity)
+            and current.view(identity).source == self.state.view(identity).source
         )
 
     def _edit_annotation(self, identity: object) -> None:
