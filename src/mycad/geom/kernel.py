@@ -721,7 +721,11 @@ class BuildKernel:
 
     @property
     def drawing_source_fingerprint(self) -> str:
-        operations = [(cid, p) for cid, p in self._operations if not cid.startswith("drawing.")]
+        operations = [
+            (cid, p)
+            for cid, p in self._operations
+            if not cid.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation."))
+        ]
         return hashlib.sha256(
             json.dumps(operations, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -738,6 +742,13 @@ class BuildKernel:
     def project_drawing(self, request: DrawingProjectionRequest) -> ProjectionResult:
         if request.source_fingerprint != self.drawing_source_fingerprint:
             raise ValueError("Drawing source has changed")
+        if request.source == "sketch":
+            from mycad.core.drawing_sketch import project_sketch
+
+            sketch = self._sketches.get(request.sketch_id or "")
+            if sketch is None:
+                raise ValueError("草图来源不存在，请重新选择来源")
+            return project_sketch(sketch, request)
         if self._part is None or not self._part.solids():
             raise ValueError("Cannot create a view from an empty source model")
         key = (request.source_fingerprint, request.basis)

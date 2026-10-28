@@ -67,7 +67,12 @@ class ReferenceResolution:
 
 def same_source(a: DrawingGeometryReference, b: DrawingGeometryReference) -> bool:
     """Exact predicate family with numerical tolerance, never closest candidate."""
-    if a.kind != b.kind or a.owner_command != b.owner_command:
+    if (
+        a.kind != b.kind
+        or a.owner_command != b.owner_command
+        or a.sketch_id != b.sketch_id
+        or a.entity_id != b.entity_id
+    ):
         return False
     left = {k: v for k, v in a.parameters if not k.startswith("projected_")}
     right = {k: v for k, v in b.parameters if not k.startswith("projected_")}
@@ -102,11 +107,16 @@ def reference_for_curve(
 ) -> DrawingGeometryReference:
     if curve.source is None:
         raise ValueError("此曲线没有可持久关联的来源证据，请选择其他几何")
+    predicate = _curve_predicate(curve)
+    if curve.source.kind == "sketch_entity":
+        predicate = tuple((key, value) for key, value in predicate if key == "projected_type")
     return DrawingGeometryReference(
         curve.source.kind,
-        (*curve.source.parameters, *_curve_predicate(curve)),
+        (*curve.source.parameters, *predicate),
         curve.source.owner_command,
         role,
+        curve.source.sketch_id,
+        curve.source.entity_id,
     )
 
 

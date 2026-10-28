@@ -193,10 +193,14 @@ class DrawingProjectionRequest:
     source_fingerprint: str
     generation: int
     basis: ViewBasis = ViewBasis()
-    source: Literal["current_part"] = "current_part"
+    source: Literal["current_part", "sketch"] = "current_part"
+    sketch_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.source != "current_part" or not self.source_fingerprint or self.generation < 0:
+        from mycad.core.drawing import SourceBinding
+
+        SourceBinding(self.source, self.sketch_id)
+        if not self.source_fingerprint or self.generation < 0:
             raise ValueError("invalid drawing projection request")
 
 
