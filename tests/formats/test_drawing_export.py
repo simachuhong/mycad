@@ -73,3 +73,22 @@ def test_annotation_layer_is_preserved_in_scene_and_dxf(tmp_path: Path) -> None:
     export_drawing_dxf(scene, path)
     data = tags(path)
     assert (2, "MEASURE") in data and (8, "MEASURE") in data
+
+
+def test_note_dxf_literal_percent_and_caret_sequences(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    from ezdxf.tools.text import fast_plain_mtext, plain_mtext
+
+    from mycad.core.drawing import DrawingNote
+
+    scene = drawing_scene()
+    text = r"字面测试：%%d %%p %%c 50% ^I ^J ^M ^ 空格 {保留} \P"
+    note = DrawingNote(uuid4(), scene.sheet_id, text, (30, 50))
+    path = tmp_path / "literal.dxf"
+    export_drawing_dxf(replace(scene, notes=(note,)), path)
+    encoded = next(
+        value for code, value in tags(path) if code == 1 and value.startswith("字面测试")
+    )
+    assert fast_plain_mtext(encoded) == text
+    assert plain_mtext(encoded) == text

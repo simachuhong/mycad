@@ -15,3 +15,5 @@
 验证：51项界面/输出/分层回归通过；179项命令/档案/几何回归通过。此前扩展回归81项通过。ruff check / format及严格类型均通过，零类型抑制。详见日志；独立审查结果另记。
 
 范围：纯文本，暂不含引线、富文本、旋转；保留现有分支，未推送或合并。用户LogoV1.png和assets图标素材保持原状。
+
+独立审查发现2项Important，均在单轮修复并经RED→GREEN验证；无延期项。最终差异回归 **261 passed in 49.45s**，严格类型0 errors/0 warnings/0 notes，ruff check与format通过。详见review.md及final-regression.log。

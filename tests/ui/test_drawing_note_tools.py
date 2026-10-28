@@ -184,3 +184,36 @@ def test_document_switch_cancels_a_note_drag(qtbot: QtBot) -> None:
     assert not bench.notes.pending
     QTest.mouseRelease(canvas.viewport(), Qt.MouseButton.LeftButton, pos=start)
     assert not services.kernel.drawing_state.notes
+
+
+def test_new_sheet_preserves_active_text_until_completion(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench = window.drawing_workbench
+    unit = window.execution_unit
+    assert unit is not None
+    bench.text_action.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy and bench.canvas.note_mode)
+    original_sheet = bench.sheet_id
+    canvas = bench.canvas
+    QTest.mouseClick(
+        canvas.viewport(), Qt.MouseButton.LeftButton, pos=canvas.mapFromScene(QPointF(80, -100))
+    )
+    bench.notes.editor.setPlainText("保留在原图纸")
+    bench.sheet_action.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy)
+    assert bench.sheet_id == original_sheet
+    assert len(services.kernel.drawing_state.sheets) == 1
+    assert bench.notes.editor.isVisible()
+    assert bench.notes.editor.toPlainText() == "保留在原图纸"
+    QTest.keyClick(bench.notes.editor, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
+    qtbot.waitUntil(lambda: not unit.is_busy and not bench.notes.pending)
+    assert services.kernel.drawing_state.notes[0].sheet_id == original_sheet
+    bench.sheet_action.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy and len(services.kernel.drawing_state.sheets) == 2)
+    assert bench.sheet_id != original_sheet

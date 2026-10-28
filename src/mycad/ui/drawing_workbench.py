@@ -562,6 +562,9 @@ class DrawingWorkbench(QMainWindow):
     def create_sheet(self, after: Callable[[], None] | None = None) -> None:
         if self.loaded is None:
             return
+        if self.notes.pending:
+            self._set_message("文字尚未提交：请先 Ctrl+Enter 完成或 Esc 取消，再新建图纸。")
+            return
         paper = "A4" if self.paper.currentIndex() < 2 else "A3"
         sheet = DrawingSheet.for_paper(uuid4(), paper, landscape=self.paper.currentIndex() % 2 == 0)
         sheet = replace(

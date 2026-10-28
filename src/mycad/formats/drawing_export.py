@@ -237,6 +237,9 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
             .replace("{", "\\{")
             .replace("}", "\\}")
             .replace("\n", "\\P")
+            # Empty groups interrupt %% control codes; ^<space> encodes a literal caret.
+            .replace("%", "%{}")
+            .replace("^", "^ ")
         )
         paper.add_mtext(
             literal,
