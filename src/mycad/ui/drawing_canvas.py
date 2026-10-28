@@ -35,6 +35,10 @@ from mycad.ui.drawing_render import add_paper_text, curve_path, paper_pen
 
 
 class DrawingCanvas(QGraphicsView):
+    note_selected = Signal(object)
+    note_edit_requested = Signal(object)
+    note_dragged = Signal(object, object, bool)
+    note_delete_requested = Signal()
     paper_clicked = Signal(object)
     paper_moved = Signal(object)
     commit_requested = Signal()
@@ -73,6 +77,10 @@ class DrawingCanvas(QGraphicsView):
         self._drag_scale = 1.0
         self._drag_value: Point2 | float = (0, 0)
         self._drag_started = False
+        self.note_mode = False
+        self.selected_note: UUID | None = None
+        self._drag_note: UUID | None = None
+        self._note_bounds: dict[UUID, QRectF] = {}
         self.annotation_mode = False
         self.selected_annotation: UUID | None = None
         self._drag_annotation: UUID | None = None
@@ -81,6 +89,9 @@ class DrawingCanvas(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
 
     def clear_scene(self) -> None:
+        self.selected_note = None
+        self.note_selected.emit(None)
+        self._note_bounds.clear()
         self.selected_annotation = None
         self.annotation_selected.emit(None)
         self.select_view(None)
@@ -102,8 +113,14 @@ class DrawingCanvas(QGraphicsView):
         }:
             self.selected_annotation = None
             self.annotation_selected.emit(None)
+        if self.selected_note is not None and self.selected_note not in {
+            note.note_id for note in scene.notes
+        }:
+            self.selected_note = None
+            self.note_selected.emit(None)
         graphics = self.scene()
         assert graphics is not None
+        self._note_bounds.clear()
         self._grip_items.clear()
         self._annotation_bounds.clear()
         self._bounds.clear()
@@ -157,6 +174,13 @@ class DrawingCanvas(QGraphicsView):
             label.setData(2, annotation.annotation_id)
             label.setZValue(4)
             self._annotation_bounds[annotation.annotation_id] = label.sceneBoundingRect()
+        for note in scene.notes:
+            item = add_paper_text(
+                graphics, PaperText(note.position_mm, note.text, note.height_mm, note.layer)
+            )
+            item.setData(3, note.note_id)
+            item.setZValue(5)
+            self._note_bounds[note.note_id] = item.sceneBoundingRect()
         graphics.setSceneRect(-8, -h - 8, w + 16, h + 16)
         self._draw_grips()
         if first:
@@ -185,6 +209,9 @@ class DrawingCanvas(QGraphicsView):
         self._draw_grips()
         if changed:
             self.view_selected.emit(identity)
+
+    def note_text_position(self, identity: UUID) -> QPoint:
+        return self.mapFromScene(self._note_bounds[identity].center())
 
     def annotation_text_position(self, identity: UUID) -> QPoint:
         return self.mapFromScene(self._annotation_bounds[identity].center())
@@ -279,6 +306,34 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self.note_mode and event.button() == Qt.MouseButton.LeftButton:
+            self.paper_clicked.emit(self.paper_point(event.position()))
+            event.accept()
+            return
+        if (
+            not self.annotation_mode
+            and not self.placing
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.drawing_scene is not None
+        ):
+            for item in self.items(event.position().toPoint()):
+                identity = item.data(3)
+                if isinstance(identity, UUID):
+                    self.selected_note = identity
+                    self.selected_annotation = None
+                    self.annotation_selected.emit(None)
+                    self.select_view(None)
+                    self.note_selected.emit(identity)
+                    note = next(n for n in self.drawing_scene.notes if n.note_id == identity)
+                    self._drag_note = identity
+                    self._drag_start = self.paper_point(event.position())
+                    self._drag_anchor = note.position_mm
+                    self._drag_started = False
+                    self.viewport().grabMouse()
+                    event.accept()
+                    return
+            self.selected_note = None
+            self.note_selected.emit(None)
         if self.annotation_mode and event.button() == Qt.MouseButton.LeftButton:
             point = self.paper_point(event.position())
             picked = self._pick_curve(event.position().toPoint())
@@ -342,6 +397,18 @@ class DrawingCanvas(QGraphicsView):
     @override
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         point = self.paper_point(event.position())
+        if self._drag_note is not None:
+            dx, dy = point[0] - self._drag_start[0], point[1] - self._drag_start[1]
+            if math.hypot(dx, dy) * abs(self.transform().m11()) > 2:
+                self._drag_started = True
+            if self._drag_started:
+                self._annotation_drag_position = (
+                    self._drag_anchor[0] + dx,
+                    self._drag_anchor[1] + dy,
+                )
+                self.note_dragged.emit(self._drag_note, self._annotation_drag_position, False)
+            event.accept()
+            return
         if self._drag_annotation is not None:
             dx, dy = point[0] - self._drag_start[0], point[1] - self._drag_start[1]
             if math.hypot(dx, dy) * abs(self.transform().m11()) > 2:
@@ -376,6 +443,15 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._drag_note is not None and event.button() == Qt.MouseButton.LeftButton:
+            identity = self._drag_note
+            self._drag_note = None
+            self.viewport().releaseMouse()
+            if self._drag_started:
+                self.note_dragged.emit(identity, self._annotation_drag_position, True)
+            self._drag_started = False
+            event.accept()
+            return
         if self._drag_annotation is not None and event.button() == Qt.MouseButton.LeftButton:
             identity = self._drag_annotation
             self._drag_annotation = None
@@ -398,6 +474,18 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if self.note_mode or self.annotation_mode or self.placing:
+            event.accept()
+            return
+        for item in self.items(event.position().toPoint()):
+            identity = item.data(3)
+            if isinstance(identity, UUID):
+                self.cancel_drag()
+                self.selected_note = identity
+                self.note_selected.emit(identity)
+                self.note_edit_requested.emit(identity)
+                event.accept()
+                return
         for item in self.items(event.position().toPoint()):
             identity = item.data(2)
             if isinstance(identity, UUID):
@@ -410,9 +498,14 @@ class DrawingCanvas(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def cancel_drag(self) -> None:
-        if self._drag_view is not None or self._drag_annotation is not None:
+        if (
+            self._drag_view is not None
+            or self._drag_annotation is not None
+            or self._drag_note is not None
+        ):
             self._drag_view = None
             self._drag_annotation = None
+            self._drag_note = None
             self._drag_started = False
             self.viewport().releaseMouse()
             self.drag_cancelled.emit()
@@ -430,7 +523,9 @@ class DrawingCanvas(QGraphicsView):
             self.cancel_drag()
             self.cancel_requested.emit()
         elif event.key() == Qt.Key.Key_Delete:
-            if self.selected_annotation is not None:
+            if self.selected_note is not None:
+                self.note_delete_requested.emit()
+            elif self.selected_annotation is not None:
                 self.annotation_delete_requested.emit()
             else:
                 self.delete_requested.emit()

@@ -1,0 +1,326 @@
+{
+  "format": "mycad.document",
+  "version": 3,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "5508471f-26d3-4c7e-b222-c8aab65f09de",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "rectangle",
+            "first_corner_mm": [
+              0.0,
+              0.0
+            ],
+            "opposite_corner_mm": [
+              80.0,
+              40.0
+            ]
+          },
+          {
+            "entity_id": "44e858c3-be53-4cf4-95d5-64f02f7e4d62",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              20.0,
+              20.0
+            ],
+            "radius_mm": 6.0
+          },
+          {
+            "entity_id": "cbb92816-4d38-4375-9524-80fd529d5460",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              60.0,
+              20.0
+            ],
+            "radius_mm": 6.0
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-10-28T09:27:01.695238+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.sheet.create",
+      "version": 1,
+      "params": {
+        "sheet_id": "701de780-7928-40e4-a9e6-8c28e7c61298",
+        "name": "草图平面视图",
+        "size_mm": [
+          297,
+          210
+        ],
+        "margin_mm": 10,
+        "projection_angle": "first",
+        "default_scale": 1,
+        "title": [
+          [
+            "标题",
+            "安装板 · 草图入纸"
+          ]
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-10-28T09:27:02.560938+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.view.create",
+      "version": 2,
+      "params": {
+        "view_id": "6742fd4a-48ec-4f21-bade-fb5bb0f266bd",
+        "sheet_id": "701de780-7928-40e4-a9e6-8c28e7c61298",
+        "source": {
+          "kind": "sketch",
+          "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f"
+        },
+        "basis": {
+          "right": [
+            1,
+            0,
+            0
+          ],
+          "up": [
+            0,
+            0,
+            1
+          ],
+          "normal": [
+            0,
+            -1,
+            0
+          ]
+        },
+        "direction": "front",
+        "anchor_mm": [
+          100,
+          100
+        ],
+        "offset_mm": [
+          0,
+          0
+        ],
+        "scale": 1,
+        "inherit_scale": true,
+        "aligned": true,
+        "hidden_lines": true,
+        "tangent_lines": false,
+        "inherit_display": true
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-10-28T09:27:02.574874+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.annotation.create",
+      "version": 2,
+      "params": {
+        "annotation_id": "ef037d1f-ad20-43cb-8071-cad785c8b923",
+        "view_id": "6742fd4a-48ec-4f21-bade-fb5bb0f266bd",
+        "kind": "horizontal",
+        "references": [
+          {
+            "kind": "sketch_entity",
+            "parameters": {
+              "segment": 0.0,
+              "projected_type": 1
+            },
+            "role": "start",
+            "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+            "entity_id": "5508471f-26d3-4c7e-b222-c8aab65f09de"
+          },
+          {
+            "kind": "sketch_entity",
+            "parameters": {
+              "segment": 0.0,
+              "projected_type": 1
+            },
+            "role": "end",
+            "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+            "entity_id": "5508471f-26d3-4c7e-b222-c8aab65f09de"
+          }
+        ],
+        "position_mm": [
+          140,
+          85
+        ],
+        "precision": 2,
+        "layer": "DIM",
+        "prefix": "",
+        "suffix": " mm"
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-10-28T09:27:02.587604+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.annotation.create",
+      "version": 2,
+      "params": {
+        "annotation_id": "941f9bb9-99fe-41bd-9832-021d479313bc",
+        "view_id": "6742fd4a-48ec-4f21-bade-fb5bb0f266bd",
+        "kind": "vertical",
+        "references": [
+          {
+            "kind": "sketch_entity",
+            "parameters": {
+              "segment": 1.0,
+              "projected_type": 1
+            },
+            "role": "start",
+            "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+            "entity_id": "5508471f-26d3-4c7e-b222-c8aab65f09de"
+          },
+          {
+            "kind": "sketch_entity",
+            "parameters": {
+              "segment": 1.0,
+              "projected_type": 1
+            },
+            "role": "end",
+            "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+            "entity_id": "5508471f-26d3-4c7e-b222-c8aab65f09de"
+          }
+        ],
+        "position_mm": [
+          195,
+          120
+        ],
+        "precision": 2,
+        "layer": "DIM",
+        "prefix": "",
+        "suffix": " mm"
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-10-28T09:27:02.603495+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.annotation.create",
+      "version": 2,
+      "params": {
+        "annotation_id": "24be57ed-902b-4d03-96f2-23235de8393d",
+        "view_id": "6742fd4a-48ec-4f21-bade-fb5bb0f266bd",
+        "kind": "diameter",
+        "references": [
+          {
+            "kind": "sketch_entity",
+            "parameters": {
+              "segment": 0.0,
+              "projected_type": 2
+            },
+            "role": "geometry",
+            "sketch_id": "3b4d1f58-ddf4-4538-97e9-2774f4efe16f",
+            "entity_id": "44e858c3-be53-4cf4-95d5-64f02f7e4d62"
+          }
+        ],
+        "position_mm": [
+          120,
+          155
+        ],
+        "precision": 2,
+        "layer": "DIM",
+        "prefix": "",
+        "suffix": " mm"
+      },
+      "ordinal": 5,
+      "timestamp_utc": "2026-10-28T09:27:02.621995+00:00",
+      "confirmed_by": null
+    },
+    {
+      "id": "drawing.note.create",
+      "version": 1,
+      "params": {
+        "note_id": "4e4e63c0-a742-4d01-8dd6-93e066ea7a57",
+        "sheet_id": "701de780-7928-40e4-a9e6-8c28e7c61298",
+        "text": "技术要求：\n1. 去除毛刺，锐边倒钝。\n2. 未注倒角 C1。",
+        "position_mm": [
+          100.0,
+          65.0
+        ],
+        "height_mm": 3.5,
+        "layer": "TEXT"
+      },
+      "ordinal": 6,
+      "timestamp_utc": "2026-10-28T09:27:02.778287+00:00",
+      "confirmed_by": "local"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "document_type": "drawing2d"
+}

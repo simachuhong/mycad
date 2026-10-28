@@ -4104,6 +4104,11 @@ class MainWindow(QMainWindow):
     def _has_unsubmitted_geometry(self) -> bool:
         if self._has_unsubmitted_sketch():
             return True
+        if self.drawing_workbench.notes.pending:
+            self.status_command.setText(
+                "工程图文字尚未提交：Ctrl+Enter 完成或 Esc 取消，再保存或切换文档。"
+            )
+            return True
         if self.drawing_workbench.annotations.pending:
             self.status_command.setText("工程图标注尚未提交：请在图中单击放置或按 Esc 取消。")
             return True

@@ -53,12 +53,11 @@ def test_notes_roundtrip_undo_sheet_cascade_and_layout_fingerprint(tmp_path: Pat
     assert services.kernel.drawing_state == before
     dxf = tmp_path / "notes.dxf"
     export_drawing_dxf(scene, dxf)
-    import ezdxf
+    from tests.formats.test_drawing_export import tags
 
-    doc = ezdxf.readfile(dxf)
-    mtext = tuple(doc.layouts.get("工程图").query("MTEXT"))
-    assert mtext[0].plain_text() == text
-    assert mtext[0].dxf.char_height == 5
+    exported = tags(dxf)
+    assert (1, "技术要求：\\P未注倒角 C1 \\{原样\\} \\\\P") in exported
+    assert (40, "5.0") in exported
 
 
 def test_bad_notes_leave_history_unchanged() -> None:

@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QStackedWidget,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -49,8 +51,10 @@ from mycad.core.drawing_projection import (
 from mycad.core.drawing_sketch import project_sketch
 from mycad.core.persistence import LoadedDocument
 from mycad.formats.drawing_export import export_drawing_dxf
+from mycad.ui.cad_icons import cad_icon
 from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
 from mycad.ui.drawing_canvas import DrawingCanvas
+from mycad.ui.drawing_note_tools import DrawingNoteTools
 from mycad.ui.drawing_pdf import export_drawing_pdf
 from mycad.ui.drawing_tools import ViewPlacement, move_view, scale_view, set_view_alignment
 from mycad.ui.drawing_updates import ProjectionBatch, ProjectionUpdates
@@ -279,8 +283,46 @@ class DrawingWorkbench(QMainWindow):
             self._render,
             self._set_message,
             self._annotation_source_clean,
+            self._prepare_dimension,
         )
-        self.settings_tabs.addTab(self.annotations, "标注")
+        self.annotation_page = QScrollArea()
+        self.annotation_page.setWidgetResizable(True)
+        self.annotation_page.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.annotation_page.setWidget(self.annotations)
+        self.settings_tabs.addTab(self.annotation_page, "标注")
+        self.notes = DrawingNoteTools(
+            self.canvas,
+            lambda: self.state,
+            lambda: self.sheet_id,
+            self._execute,
+            self._render,
+            self._set_message,
+        )
+        self.notes_page = QScrollArea()
+        self.notes_page.setWidgetResizable(True)
+        self.notes_page.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.notes_page.setWidget(self.notes)
+        self.settings_tabs.addTab(self.notes_page, "文本")
+        self.text_action = QAction(cad_icon("document"), "文本标注", self)
+        self.text_action.setToolTip("在图纸上直接输入说明文字；Ctrl+Enter 完成，Esc 取消")
+        self.text_action.triggered.connect(self.begin_text)
+        self.dimension_menu = QToolButton()
+        self.dimension_menu.setText("尺寸标注")
+        self.dimension_menu.setIcon(cad_icon("dimension"))
+        self.dimension_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.dimension_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self.dimension_menu)
+        for action in self.annotations.tool_actions.values():
+            menu.addAction(action)
+        self.dimension_menu.setMenu(menu)
+        self.toolbar.insertWidget(self.sketch_view_action, self.dimension_menu)
+        self.toolbar.insertAction(self.sketch_view_action, self.text_action)
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        side_text = QToolButton()
+        side_text.setDefaultAction(self.text_action)
+        side_text.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        annotation_form = cast("QFormLayout", self.annotations.layout())
+        annotation_form.insertRow(0, side_text)
         self.canvas.annotation_edit_requested.connect(self._edit_annotation)
         self.parameter_dock = QDockWidget("工程图功能", self)
         self.parameter_dock.setObjectName("drawingParameterDock")
@@ -306,11 +348,48 @@ class DrawingWorkbench(QMainWindow):
         self._set_message("工程图尺寸为关联测量尺寸；模型修改请切换 3D图。")
         self._update_start_page()
 
+    def _show_annotation_tab(self, widget: QWidget) -> None:
+        self._dock_visible = True
+        self.parameter_dock.show()
+        self.settings_tabs.setCurrentWidget(
+            self.annotation_page if widget is self.annotations else self.notes_page
+        )
+
+    def _prepare_dimension(self) -> bool:
+        if self.loaded is None or (self.unit is not None and self.unit.is_busy):
+            return False
+        if self.notes.pending:
+            self._set_message("请先完成文字（Ctrl+Enter），或按 Esc 取消后再标尺寸。")
+            return False
+        self.canvas.selected_note = None
+        self.notes.select(None)
+        self._show_annotation_tab(self.annotations)
+        return True
+
+    def begin_text(self) -> None:
+        if self.loaded is None or (self.unit is not None and self.unit.is_busy):
+            return
+        if self.placement is not None or self._start_after_sheet is not None:
+            self._set_message("请先按 Enter 完成视图放置，或 Esc 取消，再添加文字。")
+            return
+        if self.notes.pending:
+            return
+        if self.sheet_id is None:
+            self.create_sheet(self.begin_text)
+            return
+        self.annotations.cancel()
+        self.canvas.cancel_drag()
+        self.canvas.select_view(None)
+        self._show_annotation_tab(self.notes)
+        self.notes.begin()
+
     def _set_message(self, text: str) -> None:
         self.hint.setText(text)
         self.message.emit(text)
 
     def bind_document(self, loaded: LoadedDocument, session_id: int) -> None:
+        self.notes.cancel()
+        self.notes.select(None)
         self.annotations.cancel()
         self.annotations.select(None)
         self.loaded, self.session_id = loaded, session_id
@@ -379,8 +458,11 @@ class DrawingWorkbench(QMainWindow):
                 "如需机械三视图，请到 3D图使用拉伸或旋转生成实体后再投影。"
             )
         self.start_description.setText(description)
-        empty = self.placement is None and not any(
-            view.sheet_id == self.sheet_id for view in self.state.views
+        empty = (
+            self.placement is None
+            and not (hasattr(self, "notes") and self.notes.pending)
+            and not any(note.sheet_id == self.sheet_id for note in self.state.notes)
+            and not any(view.sheet_id == self.sheet_id for view in self.state.views)
         )
         self.pages.setCurrentWidget(self.start_page if empty else self.canvas)
 
@@ -417,6 +499,10 @@ class DrawingWorkbench(QMainWindow):
         self.state = self.services.kernel.drawing_state
         self._refresh_sketch_sources()
         self._reconcile_placement()
+        if self.notes.pending and self.sheet_id not in {
+            sheet.sheet_id for sheet in self.state.sheets
+        }:
+            self.notes.cancel()
         if (
             self.placement is not None
             and self._placement_source_fingerprint
@@ -473,7 +559,7 @@ class DrawingWorkbench(QMainWindow):
         ):
             self._set_message("当前操作尚未结束，请稍后再试；图中草稿已保留。")
 
-    def create_sheet(self) -> None:
+    def create_sheet(self, after: Callable[[], None] | None = None) -> None:
         if self.loaded is None:
             return
         paper = "A4" if self.paper.currentIndex() < 2 else "A3"
@@ -493,6 +579,8 @@ class DrawingWorkbench(QMainWindow):
             self._start_after_sheet = None
             if source is not None:
                 self._begin_source_placement(source)
+            if callable(after):
+                after()
 
         self._execute("drawing.sheet.create", drawing_object_mapping(sheet), done)
 
@@ -509,11 +597,14 @@ class DrawingWorkbench(QMainWindow):
     def _select_tree_sheet(self, item: QTreeWidgetItem, _column: int) -> None:
         identity = item.data(0, Qt.ItemDataRole.UserRole)
         if isinstance(identity, UUID) and identity in {s.sheet_id for s in self.state.sheets}:
+            self.notes.cancel()
             self.cancel_placement()
             self.sheet_id = identity
             self._load_sheet_settings()
             self._render()
         elif isinstance(identity, UUID) and identity in {v.view_id for v in self.state.views}:
+            if self.sheet_id != self.state.view(identity).sheet_id:
+                self.notes.cancel()
             self.sheet_id = self.state.view(identity).sheet_id
             self._load_sheet_settings()
             self._render()
@@ -569,6 +660,9 @@ class DrawingWorkbench(QMainWindow):
             return
         if self.placement is not None or self._start_after_sheet is not None:
             self._set_message("请先按 Enter 完成当前放置，或按 Esc 取消后重新选择来源。")
+            return
+        if self.notes.pending:
+            self._set_message("请先完成文字（Ctrl+Enter），或按 Esc 取消。")
             return
         self.annotations.cancel()
         if source.kind == "sketch" and source.sketch_id not in {
@@ -719,6 +813,8 @@ class DrawingWorkbench(QMainWindow):
             self.canvas.cancel_drag()
         self.canvas.setEnabled(not busy)
         self.settings_tabs.setEnabled(not busy)
+        self.text_action.setEnabled(not busy and self.loaded is not None)
+        self.dimension_menu.setEnabled(not busy and self.loaded is not None)
         self._update_start_page()
         if not busy and self._pending:
             QTimer.singleShot(0, self, self.request_update)
@@ -803,6 +899,8 @@ class DrawingWorkbench(QMainWindow):
                 views = [v for v in views if v.view_id != self._ghost.view_id] + [self._ghost]
             state = replace(state, views=(*state.views, *views))
         state = self.annotations.preview(state)
+        if hasattr(self, "notes"):
+            state = self.notes.preview(state)
         scene = build_drawing_scene(state, self.sheet_id, self.projections)
         labels = {"clean": "已更新", "stale": "待更新", "updating": "更新中", "failed": "更新失败"}
         names = {
@@ -886,7 +984,11 @@ class DrawingWorkbench(QMainWindow):
     def output_scene(self) -> DrawingScene:
         if self.services is None or self.unit is None or self.unit.is_busy or self.sheet_id is None:
             raise ValueError("当前图纸尚未就绪，请等待更新完成")
-        if self.annotations.pending or (self.placement is not None and self.placement.pending):
+        if (
+            self.notes.pending
+            or self.annotations.pending
+            or (self.placement is not None and self.placement.pending)
+        ):
             raise ValueError("图中预览尚未提交，请先完成或取消再出图")
         current = self.services.kernel.drawing_state
         views = [view for view in current.views if view.sheet_id == self.sheet_id]
@@ -940,7 +1042,7 @@ class DrawingWorkbench(QMainWindow):
 
     def _edit_annotation(self, identity: object) -> None:
         self.annotations.select(identity)
-        self.settings_tabs.setCurrentWidget(self.annotations)
+        self._show_annotation_tab(self.annotations)
         self.annotations.precision.setFocus()
 
     def _selected_view_changed(self, identity: object, activate: bool = True) -> None:
@@ -1089,6 +1191,9 @@ class DrawingWorkbench(QMainWindow):
             self.commit_placement()
 
     def _cancel_canvas(self) -> None:
+        if self.notes.pending:
+            self.notes.cancel()
+            return
         if self.canvas.annotation_mode or self.annotations.pending:
             self.annotations.cancel()
             return

@@ -9,14 +9,17 @@ from dataclasses import replace
 from typing import cast
 from uuid import UUID, uuid4
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFormLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
     QToolBar,
+    QToolButton,
     QWidget,
 )
 
@@ -29,6 +32,7 @@ from mycad.core.drawing_references import (
     reference_for_curve,
     resolve_reference,
 )
+from mycad.ui.cad_icons import cad_icon
 from mycad.ui.drawing_canvas import DrawingCanvas
 
 
@@ -43,11 +47,13 @@ class DrawingAnnotationTools(QWidget):
         render: Callable[[], None],
         message: Callable[[str], None],
         clean: Callable[[UUID], bool],
+        before_begin: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__()
         self.canvas, self.toolbar = canvas, toolbar
         self._state, self._projections = state, projections
         self._execute, self._render, self._message, self._clean = execute, render, message, clean
+        self.before_begin = before_begin
         self.selected: UUID | None = None
         self.draft: DrawingAnnotation | None = None
         self._kind: AnnotationKind | None = None
@@ -58,20 +64,32 @@ class DrawingAnnotationTools(QWidget):
         self._dragging = False
         self.tool_actions: dict[str, QAction] = {}
         for kind, label in (
-            ("horizontal", "水平"),
-            ("vertical", "垂直"),
-            ("aligned", "对齐"),
-            ("radius", "半径"),
-            ("diameter", "直径"),
-            ("angle", "角度"),
+            ("horizontal", "水平尺寸"),
+            ("vertical", "垂直尺寸"),
+            ("aligned", "对齐尺寸"),
+            ("radius", "半径尺寸"),
+            ("diameter", "直径尺寸"),
+            ("angle", "角度尺寸"),
             ("center", "中心标记/线"),
         ):
             action = toolbar.addAction(label)
+            action.setIcon(cad_icon("axes" if kind == "center" else f"dim-{kind}"))
+            action.setToolTip(f"{label}：在图中选择几何，再单击放置")
             action.triggered.connect(
                 lambda _checked=False, k=kind: self.begin(cast("AnnotationKind", k))
             )
             self.tool_actions[kind] = action
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         form = QFormLayout(self)
+        grid = QGridLayout()
+        self.creation_buttons: dict[str, QToolButton] = {}
+        for index, (kind, action) in enumerate(self.tool_actions.items()):
+            button = QToolButton()
+            button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            grid.addWidget(button, index // 2, index % 2, 1, 2 if kind == "center" else 1)
+            self.creation_buttons[kind] = button
+        form.addRow(grid)
         self.description = QLabel("在图中选择几何并放置尺寸。工程图尺寸只测量，不驱动模型。")
         self.description.setWordWrap(True)
         self.precision = QSpinBox()
@@ -106,6 +124,8 @@ class DrawingAnnotationTools(QWidget):
         return bool(self.draft or self._references)
 
     def begin(self, kind: AnnotationKind) -> None:
+        if self.before_begin is not None and not self.before_begin():
+            return
         if self.canvas.placing:
             self._message("请先完成或取消视图放置。")
             return
