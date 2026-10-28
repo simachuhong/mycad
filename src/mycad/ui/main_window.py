@@ -479,6 +479,12 @@ class MainWindow(QMainWindow):
         self.drawing_workbench = DrawingWorkbench(services, self.execution_unit)
         self.workspace_tabs.set_content("drawing", self.drawing_workbench)
         self.drawing_workbench.message.connect(self._on_engineering_message)
+        self.drawing_workbench.sketch_requested.connect(
+            lambda: self.workspace_tabs.activate("sketch")
+        )
+        self.drawing_workbench.model_requested.connect(self._show_3d_workspace)
+        self.drawing_workbench.open_requested.connect(self._on_open_document)
+        self.drawing_workbench.new_requested.connect(self._on_new_document)
         drawing_workbench = self.drawing_workbench
         self.destroyed.connect(lambda: drawing_workbench.shutdown())
         self.workspace_tabs.workspace_changed.connect(self._on_workspace_changed)

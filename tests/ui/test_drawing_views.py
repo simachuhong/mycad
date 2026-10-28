@@ -192,6 +192,7 @@ def test_pending_engineering_group_blocks_document_replacement(
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
     loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())})
     loaded.document.mark_clean()
     window = MainWindow(services=services)
@@ -207,7 +208,9 @@ def test_pending_engineering_group_blocks_document_replacement(
     bench.cancel_placement()
 
 
-def test_opened_sheet_fits_on_first_activation_only(qtbot: QtBot) -> None:
+def test_opened_sheet_fits_on_first_activation_only(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from PySide6.QtCore import QRectF
 
     from mycad.app import build_app, new_document
@@ -215,9 +218,18 @@ def test_opened_sheet_fits_on_first_activation_only(qtbot: QtBot) -> None:
 
     services = build_app(discoverers=[])
     loaded = new_document(services)
-    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())})
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+
+    sheet_id = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet_id)})
+    loaded.bus.execute(
+        "drawing.view.create", drawing_object_mapping(DrawingView(uuid4(), sheet_id))
+    )
     window = MainWindow(services=services)
     qtbot.addWidget(window)
+    monkeypatch.setattr(window.drawing_workbench, "request_update", lambda: None)
     window.bind_document(loaded)
     window.show()
     window.workspace_tabs.activate("drawing")

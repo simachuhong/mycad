@@ -1,0 +1,66 @@
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+__________ test_delete_selected_geometry_and_dependencies_is_one_undo __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d73bc92db20>
+
+    def test_delete_selected_geometry_and_dependencies_is_one_undo(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        editor.resize(1100, 760)
+        editor.show()
+        qtbot.waitExposed(editor)
+        canvas = editor.canvas
+        first = LineEntity(uuid4().hex, (-20, 10), (20, 10))
+        second = LineEntity(uuid4().hex, (-20, -10), (20, -10))
+        dimension = SketchConstraint(
+            uuid4().hex, "length", (SketchGeometryReference(first.entity_id, "geometry"),),
+            value=40, unit="mm",
+        )
+        relation = SketchConstraint(
+            uuid4().hex, "horizontal", (SketchGeometryReference(second.entity_id, "geometry"),),
+            source="inferred",
+        )
+        canvas.entities = [first, second]
+        canvas.set_tool("选择元素")
+        QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((0, 10)))
+        assert canvas.selected_entity_ids == {first.entity_id}
+        canvas.constraints = [dimension, relation]
+        QTest.keyClick(canvas, Qt.Key.Key_Delete)
+>       assert canvas.entities == [second]
+E       AssertionError: assert [LineEntity(e...yer_name='0')] == [LineEntity(e...yer_name='0')]
+E         
+E         At index 0 diff: LineEntity(entity_id='c01bef7bd9844eaeacb069dfd4870e86', start_mm=(-20.0, 10.0), end_mm=(20.0, 10.0), construction=False, layer_name='0') != LineEntity(entity_id='0089cd4638ee44628bc12eda633bf5e7', start_mm=(-20.0, -10.0), end_mm=(20.0, -10.0), construction=False, layer_name='0')
+E         Left contains one more item: LineEntity(entity_id='0089cd4638ee44628bc12eda633bf5e7', start_mm=(-20.0, -10.0), end_mm=(20.0, -10.0), construction=False, layer_name='0')
+E         Use -v to get more diff
+
+tests/ui/test_sketch_delete.py:40: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+______ test_delete_locked_selection_is_atomic_and_empty_selection_is_noop ______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d73bc92fb30>
+
+    def test_delete_locked_selection_is_atomic_and_empty_selection_is_noop(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        canvas = editor.canvas
+        canvas.set_layer_table(
+            SketchLayerTable((SketchLayer("0"), SketchLayer("locked", locked=True))), "0"
+        )
+        first = LineEntity(uuid4().hex, (0, 0), (20, 0))
+        locked = LineEntity(uuid4().hex, (0, 10), (20, 10), layer_name="locked")
+        canvas.entities = [first, locked]
+        canvas.selected_entity_ids = {first.entity_id, locked.entity_id}
+        QTest.keyClick(canvas, Qt.Key.Key_Delete)
+        assert canvas.entities == [first, locked]
+        assert not canvas.can_undo
+>       assert "锁定" in canvas.message
+E       AssertionError: assert '锁定' in '选择绘图工具；单击画布放置几何。'
+E        +  where '选择绘图工具；单击画布放置几何。' = <mycad.ui.sketch_editor.SketchCanvas(0x3de5bec0) at 0x7d73bc62ed40>.message
+
+tests/ui/test_sketch_delete.py:64: AssertionError
+=========================== short test summary info ============================
+FAILED tests/ui/test_sketch_delete.py::test_delete_selected_geometry_and_dependencies_is_one_undo
+FAILED tests/ui/test_sketch_delete.py::test_delete_locked_selection_is_atomic_and_empty_selection_is_noop
+2 failed, 1 passed in 11.27s

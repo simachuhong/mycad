@@ -394,6 +394,7 @@ class SketchCanvas(QWidget):
 
     changed = Signal()
     history_recorded = Signal()
+    deleting = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
     cursor_changed = Signal(float, float, str)
@@ -801,7 +802,7 @@ class SketchCanvas(QWidget):
             if tool == "延伸"
             else "分割：单击目标直线、矩形边或多段线路径，靠近交点区段；选中区间的首段保留原身份。"
             if tool == "分割"
-            else "选择：点选或在空白处拖拽/两次单击框选；左→右全包含，右→左包含或相交；Ctrl 加选，Shift 减选。"
+            else "选择：点选或在空白处拖拽/两次单击框选；左→右全包含，右→左包含或相交；Ctrl 加选，Shift 减选；Delete 删除所选对象。"
             if tool == "选择元素"
             else f"{tool}：单击画布按提示放置点。"
         )
@@ -848,6 +849,64 @@ class SketchCanvas(QWidget):
         if select_new:
             self.selected_entity_ids.update(available_ids - previous_ids)
         self._snap_candidates_cache = None
+        self.changed.emit()
+        self.update()
+        return True
+
+    def delete_selected(self) -> bool:
+        """Erase draft selection and its dependent relations as one undo step."""
+        if self.has_pending_geometry or self.has_active_edit_gesture:
+            self.message = "请先完成当前操作，或按 Esc 取消预览，再删除所选对象。"
+            self.changed.emit()
+            return False
+        error = self.transform_selection_error("delete") if not self.selected_constraint_ids else ""
+        if error:
+            self.message = error
+            self.changed.emit()
+            return False
+        entity_ids = {
+            entity.entity_id
+            for entity in self.entities
+            if entity.entity_id in self.selected_entity_ids and not self.selected_constraint_ids
+        }
+        constraints = [
+            constraint
+            for constraint in self.constraints
+            if constraint.constraint_id in self.selected_constraint_ids
+            or any(ref.entity_id in entity_ids for ref in constraint.references)
+        ]
+        if any(
+            constraint.constraint_id in self.selected_constraint_ids
+            and (
+                self.annotation_layer(constraint).locked
+                or not self.annotation_layer(constraint).displayed
+            )
+            for constraint in constraints
+        ):
+            self.message = "选择包含已锁定或隐藏图层的约束；草图未修改。"
+            self.changed.emit()
+            return False
+        if not entity_ids and not constraints:
+            return False
+        self.deleting.emit()
+        self._record_undo()
+        self.entities = [entity for entity in self.entities if entity.entity_id not in entity_ids]
+        removed_constraints = {constraint.constraint_id for constraint in constraints}
+        self.constraints = [
+            constraint
+            for constraint in self.constraints
+            if constraint.constraint_id not in removed_constraints
+        ]
+        self.selected_entity_ids.difference_update(entity_ids)
+        self.selected_constraint_ids.difference_update(removed_constraints)
+        self._snap_candidates_cache = None
+        self._snap_kind = ""
+        self._hovered_entity_id = None
+        self._hovered_line_edit_entity_id = None
+        self._clear_line_edit_preview()
+        self.message = (
+            f"已删除 {len(entity_ids)} 个图元及 {len(constraints)} 条约束；Ctrl+Z 可撤销。"
+        )
         self.changed.emit()
         self.update()
         return True
@@ -3631,6 +3690,10 @@ class SketchCanvas(QWidget):
 
     @override
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Delete:
+            self.delete_selected()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._cancel_selection_box():
             event.accept()
             return
@@ -4218,6 +4281,8 @@ class SketchEditorDialog(QDialog):
         self.status_label = MessageLabel(self.canvas.message)
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.dimensions = DimensionTools(self)
+        self.canvas.deleting.connect(self.dimensions.cancel)
+        self.navigator.delete_requested.connect(self.canvas.delete_selected)
         self.entity_count_label = QLabel("0 个草图元素")
         self.finish_button = QPushButton("完成草图")
         self.finish_button.setEnabled(False)

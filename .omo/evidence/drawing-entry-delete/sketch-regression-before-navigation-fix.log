@@ -1,0 +1,43 @@
+...F.................................................................... [ 84%]
+.............                                                            [100%]
+=================================== FAILURES ===================================
+_______ test_delete_navigation_constraint_keeps_its_highlighted_geometry _______
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7a6bbe1fa240>
+
+    def test_delete_navigation_constraint_keeps_its_highlighted_geometry(qtbot: QtBot) -> None:
+        editor = SketchEditorDialog()
+        qtbot.addWidget(editor)
+        editor.show()
+        canvas = editor.canvas
+        line = LineEntity(uuid4().hex, (0, 0), (20, 0))
+        dimension = SketchConstraint(
+            uuid4().hex,
+            "length",
+            (SketchGeometryReference(line.entity_id, "geometry"),),
+            value=20,
+            unit="mm",
+        )
+        canvas.entities = [line]
+        canvas.constraints = [dimension]
+        editor._select_navigation(frozenset(), frozenset({dimension.constraint_id}))
+        assert canvas.selected_entity_ids == {line.entity_id}
+        QTest.keyClick(canvas, Qt.Key.Key_Delete)
+        assert canvas.entities == [line]
+        assert not canvas.constraints
+        assert canvas.undo_last_operation()
+        assert canvas.constraints == [dimension]
+        editor._select_navigation(frozenset({line.entity_id}), frozenset())
+        editor.parameter_tabs.setCurrentWidget(editor.navigator)
+        editor.navigator.tree.setFocus()
+        QTest.keyClick(editor.navigator.tree, Qt.Key.Key_Delete)
+>       assert not canvas.entities
+E       AssertionError: assert not [LineEntity(entity_id='b647dd163eb849e38bfa37c9d02ce67d', start_mm=(0.0, 0.0), end_mm=(20.0, 0.0), construction=False, layer_name='0')]
+E        +  where [LineEntity(entity_id='b647dd163eb849e38bfa37c9d02ce67d', start_mm=(0.0, 0.0), end_mm=(20.0, 0.0), construction=False, layer_name='0')] = <mycad.ui.sketch_editor.SketchCanvas(0x1972dfb0) at 0x7a6bbe232a40>.entities
+
+tests/ui/test_sketch_delete.py:117: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_sketch_delete.py::test_delete_navigation_constraint_keeps_its_highlighted_geometry
+1 failed, 84 passed in 45.32s

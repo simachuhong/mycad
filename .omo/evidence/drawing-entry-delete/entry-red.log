@@ -1,0 +1,71 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+________ test_generate_entry_creates_sheet_and_starts_canvas_placement _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d28fb07cec0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7d28fb17a630>
+
+    def test_generate_entry_creates_sheet_and_starts_canvas_placement(
+        qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        bench = window.drawing_workbench
+        monkeypatch.setattr(bench, "request_update", lambda: None)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+>       assert bench.start_page.isVisible()
+               ^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingWorkbench' object has no attribute 'start_page'
+
+tests/ui/test_drawing_start.py:27: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+_________ test_empty_model_explains_source_and_can_navigate_to_sketch __________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d28f99bb5f0>
+
+    def test_empty_model_explains_source_and_can_navigate_to_sketch(qtbot: QtBot) -> None:
+        services = build_app(discoverers=[])
+        loaded = new_document(services)
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(loaded)
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench = window.drawing_workbench
+>       assert bench.start_page.isVisible()
+               ^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingWorkbench' object has no attribute 'start_page'
+
+tests/ui/test_drawing_start.py:47: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+__________ test_drawing2d_explains_model_requirement_in_visible_page ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7d28f0111910>
+
+    def test_drawing2d_explains_model_requirement_in_visible_page(qtbot: QtBot) -> None:
+        services = build_app(discoverers=[])
+        window = MainWindow(services=services)
+        qtbot.addWidget(window)
+        window.bind_document(new_document(services, document_type="drawing2d"))
+        window.show()
+        window.workspace_tabs.activate("drawing")
+        bench = window.drawing_workbench
+>       assert bench.start_page.isVisible()
+               ^^^^^^^^^^^^^^^^
+E       AttributeError: 'DrawingWorkbench' object has no attribute 'start_page'
+
+tests/ui/test_drawing_start.py:69: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_drawing_start.py::test_generate_entry_creates_sheet_and_starts_canvas_placement
+FAILED tests/ui/test_drawing_start.py::test_empty_model_explains_source_and_can_navigate_to_sketch
+FAILED tests/ui/test_drawing_start.py::test_drawing2d_explains_model_requirement_in_visible_page
+3 failed in 12.36s

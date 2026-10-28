@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QItemSelectionModel, QSignalBlocker, Qt, Signal
+from typing import override
+
+from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QSignalBlocker, Qt, Signal
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -66,11 +69,13 @@ class SketchNavigator(QWidget):
 
     selection_requested = Signal(object, object)
     constraint_activated = Signal(str)
+    delete_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.tree = QTreeWidget()
         self.tree.setObjectName("draftingNavigationTree")
+        self.tree.installEventFilter(self)
         self.tree.setHeaderLabels(("图形", "图层 / 状态"))
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setUniformRowHeights(True)
@@ -84,6 +89,18 @@ class SketchNavigator(QWidget):
         layout.addWidget(self.tree)
         self._signature: tuple[tuple[Sketch, ...], frozenset[str], frozenset[str]] | None = None
         self._items: dict[tuple[str, str], QTreeWidgetItem] = {}
+
+    @override
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self.tree
+            and isinstance(event, QKeyEvent)
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Delete
+        ):
+            self.delete_requested.emit()
+            return True
+        return super().eventFilter(watched, event)
 
     def sync(
         self,

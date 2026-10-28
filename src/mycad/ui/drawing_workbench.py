@@ -24,9 +24,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QScrollArea,
+    QStackedWidget,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -60,6 +63,10 @@ if TYPE_CHECKING:
 
 class DrawingWorkbench(QMainWindow):
     message = Signal(str)
+    sketch_requested = Signal()
+    model_requested = Signal()
+    open_requested = Signal()
+    new_requested = Signal()
 
     def __init__(
         self,
@@ -92,11 +99,72 @@ class DrawingWorkbench(QMainWindow):
         self._dock_visible = True
         self._start_after_sheet = False
         self.canvas = DrawingCanvas()
-        self.setCentralWidget(self.canvas)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.canvas)
+        self.start_page = QWidget()
+        outer_layout = QVBoxLayout(self.start_page)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        outer_layout.addWidget(scroll)
+        content = QWidget()
+        scroll.setWidget(content)
+        page_layout = QVBoxLayout(content)
+        card = QWidget()
+        card.setMaximumWidth(560)
+        start_layout = QVBoxLayout(card)
+        start_layout.setContentsMargins(24, 24, 24, 24)
+        start_layout.setSpacing(14)
+        page_layout.addStretch()
+        page_layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        page_layout.addStretch()
+        heading = QLabel("从模型生成工程图")
+        heading.setStyleSheet("font-size: 22px; font-weight: 600;")
+        start_layout.addWidget(heading)
+        self.start_description = QLabel()
+        self.start_description.setWordWrap(True)
+        start_layout.addWidget(self.start_description)
+        self.generate_button = QPushButton("从当前三维模型生成投影视图")
+        self.generate_button.clicked.connect(self.begin_placement)
+        self.sketch_button = QPushButton("前往平面草图")
+        self.sketch_button.clicked.connect(self.sketch_requested.emit)
+        self.model_button = QPushButton("前往 3D图 · 拉伸 / 旋转建模")
+        self.model_button.clicked.connect(self.model_requested.emit)
+        self.open_button = QPushButton("打开已有零件文件…")
+        self.open_button.clicked.connect(self.open_requested.emit)
+        self.new_button = QPushButton("新建零件…")
+        self.new_button.clicked.connect(self.new_requested.emit)
+        for button in (
+            self.generate_button,
+            self.sketch_button,
+            self.model_button,
+            self.open_button,
+            self.new_button,
+        ):
+            button.setMinimumHeight(36)
+            button.setStyleSheet("QPushButton { border: 1px solid palette(mid); }")
+            start_layout.addWidget(button)
+        self.generate_button.setStyleSheet(
+            "QPushButton:enabled { background: palette(highlight); color: palette(highlighted-text); "
+            "border: 1px solid palette(highlight); font-weight: 600; }"
+            "QPushButton:disabled { border: 1px solid palette(mid); }"
+        )
+        steps = QLabel(
+            "1. 在右侧选择纸张、投影法和比例。\n"
+            "2. 点击生成，在图中单击放置主视图，再沿方向放置投影视图。\n"
+            "3. Enter 完成，Esc 取消；随后可在图中选择轮廓添加标注。"
+        )
+        steps.setWordWrap(True)
+        start_layout.addWidget(steps)
+        start_layout.addStretch()
+        self.pages.addWidget(self.start_page)
+        self.pages.setCurrentWidget(self.start_page)
+        self.setCentralWidget(self.pages)
         self.toolbar = self.addToolBar("工程图")
         self.toolbar.setObjectName("drawingToolbar")
         self.sheet_action = QAction("新建图纸", self)
-        self.base_action = QAction("基准与投影视图", self)
+        self.base_action = QAction("从模型生成投影", self)
         self.update_action = QAction("更新视图", self)
         self.dxf_action = QAction("导出 DXF", self)
         self.pdf_action = QAction("导出 PDF", self)
@@ -225,6 +293,7 @@ class DrawingWorkbench(QMainWindow):
         if unit is not None:
             unit.busy_changed.connect(self._busy_changed)
         self._set_message("工程图尺寸为关联测量尺寸；模型修改请切换 3D图。")
+        self._update_start_page()
 
     def _set_message(self, text: str) -> None:
         self.hint.setText(text)
@@ -260,6 +329,45 @@ class DrawingWorkbench(QMainWindow):
         self.refresh()
         if not enabled:
             self._set_message("独立二维图不包含三维模型；请在平面草图中绘制。")
+
+    def _has_projection_source(self) -> bool:
+        return bool(
+            self.loaded is not None
+            and self.loaded.document.document_type == "part"
+            and self.services is not None
+            and self.services.kernel.body_ids
+        )
+
+    def _update_start_page(self) -> None:
+        has_source = self._has_projection_source()
+        busy = self.unit is not None and self.unit.is_busy
+        self.generate_button.setEnabled(has_source and not busy)
+        self.base_action.setEnabled(has_source and not busy)
+        self.open_button.setEnabled(self.services is not None and not busy)
+        self.new_button.setEnabled(self.services is not None and not busy)
+        self.sketch_button.setEnabled(self.loaded is not None and not busy)
+        self.model_button.setEnabled(
+            self.loaded is not None and self.loaded.document.document_type == "part" and not busy
+        )
+        if self.loaded is None:
+            description = "先新建零件，或打开已有零件文件，再从三维模型生成投影视图。"
+        elif self.loaded.document.document_type != "part":
+            description = (
+                "当前是独立二维图，可返回平面草图继续绘制。"
+                "机械三视图需要三维实体；请打开零件文件，或新建零件后建模。"
+            )
+        elif has_source:
+            description = "当前零件已有三维模型。点击下方按钮创建图纸并在画布中放置投影视图。"
+        else:
+            description = (
+                "当前零件还没有三维实体。先在平面草图绘制并完成草图，"
+                "再到 3D图使用拉伸或旋转生成实体，然后返回此页生成三视图。"
+            )
+        self.start_description.setText(description)
+        empty = self.placement is None and not any(
+            view.sheet_id == self.sheet_id for view in self.state.views
+        )
+        self.pages.setCurrentWidget(self.start_page if empty else self.canvas)
 
     def _reconcile_placement(self) -> None:
         if self.placement is None or self.placement.sheet.sheet_id in {
@@ -413,6 +521,10 @@ class DrawingWorkbench(QMainWindow):
         self.annotations.cancel()
         if self.loaded is None or self.loaded.document.document_type != "part":
             return
+        if not self._has_projection_source():
+            self._set_message("当前没有可投影的三维实体；请先完成草图并拉伸或旋转建模。")
+            self._update_start_page()
+            return
         if self.sheet_id is None:
             self._start_after_sheet = True
             self.create_sheet()
@@ -427,6 +539,8 @@ class DrawingWorkbench(QMainWindow):
         )
         self.canvas.placing = False
         self._set_message("正在准备投影；完成后在画布单击放置基准视图。")
+        self._render()
+        self.canvas.setFocus()
         self.request_update()
 
     def _target_bases(self) -> dict[UUID, ViewBasis]:
@@ -537,6 +651,7 @@ class DrawingWorkbench(QMainWindow):
             self.canvas.cancel_drag()
         self.canvas.setEnabled(not busy)
         self.settings_tabs.setEnabled(not busy)
+        self._update_start_page()
         if not busy and self._pending:
             QTimer.singleShot(0, self, self.request_update)
 
@@ -592,6 +707,7 @@ class DrawingWorkbench(QMainWindow):
             self.sheet_id = self.state.sheets[0].sheet_id if self.state.sheets else None
             if self.sheet_id is not None:
                 self._load_sheet_settings()
+        self._update_start_page()
         if self.sheet_id is None:
             self.canvas.clear_scene()
             return
