@@ -17,7 +17,7 @@ class PaperText:
 
 def validate_drawing_output(scene: DrawingScene) -> None:
     issues = list(scene.issues)
-    if not scene.views or any(not v.curves for v in scene.views):
+    if not any(view.curves for view in scene.views):
         issues.append("图纸缺少有效视图几何，请生成或更新视图")
     if len(scene.annotations) != len(scene.resolved_annotations):
         issues.append("标注尚未解析，请更新图纸")

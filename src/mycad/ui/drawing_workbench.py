@@ -154,11 +154,12 @@ class DrawingWorkbench(QMainWindow):
             "border: 1px solid palette(highlight); font-weight: 600; }"
             "QPushButton:disabled { border: 1px solid palette(mid); }"
         )
+        self.sketch_view_button.setStyleSheet(self.generate_button.styleSheet())
         steps = QLabel(
-            "1. 在右侧选择草图来源、纸张和比例；三维投影可另选投影法。\n"
-            "2. 点击对应入口，在图中单击放置平面视图或三维投影视图。\n"
-            "3. Enter 完成，Esc 取消；随后可在图中选择轮廓添加标注。"
+            "选定来源、纸张和比例后，单击画布放置。\n"
+            "Enter 完成，Esc 取消；完成后可在图中选择轮廓添加标注。"
         )
+        steps.setMinimumHeight(64)
         steps.setWordWrap(True)
         start_layout.addWidget(steps)
         start_layout.addStretch()
