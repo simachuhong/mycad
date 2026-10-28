@@ -90,6 +90,9 @@ AFFECTED_OBJECTS: Mapping[str, str] = {
     "drawing.annotation.create": "drawing_annotation",
     "drawing.annotation.update": "drawing_annotation",
     "drawing.annotation.delete": "drawing_annotation",
+    "drawing.note.create": "drawing_note",
+    "drawing.note.update": "drawing_note",
+    "drawing.note.delete": "drawing_note",
 }
 
 

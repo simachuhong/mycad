@@ -17,7 +17,7 @@ class PaperText:
 
 def validate_drawing_output(scene: DrawingScene) -> None:
     issues = list(scene.issues)
-    if not any(view.curves for view in scene.views):
+    if not any(view.curves for view in scene.views) and not scene.notes:
         issues.append("图纸缺少有效视图几何，请生成或更新视图")
     if len(scene.annotations) != len(scene.resolved_annotations):
         issues.append("标注尚未解析，请更新图纸")
@@ -57,4 +57,7 @@ def paper_texts(scene: DrawingScene) -> tuple[PaperText, ...]:
         for a in scene.resolved_annotations
         if a.text
     )
-    return (*title, *labels)
+    notes = tuple(
+        PaperText(note.position_mm, note.text, note.height_mm, note.layer) for note in scene.notes
+    )
+    return (*title, *labels, *notes)

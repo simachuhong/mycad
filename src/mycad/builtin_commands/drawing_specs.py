@@ -63,6 +63,14 @@ _VIEW = {
     "tangent_lines": _BOOL,
     "inherit_display": _BOOL,
 }
+_NOTE = {
+    "note_id": _TEXT,
+    "sheet_id": _TEXT,
+    "text": {"type": "string", "minLength": 1},
+    "position_mm": _point(2),
+    "height_mm": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    "layer": _TEXT,
+}
 _ANNOTATION = {
     "annotation_id": _TEXT,
     "view_id": _TEXT,
@@ -116,13 +124,16 @@ _ANNOTATION_V2 = {
 def _spec(kind: str, action: str, version: int = 1) -> CommandSpec:
     fields = {
         "sheet": _SHEET,
+        "note": _NOTE,
         "view": _VIEW if version == 1 else _VIEW_V2,
         "annotation": _ANNOTATION if version == 1 else _ANNOTATION_V2,
     }[kind]
     identity = f"{kind}_id"
     required = [identity]
     if action == "create":
-        if kind == "view":
+        if kind == "note":
+            required.extend(["sheet_id", "text", "position_mm"])
+        elif kind == "view":
             required.append("sheet_id")
         elif kind == "annotation":
             required.extend(["view_id", "kind", "references", "position_mm"])
@@ -137,7 +148,9 @@ def _spec(kind: str, action: str, version: int = 1) -> CommandSpec:
                 ),
             ]
         }
-    label = {"sheet": "图纸", "view": "工程视图", "annotation": "工程标注"}[kind]
+    label = {"sheet": "图纸", "view": "工程视图", "annotation": "工程标注", "note": "文本标注"}[
+        kind
+    ]
     verb = {"create": "创建", "update": "修改", "delete": "删除"}[action]
     return CommandSpec(
         id=f"drawing.{kind}.{action}",
@@ -152,7 +165,7 @@ def _spec(kind: str, action: str, version: int = 1) -> CommandSpec:
 
 DRAWING_COMMAND_SPECS = tuple(
     _spec(kind, action)
-    for kind in ("sheet", "view", "annotation")
+    for kind in ("sheet", "view", "annotation", "note")
     for action in ("create", "update", "delete")
 ) + tuple(
     _spec(kind, action, 2) for kind in ("view", "annotation") for action in ("create", "update")

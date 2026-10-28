@@ -13,7 +13,7 @@ from uuid import UUID
 from mycad.core.drawing_references import DrawingGeometryReference
 
 if TYPE_CHECKING:
-    from mycad.core.drawing import DrawingAnnotation, DrawingState
+    from mycad.core.drawing import DrawingAnnotation, DrawingNote, DrawingState
     from mycad.core.drawing_annotations import SceneAnnotation
 
 Point2 = tuple[float, float]
@@ -247,6 +247,7 @@ class DrawingScene:
     issues: tuple[str, ...] = ()
     source_fingerprint: str = ""
     resolved_annotations: tuple[SceneAnnotation, ...] = ()
+    notes: tuple[DrawingNote, ...] = ()
 
 
 def build_drawing_scene(
@@ -314,6 +315,7 @@ def build_drawing_scene(
         tuple(issues),
         next(iter(fingerprints), ""),
         tuple(resolved),
+        tuple(note for note in state.notes if note.sheet_id == sheet_id),
     )
 
 

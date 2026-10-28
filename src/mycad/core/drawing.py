@@ -149,16 +149,36 @@ class DrawingAnnotation:
 
 
 @dataclass(frozen=True, slots=True)
+class DrawingNote:
+    note_id: UUID
+    sheet_id: UUID
+    text: str
+    position_mm: Point2
+    height_mm: float = 3.5
+    layer: str = "TEXT"
+
+    def __post_init__(self) -> None:
+        _identity(self.note_id)
+        _identity(self.sheet_id)
+        finite((*self.position_mm, self.height_mm), "note position/height")
+        if not self.text.strip() or not 0 < self.height_mm <= 100:
+            raise ValueError("文字不能为空，纸面字高须在 0–100 mm 之间")
+        if not self.layer.strip() or any(ord(c) < 32 and c not in "\n\t" for c in self.text):
+            raise ValueError("invalid note layer/text controls")
+
+
+@dataclass(frozen=True, slots=True)
 class DrawingState:
     sheets: tuple[DrawingSheet, ...] = ()
     views: tuple[DrawingView, ...] = ()
     annotations: tuple[DrawingAnnotation, ...] = ()
+    notes: tuple[DrawingNote, ...] = ()
 
     def __post_init__(self) -> None:
         sheet_ids = [sheet.sheet_id for sheet in self.sheets]
         view_ids = [view.view_id for view in self.views]
         annotation_ids = [annotation.annotation_id for annotation in self.annotations]
-        ids = [*sheet_ids, *view_ids, *annotation_ids]
+        ids = [*sheet_ids, *view_ids, *annotation_ids, *(note.note_id for note in self.notes)]
         if len(set(ids)) != len(ids):
             raise ValueError("drawing object identities must be unique")
         for view in self.views:
@@ -175,6 +195,8 @@ class DrawingState:
                     raise ValueError("projected views require the same solid source")
                 if current.sheet_id != view.sheet_id:
                     raise ValueError("parent must belong to same sheet")
+        if any(note.sheet_id not in sheet_ids for note in self.notes):
+            raise ValueError("note references a missing sheet")
         if any(a.view_id not in view_ids for a in self.annotations):
             raise ValueError("annotation references a missing view")
 
@@ -223,9 +245,9 @@ class DrawingState:
 @dataclass(frozen=True, slots=True)
 class DrawingOperation:
     action: Literal["create", "update", "delete"]
-    kind: Literal["sheet", "view", "annotation"]
+    kind: Literal["sheet", "view", "annotation", "note"]
     object_id: UUID
-    value: DrawingSheet | DrawingView | DrawingAnnotation | None = None
+    value: DrawingSheet | DrawingView | DrawingAnnotation | DrawingNote | None = None
 
 
 def apply_drawing_operation(state: DrawingState, operation: DrawingOperation) -> DrawingState:
@@ -233,15 +255,19 @@ def apply_drawing_operation(state: DrawingState, operation: DrawingOperation) ->
     _identity(operation.object_id)
     if operation.action not in ("create", "update", "delete"):
         raise ValueError("invalid drawing operation")
-    if operation.kind not in ("sheet", "view", "annotation"):
+    if operation.kind not in ("sheet", "view", "annotation", "note"):
         raise ValueError("invalid drawing object kind")
     sheets = {s.sheet_id: s for s in state.sheets}
     views = {v.view_id: v for v in state.views}
     annotations = {a.annotation_id: a for a in state.annotations}
+    notes = {note.note_id: note for note in state.notes}
     identity = operation.object_id
     value = operation.value
     existing = (
-        identity in {"sheet": sheets, "view": views, "annotation": annotations}[operation.kind]
+        identity
+        in {"sheet": sheets, "view": views, "annotation": annotations, "note": notes}[
+            operation.kind
+        ]
     )
     if operation.action == "create" and existing:
         raise ValueError("drawing object already exists")
@@ -268,6 +294,13 @@ def apply_drawing_operation(state: DrawingState, operation: DrawingOperation) ->
             for key, a in annotations.items()
             if a.view_id in views and not (operation.kind == "annotation" and key == identity)
         }
+        notes = {
+            key: note
+            for key, note in notes.items()
+            if note.sheet_id in sheets and not (operation.kind == "note" and key == identity)
+        }
+    elif operation.kind == "note" and isinstance(value, DrawingNote) and value.note_id == identity:
+        notes[identity] = value
     elif (
         operation.kind == "sheet" and isinstance(value, DrawingSheet) and value.sheet_id == identity
     ):
@@ -287,4 +320,5 @@ def apply_drawing_operation(state: DrawingState, operation: DrawingOperation) ->
         sheets=tuple(sheets.values()),
         views=tuple(views.values()),
         annotations=tuple(annotations.values()),
+        notes=tuple(notes.values()),
     )

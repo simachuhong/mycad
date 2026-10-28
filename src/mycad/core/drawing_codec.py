@@ -11,6 +11,7 @@ from uuid import UUID
 from mycad.core.drawing import (
     AnnotationKind,
     DrawingAnnotation,
+    DrawingNote,
     DrawingOperation,
     DrawingSheet,
     DrawingState,
@@ -94,8 +95,17 @@ LiteralReferenceRole = Literal["geometry", "start", "end", "center"]
 
 
 def drawing_object_mapping(
-    value: DrawingSheet | DrawingView | DrawingAnnotation,
+    value: DrawingSheet | DrawingView | DrawingAnnotation | DrawingNote,
 ) -> dict[str, object]:
+    if isinstance(value, DrawingNote):
+        return {
+            "note_id": str(value.note_id),
+            "sheet_id": str(value.sheet_id),
+            "text": value.text,
+            "position_mm": list(value.position_mm),
+            "height_mm": value.height_mm,
+            "layer": value.layer,
+        }
     if isinstance(value, DrawingSheet):
         return {
             "sheet_id": str(value.sheet_id),
@@ -224,7 +234,19 @@ def _annotation(obj: Mapping[str, object]) -> DrawingAnnotation:
     )
 
 
+def _note(obj: Mapping[str, object]) -> DrawingNote:
+    return DrawingNote(
+        _uuid(obj.get("note_id")),
+        _uuid(obj.get("sheet_id")),
+        _text(obj.get("text")),
+        cast("Point2", _point(obj.get("position_mm"), 2)),
+        _number(obj.get("height_mm", 3.5)),
+        _text(obj.get("layer", "TEXT")),
+    )
+
+
 _FIELDS: dict[str, frozenset[str]] = {
+    "note": frozenset({"note_id", "sheet_id", "text", "position_mm", "height_mm", "layer"}),
     "sheet": frozenset(
         {"sheet_id", "name", "size_mm", "margin_mm", "projection_angle", "default_scale", "title"}
     ),
@@ -296,22 +318,27 @@ def apply_drawing_command(
             state, DrawingOperation("delete", cast("ObjectKind", kind), identity)
         )
     if action == "update":
-        previous: DrawingSheet | DrawingView | DrawingAnnotation
+        previous: DrawingSheet | DrawingView | DrawingAnnotation | DrawingNote
         if kind == "sheet":
             previous = state.sheet(identity)
         elif kind == "view":
             previous = state.view(identity)
+        elif kind == "note":
+            note = next((note for note in state.notes if note.note_id == identity), None)
+            if note is None:
+                raise ValueError("missing note")
+            previous = note
         else:
             matches = [a for a in state.annotations if a.annotation_id == identity]
             if not matches:
                 raise ValueError("missing annotation")
             previous = matches[0]
         obj = {**drawing_object_mapping(previous), **obj}
-    value = _sheet(obj) if kind == "sheet" else _view(obj) if kind == "view" else _annotation(obj)
+    value = {"sheet": _sheet, "view": _view, "annotation": _annotation, "note": _note}[kind](obj)
     return apply_drawing_operation(
         state, DrawingOperation(cast("Action", action), cast("ObjectKind", kind), identity, value)
     )
 
 
-ObjectKind = Literal["sheet", "view", "annotation"]
+ObjectKind = Literal["sheet", "view", "annotation", "note"]
 Action = Literal["create", "update", "delete"]

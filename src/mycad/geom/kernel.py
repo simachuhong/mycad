@@ -357,7 +357,9 @@ class BuildKernel:
 
         checked = checked_mapping(params, command_id)
 
-        if command_id.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation.")):
+        if command_id.startswith(
+            ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")
+        ):
             try:
                 candidate_drawing = apply_drawing_command(self._drawing_state, command_id, checked)
                 if command_id in ("drawing.view.create", "drawing.view.update"):
@@ -724,7 +726,9 @@ class BuildKernel:
         operations = [
             (cid, p)
             for cid, p in self._operations
-            if not cid.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation."))
+            if not cid.startswith(
+                ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")
+            )
         ]
         return hashlib.sha256(
             json.dumps(operations, sort_keys=True, separators=(",", ":")).encode()

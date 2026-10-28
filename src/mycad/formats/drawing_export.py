@@ -204,7 +204,7 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
             },
         )
     for name in sorted(
-        {a.layer for a in scene.resolved_annotations}
+        ({a.layer for a in scene.resolved_annotations} | {note.layer for note in scene.notes})
         - {"VISIBLE", "HIDDEN", "TANGENT", "CENTER", "DIM", "FRAME", "0"}
     ):
         document.layers.new(name, dxfattribs={"color": 7, "true_color": 0x26313C, "lineweight": 18})

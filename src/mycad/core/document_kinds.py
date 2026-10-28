@@ -29,6 +29,9 @@ DRAWING2D_COMMAND_IDS = frozenset(
         "drawing.annotation.create",
         "drawing.annotation.update",
         "drawing.annotation.delete",
+        "drawing.note.create",
+        "drawing.note.update",
+        "drawing.note.delete",
     }
 )
 
