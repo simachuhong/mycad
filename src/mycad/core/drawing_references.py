@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 if TYPE_CHECKING:
     from mycad.core.drawing_projection import ProjectedCurve, ProjectionResult
@@ -22,13 +23,25 @@ class DrawingGeometryReference:
     still resolve uniquely after replay. A curve index is deliberately absent.
     """
 
-    kind: Literal["cylindrical_face", "planar_face", "edge"]
+    kind: Literal["cylindrical_face", "planar_face", "edge", "sketch_entity"]
     parameters: tuple[tuple[str, float], ...] = ()
     owner_command: str | None = None
     role: Literal["geometry", "start", "end", "center"] = "geometry"
 
+    sketch_id: str | None = None
+    entity_id: str | None = None
+
     def __post_init__(self) -> None:
-        if self.kind not in ("cylindrical_face", "planar_face", "edge"):
+        if self.kind == "sketch_entity":
+            for identity in (self.sketch_id, self.entity_id):
+                if identity is None:
+                    raise ValueError("sketch reference requires sketch and entity identities")
+                parsed = UUID(identity)
+                if identity not in (str(parsed), parsed.hex):
+                    raise ValueError("expected canonical sketch reference UUID")
+        elif self.sketch_id is not None or self.entity_id is not None:
+            raise ValueError("solid reference cannot carry sketch identities")
+        if self.kind not in ("cylindrical_face", "planar_face", "edge", "sketch_entity"):
             raise ValueError("unsupported drawing reference kind")
         if self.role not in ("geometry", "start", "end", "center"):
             raise ValueError("unsupported drawing reference role")

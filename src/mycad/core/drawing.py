@@ -40,11 +40,20 @@ def projected_offset(angle: str, direction: str, distance: float) -> Point2:
 
 @dataclass(frozen=True, slots=True)
 class SourceBinding:
-    kind: Literal["current_part"] = "current_part"
+    kind: Literal["current_part", "sketch"] = "current_part"
+    sketch_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.kind != "current_part":
-            raise ValueError("only current part sources are supported")
+        if self.kind not in ("current_part", "sketch"):
+            raise ValueError("unsupported drawing source")
+        if self.kind == "sketch":
+            if self.sketch_id is None:
+                raise ValueError("sketch source requires a sketch identity")
+            parsed = UUID(self.sketch_id)
+            if self.sketch_id not in (str(parsed), parsed.hex):
+                raise ValueError("expected canonical sketch UUID")
+        elif self.sketch_id is not None:
+            raise ValueError("part source cannot carry a sketch identity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +106,10 @@ class DrawingView:
         _identity(self.sheet_id)
         if self.parent_id is not None:
             _identity(self.parent_id)
+        if self.source.kind == "sketch" and (
+            self.parent_id is not None or self.direction != "front"
+        ):
+            raise ValueError("sketch views are independent planar views")
         finite((*self.anchor_mm, *self.offset_mm), "view position")
         finite((self.scale,), "view scale")
         if self.scale <= 0:
@@ -158,6 +171,8 @@ class DrawingState:
                     raise ValueError("view parent cycle")
                 visited.add(current.parent_id)
                 current = self.view(current.parent_id)
+                if current.source != view.source or current.source.kind == "sketch":
+                    raise ValueError("projected views require the same solid source")
                 if current.sheet_id != view.sheet_id:
                     raise ValueError("parent must belong to same sheet")
         if any(a.view_id not in view_ids for a in self.annotations):

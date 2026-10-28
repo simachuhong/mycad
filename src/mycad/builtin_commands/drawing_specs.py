@@ -78,8 +78,47 @@ _ANNOTATION = {
 }
 
 
-def _spec(kind: str, action: str) -> CommandSpec:
-    fields = {"sheet": _SHEET, "view": _VIEW, "annotation": _ANNOTATION}[kind]
+_VIEW_V2 = {
+    **_VIEW,
+    "source": {
+        "oneOf": [
+            _VIEW["source"],
+            _object({"kind": {"const": "sketch"}, "sketch_id": _TEXT}, ["kind", "sketch_id"]),
+        ]
+    },
+}
+_REFERENCE_V2 = {
+    "oneOf": [
+        _REFERENCE,
+        _object(
+            {
+                "kind": {"const": "sketch_entity"},
+                "parameters": {"type": "object"},
+                "role": {"enum": ["geometry", "start", "end", "center"]},
+                "sketch_id": _TEXT,
+                "entity_id": _TEXT,
+            },
+            ["kind", "sketch_id", "entity_id"],
+        ),
+    ]
+}
+_ANNOTATION_V2 = {
+    **_ANNOTATION,
+    "references": {
+        "type": "array",
+        "items": _REFERENCE_V2,
+        "minItems": 1,
+        "maxItems": 2,
+    },
+}
+
+
+def _spec(kind: str, action: str, version: int = 1) -> CommandSpec:
+    fields = {
+        "sheet": _SHEET,
+        "view": _VIEW if version == 1 else _VIEW_V2,
+        "annotation": _ANNOTATION if version == 1 else _ANNOTATION_V2,
+    }[kind]
     identity = f"{kind}_id"
     required = [identity]
     if action == "create":
@@ -102,7 +141,7 @@ def _spec(kind: str, action: str) -> CommandSpec:
     verb = {"create": "创建", "update": "修改", "delete": "删除"}[action]
     return CommandSpec(
         id=f"drawing.{kind}.{action}",
-        version=1,
+        version=version,
         summary_en=f"{action.title()} drawing {kind}",
         label_zh=f"{verb}{label}",
         params_schema=schema,
@@ -115,4 +154,6 @@ DRAWING_COMMAND_SPECS = tuple(
     _spec(kind, action)
     for kind in ("sheet", "view", "annotation")
     for action in ("create", "update", "delete")
+) + tuple(
+    _spec(kind, action, 2) for kind in ("view", "annotation") for action in ("create", "update")
 )

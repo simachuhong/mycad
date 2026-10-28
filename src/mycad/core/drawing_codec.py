@@ -74,7 +74,7 @@ def _point(value: object, count: int) -> tuple[float, ...]:
 
 def _reference(value: object) -> DrawingGeometryReference:
     obj = _record(value)
-    if set(obj) - {"kind", "parameters", "owner_command", "role"}:
+    if set(obj) - {"kind", "parameters", "owner_command", "role", "sketch_id", "entity_id"}:
         raise ValueError("unknown drawing reference field")
     owner = obj.get("owner_command")
     return DrawingGeometryReference(
@@ -82,12 +82,14 @@ def _reference(value: object) -> DrawingGeometryReference:
         tuple((key, _number(number)) for key, number in _record(obj.get("parameters", {})).items()),
         None if owner is None else _text(owner),
         cast("LiteralReferenceRole", _text(obj.get("role", "geometry"))),
+        _text(obj["sketch_id"]) if "sketch_id" in obj else None,
+        _text(obj["entity_id"]) if "entity_id" in obj else None,
     )
 
 
 # Explicit aliases keep JSON casts narrow; dataclasses validate actual enum values.
 
-LiteralReferenceKind = Literal["cylindrical_face", "planar_face", "edge"]
+LiteralReferenceKind = Literal["cylindrical_face", "planar_face", "edge", "sketch_entity"]
 LiteralReferenceRole = Literal["geometry", "start", "end", "center"]
 
 
@@ -108,7 +110,10 @@ def drawing_object_mapping(
         return {
             "view_id": str(value.view_id),
             "sheet_id": str(value.sheet_id),
-            "source": {"kind": value.source.kind},
+            "source": {
+                "kind": value.source.kind,
+                **({"sketch_id": value.source.sketch_id} if value.source.sketch_id else {}),
+            },
             "basis": {
                 "right": list(value.basis.right),
                 "up": list(value.basis.up),
@@ -135,6 +140,11 @@ def drawing_object_mapping(
                 "parameters": dict(ref.parameters),
                 **({"owner_command": ref.owner_command} if ref.owner_command is not None else {}),
                 "role": ref.role,
+                **(
+                    {"sketch_id": ref.sketch_id, "entity_id": ref.entity_id}
+                    if ref.sketch_id
+                    else {}
+                ),
             }
             for ref in value.references
         ],
@@ -166,8 +176,8 @@ def _sheet(obj: Mapping[str, object]) -> DrawingSheet:
 
 def _view(obj: Mapping[str, object]) -> DrawingView:
     source = _record(obj.get("source", {"kind": "current_part"}))
-    if set(source) != {"kind"} or source["kind"] != "current_part":
-        raise ValueError("only current_part source is supported")
+    if set(source) - {"kind", "sketch_id"}:
+        raise ValueError("unknown source field")
     basis = _record(obj.get("basis", {"right": [1, 0, 0], "up": [0, 0, 1], "normal": [0, -1, 0]}))
     if set(basis) != {"right", "up", "normal"}:
         raise ValueError("basis requires right/up/normal only")
@@ -175,7 +185,10 @@ def _view(obj: Mapping[str, object]) -> DrawingView:
     return DrawingView(
         _uuid(obj.get("view_id")),
         _uuid(obj.get("sheet_id")),
-        SourceBinding(),
+        SourceBinding(
+            cast('Literal["current_part", "sketch"]', _text(source.get("kind"))),
+            _text(source["sketch_id"]) if "sketch_id" in source else None,
+        ),
         ViewBasis(
             cast("Point3", _point(basis["right"], 3)),
             cast("Point3", _point(basis["up"], 3)),

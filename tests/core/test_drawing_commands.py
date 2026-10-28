@@ -41,12 +41,14 @@ def test_group_creation_is_atomic_and_replayable() -> None:
     assert services.kernel.drawing_state.effective_anchor(child) == (0, -50)
 
 
-def test_drawing2d_rejects_engineering_commands() -> None:
+def test_drawing2d_allows_paper_but_rejects_solid_views() -> None:
     services = build_app(discoverers=[])
     loaded = new_document(services, document_type="drawing2d")
+    sheet = str(uuid4())
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": sheet}, "test")
     with pytest.raises(MycadError):
-        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())}, "test")
-    assert not loaded.document.commands
+        loaded.bus.execute("drawing.view.create", {"view_id": str(uuid4()), "sheet_id": sheet})
+    assert len(loaded.document.commands) == 1
 
 
 def test_unknown_properties_and_invalid_identity_rejected() -> None:

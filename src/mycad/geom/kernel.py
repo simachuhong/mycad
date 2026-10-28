@@ -358,12 +358,15 @@ class BuildKernel:
         checked = checked_mapping(params, command_id)
 
         if command_id.startswith(("drawing.sheet.", "drawing.view.", "drawing.annotation.")):
-            if command_id == "drawing.view.create" and (
-                self._part is None or not self._part.solids()
-            ):
-                raise ValidationError("生成工程视图需要有效实体", command_id=command_id)
             try:
                 candidate_drawing = apply_drawing_command(self._drawing_state, command_id, checked)
+                if command_id in ("drawing.view.create", "drawing.view.update"):
+                    for view in candidate_drawing.views:
+                        if view.source.kind == "current_part":
+                            if self._part is None or not self._part.solids():
+                                raise ValueError("生成工程视图需要有效实体")
+                        elif view.source.sketch_id not in self._sketches:
+                            raise ValueError("草图来源不存在，请先完成草图")
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc), command_id=command_id) from exc
             self._drawing_state = candidate_drawing

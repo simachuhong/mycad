@@ -15,7 +15,21 @@ NATIVE_ARCHIVE_SUFFIXES = (".my2d", ".my3d", ".mc.json")
 # Commands permitted to change a standalone drawing. Keep this explicit so a
 # plugin command cannot smuggle solid-modeling behavior into a drawing file.
 DRAWING2D_COMMAND_IDS = frozenset(
-    {"drawing.layers.set", "sketch.create", "sketch.constraint.add", "sketch.constraint.update"}
+    {
+        "drawing.layers.set",
+        "sketch.create",
+        "sketch.constraint.add",
+        "sketch.constraint.update",
+        "drawing.sheet.create",
+        "drawing.sheet.update",
+        "drawing.sheet.delete",
+        "drawing.view.create",
+        "drawing.view.update",
+        "drawing.view.delete",
+        "drawing.annotation.create",
+        "drawing.annotation.update",
+        "drawing.annotation.delete",
+    }
 )
 
 __all__ = ["DRAWING2D_COMMAND_IDS", "NATIVE_ARCHIVE_SUFFIXES", "DocumentType"]
