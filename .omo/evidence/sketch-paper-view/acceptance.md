@@ -15,3 +15,5 @@
 验证记录见 `regression.log`、`types.log`。ruff check / format 对全部改动 Python 文件通过，零类型抑制。测试与演示使用独立进程及临时配置，没有重启用户运行中的 MyCAD。
 
 本轮差异回归 **306 passed in 89.78s**；覆盖命令注册、档案、图纸、二维转换、工程图 UI、混合来源更新、三维投影/引用/工作进程、图层、DXF/PDF 与分层检查。严格类型检查 **0 errors, 0 warnings, 0 notes**。
+
+独立审查通过，无待修复/延期问题；详见 `review.md`。实施取舍完整记录于 `execution-ledger.md`。当前本地分支保留，未推送或合并。

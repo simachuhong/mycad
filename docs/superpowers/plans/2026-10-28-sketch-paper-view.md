@@ -48,4 +48,4 @@
 - [x] 添加并运行失败集成测试：源长度修改→纸上参考尺寸更新→保存重开→DXF/PDF，1:2时长度60的纸上线长30。
 - [x] 修复集成缺口，同步操作说明与旧范围断言；记录正常/窄窗口截图。
 - [x] 运行涉及core/commands/archive/UI/export及layering的scoped回归与lint/format/type；结果PASS。
-- [ ] 提交；按executing-plans完成一次全范围独立审查，必要修复后复核并保存验收记录。
+- [x] 提交；按executing-plans完成一次全范围独立审查，必要修复后复核并保存验收记录。
