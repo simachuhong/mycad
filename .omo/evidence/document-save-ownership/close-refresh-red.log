@@ -1,0 +1,45 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_close_after_save_waits_for_background_refresh_without_prompting_again __
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7cdd61fdcb90>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-234/test_close_after_save_waits_fo0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cdd61fbe2a0>
+
+    def test_close_after_save_waits_for_background_refresh_without_prompting_again(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        window = window_with_session(qtbot)
+        window.show()
+        session, unit, saver = window.document_session, window.execution_unit, window.document_saver
+        assert session is not None and session.active is not None and unit is not None and saver is not None
+        session.active.path = tmp_path / "model.my3d"
+        session.active.loaded.document.set_metadata("notes", "keep")
+        prompts: list[int] = []
+
+        def choose(_self: MainWindow, entries: tuple[SessionDocument, ...]) -> dict[str, str]:
+            prompts.append(1)
+            return {e.loaded.document.document_id: "save" for e in entries}
+
+        monkeypatch.setattr(MainWindow, "_ask_session_close_dialog", choose)
+        release = Event()
+        report = saver.report
+
+        def report_and_refresh(results: tuple[SaveResult, ...]) -> None:
+            report(results)
+            unit.submit(lambda: release.wait(5), operation="viewport-refresh", session_id=unit.session_id)
+
+        saver.report = report_and_refresh
+        window.close()
+        qtbot.waitUntil(lambda: unit.is_busy)
+        qtbot.wait(20)
+        release.set()
+>       qtbot.waitUntil(lambda: not window.isVisible())
+E       pytestqt.exceptions.TimeoutError: waitUntil timed out in 5000 milliseconds
+
+tests/ui/test_document_save_session.py:435: TimeoutError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_document_save_session.py::test_close_after_save_waits_for_background_refresh_without_prompting_again
+1 failed, 12 deselected in 20.21s

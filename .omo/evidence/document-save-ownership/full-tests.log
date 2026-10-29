@@ -1,0 +1,383 @@
+........................................................................ [  3%]
+................FF............F.........F............................... [  6%]
+.FFF.................................................................... [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+..........................................FF............................ [ 22%]
+........................................................................ [ 26%]
+........................................................................ [ 29%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+............................F........................................... [ 45%]
+........................................................................ [ 48%]
+........................................................................ [ 52%]
+........................................................................ [ 55%]
+........................................................................ [ 58%]
+........................................................................ [ 62%]
+.........................................................F.............. [ 65%]
+........................................................................ [ 68%]
+................................FF.F...F................................ [ 71%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 81%]
+...................................FF................................... [ 84%]
+........................................................................ [ 88%]
+........................................................................ [ 91%]
+........................................................................ [ 94%]
+........................................................................ [ 97%]
+..............................................                           [100%]
+=================================== FAILURES ===================================
+_________ test_registry_holds_the_appendix_a1_ids_and_released_p2_ids __________
+
+    def test_registry_holds_the_appendix_a1_ids_and_released_p2_ids() -> None:
+        registry = _builtin_registry()
+>       assert _registered_ids(registry) == sorted(EXPECTED_IDS)
+E       AssertionError: assert ['drawing.ann....delete', ...] == ['drawing.ann....delete', ...]
+E
+E         At index 4 diff: 'drawing.note.create' != 'drawing.sheet.create'
+E         Left contains 6 more items, first extra item: 'reference.attach'
+E         Use -v to get more diff
+
+tests/builtin_commands/test_specs.py:754: AssertionError
+____________________ test_builtin_ids_follow_catalog_order _____________________
+
+    def test_builtin_ids_follow_catalog_order() -> None:
+>       assert BUILTIN_COMMAND_IDS == EXPECTED_IDS
+E       AssertionError: assert ('feature.box...pattern', ...) == ('feature.box...pattern', ...)
+E
+E         Left contains 6 more items, first extra item: 'drawing.note.create'
+E         Use -v to get more diff
+
+tests/builtin_commands/test_specs.py:758: AssertionError
+______________________ test_affected_objects_static_shape ______________________
+
+    def test_affected_objects_static_shape() -> None:
+>       assert len(AFFECTED_OBJECTS) == 22
+E       AssertionError: assert 28 == 22
+E        +  where 28 = len({'feature.box': 'box_body', 'feature.cylinder': 'cylinder_body', 'feature.extrude': 'extruded_body', 'feature.revolve': 'revolved_body', ...})
+
+tests/builtin_commands/test_specs.py:866: AssertionError
+____________________ test_cli_aliases_are_pairwise_distinct ____________________
+
+    def test_cli_aliases_are_pairwise_distinct() -> None:
+        latest: dict[str, CommandSpec] = {}
+        for spec in BUILTIN_COMMAND_SPECS:
+            if spec.id not in latest or spec.version > latest[spec.id].version:
+                latest[spec.id] = spec
+        aliases = [alias for spec in latest.values() for alias in spec.cli.verb_aliases]
+>       assert len(aliases) == 23
+E       AssertionError: assert 26 == 23
+E        +  where 26 = len(['box', 'cylinder', 'extrude', 'revolve', 'hole', 'hole-pattern', ...])
+
+tests/builtin_commands/test_specs.py:961: AssertionError
+__________________ test_commands_lists_all_released_builtins ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c11578610a0>
+capsys = <_pytest.capture.CaptureFixture object at 0x7c1157863020>
+
+    def test_commands_lists_all_released_builtins(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+>       assert len(lines) == 26
+E       AssertionError: assert 32 == 26
+E        +  where 32 = len(['\tdrawing.layers.set\tSet shared drawing layers and dimension defaults', '\treference.attach\tAttach a document refe...g solid features', '\tsketch.constraint.update\tRevise an existing sketch dimension and regenerate its consumers', ...])
+
+tests/cli/test_commands_plugins.py:69: AssertionError
+___________________________ test_commands_json_shape ___________________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c11578624e0>
+capsys = <_pytest.capture.CaptureFixture object at 0x7c11578605f0>
+
+    def test_commands_json_shape(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+        assert main(["commands", "--json"]) == 0
+        raw = capsys.readouterr().out
+        payload = json.loads(raw)
+        assert set(payload) == {"commands"}
+        commands = payload["commands"]
+>       assert len(commands) == 26
+E       AssertionError: assert 32 == 26
+E        +  where 32 = len([{'verb': '', 'id': 'drawing.layers.set', 'summary_en': 'Set shared drawing layers and dimension defaults', 'label_zh'....update', 'summary_en': 'Revise an existing sketch dimension and regenerate its consumers', 'label_zh': '修改草图尺寸'}, ...])
+
+tests/cli/test_commands_plugins.py:92: AssertionError
+___________________ test_commands_lists_plugin_contributions ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c1157862690>
+capsys = <_pytest.capture.CaptureFixture object at 0x7c1157863950>
+
+    def test_commands_lists_plugin_contributions(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A plugin-contributed command is visible to ``commands``, not just to the REPL.
+
+        Driven through ``main`` on purpose: the subcommand must build the app
+        with real discovery enabled, which a direct ``CliSession`` call cannot
+        prove.
+        """
+
+        def _one_plugin(self: EntryPointDiscoverer) -> tuple[DiscoveredPlugin, ...]:
+            return (_demo_plugin(),)
+
+        monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
+        assert main(["commands"]) == 0
+        rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+>       assert len(rows) == 27
+E       AssertionError: assert 33 == 27
+E        +  where 33 = len([['', 'drawing.layers.set', 'Set shared drawing layers and dimension defaults'], ['', 'reference.attach', 'Attach a do... features'], ['', 'sketch.constraint.update', 'Revise an existing sketch dimension and regenerate its consumers'], ...])
+
+tests/cli/test_commands_plugins.py:122: AssertionError
+____________ test_affected_object_literal_locked_to_sixteen_values _____________
+
+    def test_affected_object_literal_locked_to_sixteen_values() -> None:
+        args = typing.get_args(AffectedObject)
+        assert isinstance(args, tuple)
+>       assert args == EXPECTED_AFFECTED
+E       AssertionError: assert ('box_body', ...pattern', ...) == ('box_body', ...pattern', ...)
+E
+E         Left contains one more item: 'document_reference'
+E         Use -v to get more diff
+
+tests/core/test_document_dtos.py:90: AssertionError
+___________________ test_affected_objects_table_locked_to_b2 ___________________
+
+    def test_affected_objects_table_locked_to_b2() -> None:
+>       assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
+E       AssertionError: assert {'feature.box...ed_body', ...} == {'feature.box...ed_body', ...}
+E
+E         Omitting 22 identical items, use -vv to show
+E         Left contains 6 more items:
+E         {'drawing.note.create': 'drawing_note',
+E          'drawing.note.delete': 'drawing_note',
+E          'drawing.note.update': 'drawing_note',
+E          'reference.attach': 'document_reference',...
+E
+E         ...Full output truncated (3 lines hidden), use '-vv' to show
+
+tests/core/test_document_dtos.py:95: AssertionError
+___________________ test_complete_projection_payload_timing ____________________
+
+    def test_complete_projection_payload_timing() -> None:
+        from collections.abc import Callable
+        from io import BytesIO
+        from time import perf_counter
+        from typing import cast
+
+        import build123d
+        from build123d import Compound, Cylinder, Pos
+
+        from mycad.core.drawing_projection import DrawingSourceSnapshot, ViewBasis
+
+        shape = Compound(
+            children=[Pos(x * 5, y * 5, 0) * Cylinder(2, 8) for x in range(30) for y in range(10)]
+        )
+        stream = BytesIO()
+        write_brep = cast("Callable[[Compound, BytesIO], bool]", build123d.export_brep)
+        assert write_brep(shape, stream)
+        snapshot = DrawingSourceSnapshot("900-edge-fixture", stream.getvalue())
+        requests = tuple(
+            DrawingProjectionRequest(
+                uuid4(), snapshot.source_fingerprint, 1, ViewBasis.from_normal_up(n, u)
+            )
+            for n, u in [((0, 0, 1), (0, 1, 0)), ((0, -1, 0), (0, 0, 1)), ((-1, 0, 0), (0, 0, 1))]
+        )
+        worker = DrawingProjectionWorker()
+        try:
+            worker.prewarm().result(timeout=45)
+            start = perf_counter()
+            results = worker.submit(snapshot, requests).result(timeout=120)
+            elapsed = perf_counter() - start
+            print(
+                f"complete 900-edge DTO pipeline: {elapsed:.3f}s, curves={sum(len(r.curves) for r in results)}"
+            )
+            assert len(results) == 3
+            assert all(not r.diagnostics for r in results)
+>           assert elapsed <= 3, "Full DTO pipeline exceeds the warm three-view target"
+E           AssertionError: Full DTO pipeline exceeds the warm three-view target
+E           assert 3.42774579799152 <= 3
+
+tests/geom/test_drawing_worker.py:71: AssertionError
+----------------------------- Captured stdout call -----------------------------
+complete 900-edge DTO pipeline: 3.428s, curves=500
+_______________ test_adr_dir_holds_exactly_twelve_numbered_files _______________
+
+    def test_adr_dir_holds_exactly_twelve_numbered_files() -> None:
+        files = _adr_files()
+        assert files, "docs/adr/ does not exist or holds no files"
+        numbers: list[str] = []
+        for path in files:
+            match = FILENAME_RE.match(path.name)
+>           assert match is not None, f"unexpected file name in docs/adr/: {path.name}"
+E           AssertionError: unexpected file name in docs/adr/: ADR-013-document-ownership-and-save-session.md
+E           assert None is not None
+
+tests/test_adr_docs.py:129: AssertionError
+__________________ test_all_released_builtins_appear_grouped ___________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x155cec90) at 0x7c11442cf380>
+
+    def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
+>       assert palette.tree.topLevelItemCount() == 4
+E       assert 5 == 4
+E        +  where 5 = <built-in method topLevelItemCount of PySide6.QtWidgets.QTreeWidget object at 0x7c1144133d80>()
+E        +    where <built-in method topLevelItemCount of PySide6.QtWidgets.QTreeWidget object at 0x7c1144133d80> = <PySide6.QtWidgets.QTreeWidget(0x161a0020) at 0x7c1144133d80>.topLevelItemCount
+E        +      where <PySide6.QtWidgets.QTreeWidget(0x161a0020) at 0x7c1144133d80> = <mycad.ui.command_palette.CommandPalette(0x155cec90) at 0x7c11442cf380>.tree
+
+tests/ui/test_command_palette.py:97: AssertionError
+_________ test_independent_drawing_palette_only_shows_drawing_commands _________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x16d11b80) at 0x7c11441e84c0>
+
+    def test_independent_drawing_palette_only_shows_drawing_commands(
+        palette: CommandPalette,
+    ) -> None:
+        palette.set_document_type("drawing2d")
+>       assert set(_all_leaf_ids(palette)) == {
+            "drawing.layers.set",
+            "sketch.create",
+            "sketch.constraint.add",
+            "sketch.constraint.update",
+        }
+E       AssertionError: assert {'drawing.ann....delete', ...} == {'drawing.lay...ketch.create'}
+E
+E         Extra items in the left set:
+E         'reference.attach'
+E         'drawing.sheet.delete'
+E         'drawing.annotation.create'
+E         'drawing.sheet.update'
+E         'drawing.annotation.update'...
+E
+E         ...Full output truncated (11 lines hidden), use '-vv' to show
+
+tests/ui/test_command_palette.py:108: AssertionError
+_____________________ test_search_matches_id_and_zh_label ______________________
+
+palette = <mycad.ui.command_palette.CommandPalette(0x165ea2d0) at 0x7c11442c9c40>
+qapp = <PySide6.QtWidgets.QApplication(0x119ac830) at 0x7c11558bbc00>
+
+    def test_search_matches_id_and_zh_label(
+        palette: CommandPalette,
+        qapp: object,
+    ) -> None:
+        assert palette.apply_filter("hole") == 2
+        visible = [id_ for id_ in _all_leaf_ids(palette) if not _leaf_is_hidden(palette, id_)]
+        assert set(visible) == {"feature.hole", "feature.hole_pattern"}
+        # The zh query hits the same pair through label_zh (register.search
+        # excludes zh by design — the palette is the reason it must work).
+        assert palette.apply_filter("孔") == 2
+>       assert palette.apply_filter("") == len(RELEASED_BUILTIN_IDS)
+E       AssertionError: assert 32 == 26
+E        +  where 32 = apply_filter('')
+E        +    where apply_filter = <mycad.ui.command_palette.CommandPalette(0x165ea2d0) at 0x7c11442c9c40>.apply_filter
+E        +  and   26 = len(frozenset({'drawing.annotation.create', 'drawing.annotation.delete', 'drawing.annotation.update', 'drawing.layers.set', 'drawing.sheet.create', 'drawing.sheet.delete', ...}))
+
+tests/ui/test_command_palette.py:143: AssertionError
+__________________ test_plugin_command_appears_via_discovery ___________________
+
+qapp = <PySide6.QtWidgets.QApplication(0x119ac830) at 0x7c11558bbc00>
+
+    def test_plugin_command_appears_via_discovery(qapp: object) -> None:
+        services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
+        palette = CommandPalette(services.registry)
+        assert "demo.widget" in _all_leaf_ids(palette)
+>       assert _group_titles(palette) == {"demo", "图纸", "创建特征", "修改", "草图"}
+E       AssertionError: assert {'demo', 'ref...', '图纸', '草图'} == {'demo', '修改'...', '图纸', '草图'}
+E
+E         Extra items in the left set:
+E         'reference'
+E         Use -v to get more diff
+
+tests/ui/test_command_palette.py:245: AssertionError
+_______________ test_run_gui_wires_services_and_a_fresh_document _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c1155758b90>
+services = AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7c11558dd850>, kernel=<mycad.geom.kernel.Bui...<mycad.formats.registry.FormatProviderRegistry object at 0x7c11558df470>, plugins=PluginManager(discovered_plugins=()))
+spy_window = <class 'tests.ui.test_entry._SpyWindow'>, no_event_loop = None
+qtbot = <pytestqt.qtbot.QtBot object at 0x7c11558deed0>
+
+    def test_run_gui_wires_services_and_a_fresh_document(
+        monkeypatch: pytest.MonkeyPatch,
+        services: AppServices,
+        spy_window: type[_SpyWindow],
+        no_event_loop: None,
+        qtbot: QtBot,
+    ) -> None:
+        monkeypatch.setattr(entry, "build_app", lambda: services)
+
+>       assert entry.run_gui() == 0
+               ^^^^^^^^^^^^^^^
+
+tests/ui/test_entry.py:71:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def run_gui() -> int:
+        """Compose services, seed one fresh document, run the window's loop."""
+        qapp = QApplication.instance() or QApplication([])
+        services = build_app()
+        # Fresh document; kernel reset stays exclusive to mycad.app.new_document,
+        # and the window must come after it: the viewport takes the kernel port.
+        loaded = new_workspace_document(services, kind="part")
+>       window = MainWindow(services=services, document_session=DocumentSession())
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: _SpyWindow.__init__() got an unexpected keyword argument 'document_session'
+
+src/mycad/ui/entry.py:26: TypeError
+______________________ test_run_gui_builds_the_five_zones ______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7c1155449a30>
+services = AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7c11558dc830>, kernel=<mycad.geom.kernel.Bui...<mycad.formats.registry.FormatProviderRegistry object at 0x7c11558de510>, plugins=PluginManager(discovered_plugins=()))
+spy_window = <class 'tests.ui.test_entry._SpyWindow'>, no_event_loop = None
+qtbot = <pytestqt.qtbot.QtBot object at 0x7c11558de5d0>
+
+    def test_run_gui_builds_the_five_zones(
+        monkeypatch: pytest.MonkeyPatch,
+        services: AppServices,
+        spy_window: type[_SpyWindow],
+        no_event_loop: None,
+        qtbot: QtBot,
+    ) -> None:
+        monkeypatch.setattr(entry, "build_app", lambda: services)
+
+>       entry.run_gui()
+
+tests/ui/test_entry.py:92:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def run_gui() -> int:
+        """Compose services, seed one fresh document, run the window's loop."""
+        qapp = QApplication.instance() or QApplication([])
+        services = build_app()
+        # Fresh document; kernel reset stays exclusive to mycad.app.new_document,
+        # and the window must come after it: the viewport takes the kernel port.
+        loaded = new_workspace_document(services, kind="part")
+>       window = MainWindow(services=services, document_session=DocumentSession())
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: _SpyWindow.__init__() got an unexpected keyword argument 'document_session'
+
+src/mycad/ui/entry.py:26: TypeError
+=========================== short test summary info ============================
+FAILED tests/builtin_commands/test_specs.py::test_registry_holds_the_appendix_a1_ids_and_released_p2_ids
+FAILED tests/builtin_commands/test_specs.py::test_builtin_ids_follow_catalog_order
+FAILED tests/builtin_commands/test_specs.py::test_affected_objects_static_shape
+FAILED tests/builtin_commands/test_specs.py::test_cli_aliases_are_pairwise_distinct
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_all_released_builtins
+FAILED tests/cli/test_commands_plugins.py::test_commands_json_shape - Asserti...
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_plugin_contributions
+FAILED tests/core/test_document_dtos.py::test_affected_object_literal_locked_to_sixteen_values
+FAILED tests/core/test_document_dtos.py::test_affected_objects_table_locked_to_b2
+FAILED tests/geom/test_drawing_worker.py::test_complete_projection_payload_timing
+FAILED tests/test_adr_docs.py::test_adr_dir_holds_exactly_twelve_numbered_files
+FAILED tests/ui/test_command_palette.py::test_all_released_builtins_appear_grouped
+FAILED tests/ui/test_command_palette.py::test_independent_drawing_palette_only_shows_drawing_commands
+FAILED tests/ui/test_command_palette.py::test_search_matches_id_and_zh_label
+FAILED tests/ui/test_command_palette.py::test_plugin_command_appears_via_discovery
+FAILED tests/ui/test_entry.py::test_run_gui_wires_services_and_a_fresh_document
+FAILED tests/ui/test_entry.py::test_run_gui_builds_the_five_zones - TypeError...
+17 failed, 2189 passed in 1556.80s (0:25:56)

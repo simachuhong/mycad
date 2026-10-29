@@ -335,6 +335,14 @@ class CommandBus:
         from mycad.commands.validation import normalize_params, validate_params
 
         spec = self._registry.get(command_id, version)
+        if (
+            self._document.archive_version >= 4
+            and self._document.document_kind != "drawing"
+            and command_id.startswith(
+                ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")
+            )
+        ):
+            raise ValidationError("工程图对象只能写入独立工程图文档。")
         if self._document.document_type == "drawing2d" and spec.id not in DRAWING2D_COMMAND_IDS:
             raise ValidationError(f"command {spec.id!r} is not supported in a drawing2d document")
         handler = resolve_handler(
@@ -348,6 +356,13 @@ class CommandBus:
             )
         validated = validate_params(spec, dict(params), defs=self._registry.schema_defs)
         normalized = normalize_params(validated)
+        if command_id in ("reference.attach", "reference.update"):
+            from mycad.core.document_references import DocumentReference, validate_reference_tree
+
+            reference = DocumentReference.from_mapping(normalized)
+            validate_reference_tree(reference.archive, frozenset({self._document.file_id}))
+            if self._document.document_kind != "drawing" and reference.kind == "part":
+                raise ValidationError("only engineering drawings can reference a source part")
         if record:
             self._document.events.emit_immediate(
                 "pre_command",

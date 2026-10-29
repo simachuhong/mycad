@@ -3,29 +3,33 @@
 """Composition root (T7c): the single place that knows every concrete type.
 
 ``build_app`` assembles the whole object graph — registry with the eight
-built-in command specs, the shared geometry kernel, the format-provider
-registry and the plugin manager — and ``new_document`` builds per-document
-``Document``/``CommandBus`` pairs from those services. The kernel is a
-process-wide singleton reused across documents: the factory owns the
-``reset()`` call, so callers never rely on remembering it. Multi-document
-kernel sessions are a Phase 1 direction.
+built-in command specs, a geometry kernel, the format-provider registry and
+the plugin manager. Desktop document sessions fork services so each editable
+document owns its kernel; immutable registrations are shared.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
+from uuid import uuid4
 
 from mycad.builtin_commands import BUILTIN_COMMAND_SPECS, COMMAND_SCHEMA_DEFS
 from mycad.commands.registry import CommandRegistry
 from mycad.core.bus import CommandBus
 from mycad.core.document import Document, ExecutedCommand
-from mycad.core.document_kinds import DocumentType
+from mycad.core.document_kinds import DocumentKind, DocumentType, native_suffix
+from mycad.core.document_migration import migrate_archive
+from mycad.core.document_references import archive_fingerprint
+from mycad.core.exceptions import ValidationError
 from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
 from mycad.core.identity import BodyId, TopologyId
-from mycad.core.persistence import LoadedDocument
+from mycad.core.persistence import LoadedDocument, document_payload, load_document_payload
 from mycad.core.persistence import open_document as _open_document
+from mycad.core.sketch import new_sketch_identity
 from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
 from mycad.formats.providers import DXF_PROVIDER, STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
@@ -41,6 +45,11 @@ __all__ = [
     "build_app",
     "new_document",
     "open_app_document",
+    "fork_app_services",
+    "new_workspace_document",
+    "open_session_documents",
+    "open_session_bundle",
+    "reference_parameters",
     "archive_plugin_identities",
     "preview_command",
     "preview_command_with_sketches",
@@ -88,6 +97,7 @@ def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServi
         discovered += tuple(discoverer.discover())
     loaded = register_plugins(registry, formats, discovered)
     plugins = PluginManager(loaded)
+    _configure_reference_loader(kernel, registry, plugins)
     return AppServices(registry=registry, kernel=kernel, formats=formats, plugins=plugins)
 
 
@@ -173,6 +183,194 @@ def new_document(
     return LoadedDocument(document=document, bus=bus)
 
 
+def fork_app_services(services: AppServices) -> AppServices:
+    """Share immutable registrations while isolating all mutable geometry."""
+    kernel = BuildKernel()
+    _configure_reference_loader(kernel, services.registry, services.plugins)
+    return AppServices(services.registry, kernel, services.formats, services.plugins)
+
+
+def _configure_reference_loader(
+    kernel: BuildKernel,
+    registry: CommandRegistry,
+    plugins: PluginManager,
+) -> None:
+    def replay(archive: Mapping[str, object]) -> BuildKernel:
+        candidate = BuildKernel()
+        _configure_reference_loader(candidate, registry, plugins)
+        load_document_payload(
+            dict(archive),
+            registry=registry,
+            kernel=candidate,
+            handlers=_handler_map(registry, plugins),
+        )
+        return candidate
+
+    kernel.set_reference_loader(replay)
+
+
+def reference_parameters(
+    source: Document,
+    *,
+    object_id: str = "",
+    path: str = "",
+    reference_id: str | None = None,
+) -> dict[str, object]:
+    archive = document_payload(source)
+    return {
+        "reference_id": reference_id or uuid4().hex,
+        "file_id": source.file_id,
+        "kind": source.document_kind,
+        "path": path,
+        "object_id": object_id,
+        "fingerprint": archive_fingerprint(archive),
+        "archive": archive,
+    }
+
+
+def copy_app_document(
+    services: AppServices, source: Document
+) -> tuple[AppServices, LoadedDocument]:
+    """Prepare an identity-only replacement for the owning session entry.
+
+    No geometry changes: the old editable entry is replaced only after the
+    copy is written. It must not be added as a second entry sharing this kernel.
+    """
+    document = Document(
+        services.registry,
+        metadata=source.metadata_snapshot(),
+        commands=source.commands,
+        named_groups=source.named_groups,
+        archive_version=4,
+        document_type=source.document_type,
+        document_kind=source.document_kind,
+        file_id=uuid4().hex,
+        migration_origin=source.migration_origin,
+        reference_locations=source.reference_locations,
+    )
+    return services, LoadedDocument(
+        document, CommandBus(document, services.registry, services.kernel, handlers_for(services))
+    )
+
+
+@dataclass(frozen=True)
+class SessionOpenResult:
+    documents: tuple[tuple[AppServices, LoadedDocument], ...]
+    migrated: bool
+    reference_messages: tuple[str, ...] = ()
+
+
+def reference_association_status(
+    services: AppServices,
+    loaded: LoadedDocument,
+    path: Path | None,
+    *,
+    locations: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Inspect locators without adopting external geometry or changing history."""
+    messages: list[str] = []
+    for reference in services.kernel.document_references:
+        locators = loaded.document.reference_locations if locations is None else locations
+        locator = locators.get(reference.file_id, reference.path)
+        source_path = Path(locator) if locator else None
+        if source_path is not None and not source_path.is_absolute():
+            source_path = path.parent / source_path if path is not None else None
+        label = Path(locator).name if locator else reference.file_id[:8]
+        if source_path is None:
+            state = "尚未定位"
+        else:
+            try:
+                root: object = json.loads(source_path.read_text(encoding="utf-8"))
+                if not isinstance(root, dict):
+                    state = "源文件无效"
+                elif cast("dict[str, object]", root).get("file_id") != reference.file_id:
+                    state = "身份不匹配"
+                elif cast("dict[str, object]", root).get("document_kind") != reference.kind:
+                    state = "种类不匹配"
+                else:
+                    state = "关联有效"
+            except FileNotFoundError:
+                state = "来源文件缺失"
+            except (OSError, ValueError):
+                state = "来源无法读取"
+        messages.append(f"{label}：{state}；当前使用已保存的采用版本。")
+    return tuple(messages)
+
+
+def separate_internal_sketch(
+    services: AppServices, sketch_id: str
+) -> tuple[AppServices, LoadedDocument]:
+    """Copy a confirmed internal sketch to an independent editable document."""
+    linked_ids = {r.reference_id for r in services.kernel.document_references if r.kind == "sketch"}
+    if sketch_id in linked_ids:
+        raise ValidationError("请先解除来源关联，再分离为独立二维文档。")
+    sketch = next((s for s in services.kernel.sketches if s.sketch_id == sketch_id), None)
+    if sketch is None:
+        raise ValidationError("找不到已完成的内部草图。")
+    isolated = fork_app_services(services)
+    loaded = new_workspace_document(isolated, kind="sketch")
+    detached = replace(sketch, sketch_id=new_sketch_identity(), support_face=None)
+    loaded.bus.execute("sketch.create", detached.to_mapping(version=3), "local")
+    return isolated, loaded
+
+
+def open_session_bundle(services: AppServices, path: Path) -> SessionOpenResult:
+    if path.suffix.lower() == ".masm":
+        from mycad.core.exceptions import ValidationError
+
+        raise ValidationError(".masm 装配文档尚未实现。")
+    candidate_services = fork_app_services(services)
+    original = open_app_document(candidate_services, path)
+    if original.document.archive_version >= 4:
+        from mycad.core.document_kinds import native_suffix
+        from mycad.core.exceptions import ValidationError
+
+        if path.suffix.lower() in (".my2d", ".my3d") and path.suffix.lower() != native_suffix(
+            original.document.document_kind
+        ):
+            raise ValidationError("native suffix does not match document kind")
+        return SessionOpenResult(
+            ((candidate_services, original),),
+            migrated=False,
+            reference_messages=reference_association_status(candidate_services, original, path),
+        )
+    raw: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("archive must be an object")
+    provenance = document_payload(
+        new_workspace_document(fork_app_services(services), kind="part").document
+    )["provenance"]
+    candidates: list[tuple[AppServices, LoadedDocument]] = []
+    for payload in migrate_archive(cast("dict[str, object]", raw), provenance):
+        isolated = fork_app_services(services)
+        loaded = load_document_payload(
+            payload,
+            registry=services.registry,
+            kernel=isolated.kernel,
+            handlers=handlers_for(isolated),
+        )
+        candidates.append((isolated, loaded))
+    return SessionOpenResult(tuple(candidates), migrated=True)
+
+
+def open_session_documents(
+    services: AppServices, path: Path
+) -> tuple[tuple[AppServices, LoadedDocument], ...]:
+    return open_session_bundle(services, path).documents
+
+
+def new_workspace_document(services: AppServices, *, kind: DocumentKind) -> LoadedDocument:
+    document = Document(
+        services.registry,
+        archive_version=4,
+        document_kind=kind,
+        document_type="part" if kind == "part" else "drawing2d",
+    )
+    bus = CommandBus(document, services.registry, services.kernel, handlers_for(services))
+    services.kernel.reset()
+    return LoadedDocument(document, bus)
+
+
 def open_app_document(services: AppServices, path: Path) -> LoadedDocument:
     """Open an archive with isolated replay, then commit its geometry once.
 
@@ -183,14 +381,23 @@ def open_app_document(services: AppServices, path: Path) -> LoadedDocument:
     prepare the active bus and transfer the finished geometry into the stable
     service kernel.
     """
+    if path.suffix.lower() == ".masm":
+        raise ValidationError(".masm 装配文档尚未实现。")
     handlers = _handler_map(services.registry, services.plugins)
     candidate_kernel = BuildKernel()
+    _configure_reference_loader(candidate_kernel, services.registry, services.plugins)
     candidate = _open_document(
         path,
         registry=services.registry,
         kernel=candidate_kernel,
         handlers=handlers,
     )
+    if (
+        candidate.document.archive_version >= 4
+        and path.suffix.lower() in (".my2d", ".my3d")
+        and path.suffix.lower() != native_suffix(candidate.document.document_kind)
+    ):
+        raise ValidationError("native suffix does not match document kind")
     active_bus = CommandBus(candidate.document, services.registry, services.kernel, handlers)
     services.kernel.replace_state_from(candidate_kernel)
     return LoadedDocument(document=candidate.document, bus=active_bus)
@@ -252,6 +459,7 @@ def preview_command_with_sketches(
     document.
     """
     scratch_kernel = BuildKernel()
+    _configure_reference_loader(scratch_kernel, services.registry, PluginManager(()))
     scratch_document = Document(services.registry)
     builtin_handlers = {
         (spec.id, spec.version): BuiltinModelingHandler(spec.id, spec.version)

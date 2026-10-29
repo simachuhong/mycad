@@ -1,0 +1,36 @@
+F..............................                                          [100%]
+=================================== FAILURES ===================================
+_______________ test_run_gui_wires_services_and_a_fresh_document _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x707fd975f920>
+services = AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x707fd9504a70>, kernel=<mycad.geom.kernel.Bui...<mycad.formats.registry.FormatProviderRegistry object at 0x707fd9504ad0>, plugins=PluginManager(discovered_plugins=()))
+spy_window = <class 'tests.ui.test_entry._SpyWindow'>, no_event_loop = None
+qtbot = <pytestqt.qtbot.QtBot object at 0x707fd9504e00>
+
+    def test_run_gui_wires_services_and_a_fresh_document(
+        monkeypatch: pytest.MonkeyPatch,
+        services: AppServices,
+        spy_window: type[_SpyWindow],
+        no_event_loop: None,
+        qtbot: QtBot,
+    ) -> None:
+        monkeypatch.setattr(entry, "build_app", lambda: services)
+
+        assert entry.run_gui() == 0
+
+        assert len(spy_window.instances) == 1
+        window = spy_window.instances[0]
+        qtbot.addWidget(window)
+
+        assert window.received_services is services
+>       assert len(window.bound_documents) == 1
+E       assert 2 == 1
+E        +  where 2 = len([LoadedDocument(document=<mycad.core.document.Document object at 0x707fd9504da0>, bus=<mycad.core.bus.CommandBus objec...ent=<mycad.core.document.Document object at 0x707fd9504da0>, bus=<mycad.core.bus.CommandBus object at 0x707fd9504dd0>)])
+E        +    where [LoadedDocument(document=<mycad.core.document.Document object at 0x707fd9504da0>, bus=<mycad.core.bus.CommandBus objec...ent=<mycad.core.document.Document object at 0x707fd9504da0>, bus=<mycad.core.bus.CommandBus object at 0x707fd9504dd0>)] = <tests.ui.test_entry._SpyWindow(0x34b889c0) at 0x707fd94f8d40>.bound_documents
+
+tests/ui/test_entry.py:84: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_entry.py::test_run_gui_wires_services_and_a_fresh_document
+1 failed, 30 passed in 15.60s

@@ -246,7 +246,8 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
             dxfattribs={
                 "insert": text.position_mm,
                 "char_height": text.height_mm,
-                "attachment_point": 1,
+                "attachment_point": {"left": 1, "center": 2, "right": 3}[text.align],
+                "rotation": text.rotation_deg,
                 "style": "MyCAD",
                 "layer": text.layer,
             },

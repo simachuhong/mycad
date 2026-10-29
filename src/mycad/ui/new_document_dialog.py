@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mycad.core.document_kinds import DocumentType
+from mycad.core.document_kinds import DocumentKind, DocumentType
 from mycad.ui.cad_icons import set_button_icon
 
 
@@ -38,11 +38,19 @@ class NewDocumentDialog(QDialog):
         self.type_group.setExclusive(True)
         self.drawing_button = self._card("二维图", "sketch", "线、圆、图层与尺寸标注", 0)
         self.part_button = self._card("三维零件", "box", "草图、参数化特征与实体建模", 1)
+        self.engineering_button = self._card(
+            "工程图", "document", "独立图纸、视图、标注与来源关联", 3
+        )
         self.assembly_button = self._card(
             "装配体（规划中）", "group", "Assembly：未来用于零件装配", 2
         )
         self.assembly_button.setEnabled(False)
-        for button in (self.drawing_button, self.part_button, self.assembly_button):
+        for button in (
+            self.drawing_button,
+            self.engineering_button,
+            self.part_button,
+            self.assembly_button,
+        ):
             cards.addWidget(button)
         root.addLayout(cards)
         self.description = QLabel()
@@ -76,8 +84,18 @@ class NewDocumentDialog(QDialog):
         return button
 
     @property
+    def document_kind(self) -> DocumentKind:
+        return (
+            "sketch"
+            if self.type_group.checkedId() == 0
+            else "drawing"
+            if self.type_group.checkedId() == 3
+            else "part"
+        )
+
+    @property
     def document_type(self) -> DocumentType:
-        return "drawing2d" if self.type_group.checkedId() == 0 else "part"
+        return "part" if self.document_kind == "part" else "drawing2d"
 
     def _show_description(self, _identity: int = 0) -> None:
         self.description.setText(

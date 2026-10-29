@@ -39,6 +39,8 @@ def validate_archive_v3(data: object) -> None:
                 raise ValidationError(
                     f"archive/commands/{index}: drawing2d cannot contain command {command_id!r}"
                 )
+            if command_id.startswith("reference."):
+                raise ValidationError("archive/commands: document references require v4")
 
 
 __all__ = ["ARCHIVE_VERSION_V3", "validate_archive_v3"]

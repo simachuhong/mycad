@@ -39,6 +39,12 @@ RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
         "drawing.annotation.create",
         "drawing.annotation.update",
         "drawing.annotation.delete",
+        "drawing.note.create",
+        "drawing.note.update",
+        "drawing.note.delete",
+        "reference.attach",
+        "reference.update",
+        "reference.detach",
         "feature.box",
         "feature.cylinder",
         "feature.extrude",
@@ -94,8 +100,8 @@ def _group_titles(palette: CommandPalette) -> set[str]:
 
 
 def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
-    assert palette.tree.topLevelItemCount() == 4
-    assert _group_titles(palette) == {"图纸", "创建特征", "修改", "草图"}
+    assert palette.tree.topLevelItemCount() == 5
+    assert _group_titles(palette) == {"图纸", "创建特征", "修改", "草图", "来源关联"}
     ids = _all_leaf_ids(palette)
     assert len(ids) == len(RELEASED_BUILTIN_IDS)
     assert set(ids) == RELEASED_BUILTIN_IDS
@@ -106,10 +112,9 @@ def test_independent_drawing_palette_only_shows_drawing_commands(
 ) -> None:
     palette.set_document_type("drawing2d")
     assert set(_all_leaf_ids(palette)) == {
-        "drawing.layers.set",
-        "sketch.create",
-        "sketch.constraint.add",
-        "sketch.constraint.update",
+        command_id
+        for command_id in RELEASED_BUILTIN_IDS
+        if command_id.startswith(("drawing.", "sketch.", "reference."))
     }
     palette.set_document_type("part")
     assert set(_all_leaf_ids(palette)) == RELEASED_BUILTIN_IDS
@@ -242,7 +247,7 @@ def test_plugin_command_appears_via_discovery(qapp: object) -> None:
     services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
     palette = CommandPalette(services.registry)
     assert "demo.widget" in _all_leaf_ids(palette)
-    assert _group_titles(palette) == {"demo", "图纸", "创建特征", "修改", "草图"}
+    assert _group_titles(palette) == {"demo", "图纸", "创建特征", "修改", "草图", "来源关联"}
 
 
 def test_refresh_pickups_later_registration(

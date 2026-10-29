@@ -191,13 +191,16 @@ class PlanCards(QWidget):
         clear_candidate_preview: Callable[[], None] | None = None,
     ) -> None:
         """Route GUI batch execution through the shared serialized worker."""
+        if self._execution_unit is not execution_unit:
+            if self._execution_unit is not None:
+                self._execution_unit.busy_changed.disconnect(self.set_execution_busy)
+            execution_unit.busy_changed.connect(self.set_execution_busy)
         self._execution_unit = execution_unit
         self._session_id = session_id
         self._prepare_geometry = prepare_geometry
         self._preview_builder = preview_builder
         self._show_candidate_preview = show_candidate_preview
         self._clear_candidate_preview = clear_candidate_preview
-        execution_unit.busy_changed.connect(self.set_execution_busy)
 
     def set_execution_busy(self, busy: bool) -> None:
         """Disable plan actions while the single document worker is active."""

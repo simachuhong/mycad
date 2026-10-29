@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, DocumentType
+from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, DocumentKind, DocumentType
 from mycad.core.exceptions import UnknownCommandError
 
 
@@ -64,6 +64,8 @@ AffectedObject = Literal[
     "drawing_sheet",
     "drawing_view",
     "drawing_annotation",
+    "drawing_note",
+    "document_reference",
 ]
 
 # Appendix B.2 fixed mapping (command id -> affected_object), single source.
@@ -93,6 +95,9 @@ AFFECTED_OBJECTS: Mapping[str, str] = {
     "drawing.note.create": "drawing_note",
     "drawing.note.update": "drawing_note",
     "drawing.note.delete": "drawing_note",
+    "reference.attach": "document_reference",
+    "reference.update": "document_reference",
+    "reference.detach": "document_reference",
 }
 
 
@@ -155,6 +160,10 @@ class Document:
         named_groups: Mapping[str, NamedGroup] | None = None,
         archive_version: int = 1,
         document_type: DocumentType = "part",
+        document_kind: DocumentKind | None = None,
+        file_id: str | None = None,
+        migration_origin: Mapping[str, object] | None = None,
+        reference_locations: Mapping[str, str] | None = None,
     ) -> None:
         from mycad.core.exceptions import ValidationError
         from mycad.core.signals import SignalBus
@@ -176,6 +185,21 @@ class Document:
         if document_type_value == "drawing2d" and version_value < 3:
             raise ValidationError("drawing2d documents require archive_version 3 or later")
         self._document_type: DocumentType = document_type
+        kind = document_kind or ("part" if document_type == "part" else "sketch")
+        if kind not in ("part", "sketch", "drawing") or (kind == "part") != (
+            document_type == "part"
+        ):
+            raise ValidationError("document kind is inconsistent with document_type")
+        self._document_kind: DocumentKind = kind
+        self._file_id = file_id or uuid.uuid4().hex
+        self._migration_origin = (
+            deepcopy(dict(migration_origin)) if migration_origin is not None else None
+        )
+        self._reference_locations = dict(reference_locations or {})
+        try:
+            uuid.UUID(self._file_id)
+        except ValueError as exc:
+            raise ValidationError("file_id must be a UUID") from exc
         if metadata is None:
             self._metadata: dict[str, str] = dict(DEFAULT_METADATA)
         else:
@@ -204,6 +228,22 @@ class Document:
     def document_id(self) -> str:
         """Runtime identity for this in-memory document instance."""
         return self._document_id
+
+    @property
+    def file_id(self) -> str:
+        return self._file_id
+
+    @property
+    def document_kind(self) -> DocumentKind:
+        return self._document_kind
+
+    @property
+    def migration_origin(self) -> dict[str, object] | None:
+        return deepcopy(self._migration_origin)
+
+    @property
+    def reference_locations(self) -> dict[str, str]:
+        return dict(self._reference_locations)
 
     @property
     def revision(self) -> int:

@@ -79,6 +79,9 @@ class CliTab(QWidget):
     # Document binding (window lifecycle)
     # ------------------------------------------------------------------
 
+    def set_services(self, services: AppServices) -> None:
+        self._services = services
+
     def bind_document(self, loaded: LoadedDocument) -> None:
         """Track the GUI-owned document that seeds the next dispatch."""
         self.current = loaded

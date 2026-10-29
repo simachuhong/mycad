@@ -316,7 +316,7 @@ def test_open_version_99_archive_version_error_fields(tmp_path: Path) -> None:
             handlers=handlers,
         )
     assert excinfo.value.found == "99"
-    assert excinfo.value.supported == 3
+    assert excinfo.value.supported == 4
 
 
 @pytest.mark.parametrize(

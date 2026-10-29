@@ -35,6 +35,8 @@ EXPECTED_AFFECTED: tuple[str, ...] = (
     "drawing_sheet",
     "drawing_view",
     "drawing_annotation",
+    "drawing_note",
+    "document_reference",
 )
 
 EXPECTED_B2: dict[str, str] = {
@@ -60,6 +62,12 @@ EXPECTED_B2: dict[str, str] = {
     "drawing.annotation.create": "drawing_annotation",
     "drawing.annotation.update": "drawing_annotation",
     "drawing.annotation.delete": "drawing_annotation",
+    "drawing.note.create": "drawing_note",
+    "drawing.note.update": "drawing_note",
+    "drawing.note.delete": "drawing_note",
+    "reference.attach": "document_reference",
+    "reference.update": "document_reference",
+    "reference.detach": "document_reference",
 }
 
 
@@ -84,7 +92,7 @@ def _executed() -> ExecutedCommand:
     )
 
 
-def test_affected_object_literal_locked_to_sixteen_values() -> None:
+def test_affected_object_literal_locked_to_released_values() -> None:
     args = typing.get_args(AffectedObject)
     assert isinstance(args, tuple)
     assert args == EXPECTED_AFFECTED
@@ -93,7 +101,7 @@ def test_affected_object_literal_locked_to_sixteen_values() -> None:
 
 def test_affected_objects_table_locked_to_b2() -> None:
     assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
-    assert len(set(AFFECTED_OBJECTS.values())) == 16
+    assert len(set(AFFECTED_OBJECTS.values())) == 18
 
 
 def test_planned_command_unknown_id_raises_unknown_command_error() -> None:

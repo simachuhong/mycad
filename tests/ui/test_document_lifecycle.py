@@ -596,3 +596,176 @@ def test_save_without_document_is_noop(
     window.act_save.triggered.emit()
     assert _loaded_of(window) is None
     assert not Path("/tmp/never-mycad.mc.json").exists()
+
+
+@pytest.mark.parametrize("save_as", [False, True])
+def test_save_commits_active_planar_sketch_and_keeps_drawing(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    save_as: bool,
+) -> None:
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    draft.canvas.set_tool("圆")
+    draft.canvas.add_coordinate_point((0.0, 0.0))
+    draft.canvas.add_coordinate_point((5.0, 0.0))
+    target = tmp_path / "sketch.my2d"
+    _patch_save_path(monkeypatch, target)
+
+    (window.act_save_as if save_as else window.act_save).trigger()
+
+    qtbot.waitUntil(target.exists)
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert len(payload["commands"]) == 1
+    assert payload["commands"][0]["id"] == "sketch.create"
+    assert payload["commands"][0]["params"]["entities"][0]["radius_mm"] == 5.0
+    assert not _bound(window).document.is_dirty
+    assert window.active_workspace == "sketch"
+    assert window.active_sketch_dialog() is not draft
+    window.act_save.trigger()
+    assert len(_bound(window).document.commands) == 1
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_close_active_sketch_can_cancel_or_discard(
+    services: AppServices,
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+    pending: bool,
+) -> None:
+    from PySide6.QtGui import QCloseEvent
+
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    draft.canvas.set_tool("圆")
+    draft.canvas.add_coordinate_point((0.0, 0.0))
+    if not pending:
+        draft.canvas.add_coordinate_point((5.0, 0.0))
+    _patch_dialog(monkeypatch, "cancel")
+    cancel = QCloseEvent()
+    window.closeEvent(cancel)
+    assert not cancel.isAccepted()
+    assert window.active_sketch_dialog() is draft
+
+    _patch_dialog(monkeypatch, "discard")
+    discard = QCloseEvent()
+    window.closeEvent(discard)
+    assert discard.isAccepted()
+    assert _bound(window).document.commands == ()
+
+
+def test_close_active_sketch_saves_before_closing(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    window.show()
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    draft.canvas.set_tool("圆")
+    draft.canvas.add_coordinate_point((0.0, 0.0))
+    draft.canvas.add_coordinate_point((5.0, 0.0))
+    target = tmp_path / "close.my2d"
+    _patch_save_path(monkeypatch, target)
+    _patch_dialog(monkeypatch, "save")
+
+    window.close()
+
+    qtbot.waitUntil(lambda: not window.isVisible())
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert len(payload["commands"]) == 1
+    assert not _bound(window).document.is_dirty
+
+
+@pytest.mark.parametrize("failure", ["cancel_path", "incomplete", "commit", "write"])
+def test_failed_sketch_save_keeps_window_and_geometry(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    failure: str,
+) -> None:
+    from mycad.core.bus import CommandBus
+
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    window.show()
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    draft.canvas.set_tool("圆")
+    draft.canvas.add_coordinate_point((0.0, 0.0))
+    draft.canvas.add_coordinate_point((5.0, 0.0))
+    entities = tuple(draft.canvas.entities)
+    target = tmp_path / "failed.my2d"
+    _patch_save_path(monkeypatch, target)
+    _patch_dialog(monkeypatch, "save")
+    if failure == "cancel_path":
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", staticmethod(lambda *_a, **_k: ("", ""))
+        )
+    elif failure == "incomplete":
+        draft.canvas.add_coordinate_point((10.0, 0.0))
+    else:
+
+        def fail(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated failure")
+
+        if failure == "commit":
+            monkeypatch.setattr(CommandBus, "execute", fail)
+        else:
+            monkeypatch.setattr("mycad.ui.main_window.save_document", fail)
+
+    window.close()
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: not unit.is_busy)
+    assert window.isVisible()
+    assert not target.exists()
+    if failure == "write":
+        assert services.kernel.sketches[0].entities == entities
+        assert _bound(window).document.is_dirty
+    else:
+        assert window.active_sketch_dialog() is draft
+        assert tuple(draft.canvas.entities) == entities
+        assert _bound(window).document.commands == ()
+    _patch_dialog(monkeypatch, "discard")
+
+
+@pytest.mark.parametrize("operation", ["open", "new_drawing"])
+def test_save_active_sketch_resumes_document_switch(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    operation: str,
+) -> None:
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    target = tmp_path / "current.my2d"
+    _patch_save_path(monkeypatch, target)
+    window.act_save.trigger()
+    source = tmp_path / "empty.my2d"
+    source.write_bytes(target.read_bytes())
+    _patch_open_path(monkeypatch, source)
+    previous = _bound(window)
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    draft.canvas.set_tool("圆")
+    draft.canvas.add_coordinate_point((0.0, 0.0))
+    draft.canvas.add_coordinate_point((5.0, 0.0))
+    _patch_dialog(monkeypatch, "save")
+
+    (window.act_open if operation == "open" else window.act_new_drawing).trigger()
+
+    qtbot.waitUntil(lambda: _bound(window) is not previous)
+    assert _bound(window).document.commands == ()
+    assert len(json.loads(target.read_text(encoding="utf-8"))["commands"]) == 1

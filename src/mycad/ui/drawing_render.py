@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared paper-space vector primitives and physical typography."""
 
+import math
+
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
     QColor,
@@ -11,6 +13,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QTextCursor,
     QTextLayout,
 )
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsTextItem
@@ -103,9 +106,23 @@ def add_paper_text(graphics: QGraphicsScene, text: PaperText) -> QGraphicsTextIt
     factor = text.height_mm / metrics.capHeight()
     item.setScale(factor)
     item.setDefaultTextColor(paper_pen(text.layer).color())
+    alignment = {"left": 0.0, "center": 0.5, "right": 1.0}[text.align]
+    if text.align != "left":
+        item.setTextWidth(item.boundingRect().width())
+        cursor = QTextCursor(item.document())
+        cursor.select(QTextCursor.SelectionType.Document)
+        block_format = cursor.blockFormat()
+        block_format.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter if text.align == "center" else Qt.AlignmentFlag.AlignRight
+        )
+        cursor.mergeBlockFormat(block_format)
+    dx = -item.boundingRect().width() * factor * alignment
+    dy = -(metrics.ascent() - metrics.capHeight()) * factor
+    angle = math.radians(-text.rotation_deg)
+    item.setRotation(-text.rotation_deg)
     item.setPos(
-        text.position_mm[0],
-        -text.position_mm[1] - (metrics.ascent() - metrics.capHeight()) * factor,
+        text.position_mm[0] + dx * math.cos(angle) - dy * math.sin(angle),
+        -text.position_mm[1] + dx * math.sin(angle) + dy * math.cos(angle),
     )
     return item
 
@@ -116,11 +133,19 @@ def _paint_text(painter: QPainter, text: PaperText) -> None:
     factor = text.height_mm / metrics.capHeight()
     painter.save()
     painter.translate(text.position_mm[0], -text.position_mm[1])
+    painter.rotate(-text.rotation_deg)
     painter.scale(factor, factor)
     painter.setFont(font)
     painter.setPen(paper_pen(text.layer).color())
     for index, line in enumerate(text.text.splitlines()):
-        painter.drawText(QPointF(0, metrics.capHeight() + index * metrics.height()), line)
+        alignment = {"left": 0.0, "center": 0.5, "right": 1.0}[text.align]
+        painter.drawText(
+            QPointF(
+                -metrics.horizontalAdvance(line) * alignment,
+                metrics.capHeight() + index * metrics.height(),
+            ),
+            line,
+        )
     painter.restore()
 
 

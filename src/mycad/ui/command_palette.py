@@ -93,6 +93,7 @@ class CommandPalette(QWidget):
                         "feature": "创建特征",
                         "modify": "修改",
                         "sketch": "草图",
+                        "reference": "来源关联",
                     }.get(category, category),
                 )
             )

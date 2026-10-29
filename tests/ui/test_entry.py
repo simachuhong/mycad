@@ -19,6 +19,7 @@ from pytestqt.qtbot import QtBot
 from mycad.app import AppServices, build_app
 from mycad.core.persistence import LoadedDocument
 from mycad.ui import entry
+from mycad.ui.document_session import DocumentSession
 from mycad.ui.main_window import MainWindow
 
 
@@ -27,8 +28,13 @@ class _SpyWindow(MainWindow):
 
     instances: ClassVar[list[_SpyWindow]] = []
 
-    def __init__(self, *, services: AppServices | None = None) -> None:
-        super().__init__(services=services)
+    def __init__(
+        self,
+        *,
+        services: AppServices | None = None,
+        document_session: DocumentSession | None = None,
+    ) -> None:
+        super().__init__(services=services, document_session=document_session)
         self.received_services = services
         self.bound_documents: list[LoadedDocument] = []
         _SpyWindow.instances.append(self)
@@ -75,9 +81,16 @@ def test_run_gui_wires_services_and_a_fresh_document(
     qtbot.addWidget(window)
 
     assert window.received_services is services
-    assert len(window.bound_documents) == 1
+    # Initial binding registers the document, then the session binds its entry.
+    assert window.bound_documents
+    assert all(loaded is window.bound_documents[0] for loaded in window.bound_documents)
     assert window.loaded_document() is window.bound_documents[0]
     assert window.bound_documents[0].document.commands == ()
+    assert window.document_session is not None
+    assert len(window.document_session.documents) == 1
+    assert window.document_session.active is not None
+    assert window.document_session.active.loaded is window.loaded_document()
+    assert window.bound_documents[0].document.archive_version == 4
 
 
 def test_run_gui_builds_the_five_zones(

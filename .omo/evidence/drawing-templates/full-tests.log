@@ -1,0 +1,166 @@
+...............................F........................................ [  3%]
+................FF............F.........F............................... [  6%]
+.FFF.................................................................... [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+.................................FF..................................... [ 23%]
+........................................................................ [ 26%]
+........................................................................ [ 29%]
+........................................................................ [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 43%]
+..........F............................................................. [ 46%]
+........................................................................ [ 49%]
+........................................................................ [ 53%]
+........................................................................ [ 56%]
+........................................................................ [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+..............FF.F...................................................... [ 73%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+...............................FF....................................... [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 89%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+........................................................................ [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+___________ test_build_app_registers_p0_and_released_p2_builtin_ids ____________
+tests/app/test_composition.py:55: in test_build_app_registers_p0_and_released_p2_builtin_ids
+    assert sorted(_registered_ids(services)) == BUILTIN_IDS
+E   AssertionError: assert ['drawing.ann....delete', ...] == ['drawing.ann....delete', ...]
+E
+E     At index 4 diff: 'drawing.note.create' != 'drawing.sheet.create'
+E     Left contains 3 more items, first extra item: 'sketch.constraint.add'
+E     Use -v to get more diff
+_________ test_registry_holds_the_appendix_a1_ids_and_released_p2_ids __________
+tests/builtin_commands/test_specs.py:754: in test_registry_holds_the_appendix_a1_ids_and_released_p2_ids
+    assert _registered_ids(registry) == sorted(EXPECTED_IDS)
+E   AssertionError: assert ['drawing.ann....delete', ...] == ['drawing.ann....delete', ...]
+E
+E     At index 4 diff: 'drawing.note.create' != 'drawing.sheet.create'
+E     Left contains 3 more items, first extra item: 'sketch.constraint.add'
+E     Use -v to get more diff
+____________________ test_builtin_ids_follow_catalog_order _____________________
+tests/builtin_commands/test_specs.py:758: in test_builtin_ids_follow_catalog_order
+    assert BUILTIN_COMMAND_IDS == EXPECTED_IDS
+E   AssertionError: assert ('feature.box...pattern', ...) == ('feature.box...pattern', ...)
+E
+E     Left contains 3 more items, first extra item: 'drawing.note.create'
+E     Use -v to get more diff
+______________________ test_affected_objects_static_shape ______________________
+tests/builtin_commands/test_specs.py:866: in test_affected_objects_static_shape
+    assert len(AFFECTED_OBJECTS) == 22
+E   AssertionError: assert 25 == 22
+E    +  where 25 = len({'feature.box': 'box_body', 'feature.cylinder': 'cylinder_body', 'feature.extrude': 'extruded_body', 'feature.revolve': 'revolved_body', ...})
+____________________ test_cli_aliases_are_pairwise_distinct ____________________
+tests/builtin_commands/test_specs.py:961: in test_cli_aliases_are_pairwise_distinct
+    assert len(aliases) == 23
+E   AssertionError: assert 26 == 23
+E    +  where 26 = len(['box', 'cylinder', 'extrude', 'revolve', 'hole', 'hole-pattern', ...])
+__________________ test_commands_lists_all_released_builtins ___________________
+tests/cli/test_commands_plugins.py:69: in test_commands_lists_all_released_builtins
+    assert len(lines) == 26
+E   AssertionError: assert 29 == 26
+E    +  where 29 = len(['\tdrawing.layers.set\tSet shared drawing layers and dimension defaults', '\tsketch.constraint.add\tConstrain a sketc...elected solid body', 'body-transform\tmodify.body_transform\tMove, rotate, mirror, or copy a selected solid body', ...])
+___________________________ test_commands_json_shape ___________________________
+tests/cli/test_commands_plugins.py:92: in test_commands_json_shape
+    assert len(commands) == 26
+E   AssertionError: assert 29 == 26
+E    +  where 29 = len([{'verb': '', 'id': 'drawing.layers.set', 'summary_en': 'Set shared drawing layers and dimension defaults', 'label_zh'...'modify.body_transform', 'summary_en': 'Move, rotate, mirror, or copy a selected solid body', 'label_zh': '实体变换'}, ...])
+___________________ test_commands_lists_plugin_contributions ___________________
+tests/cli/test_commands_plugins.py:122: in test_commands_lists_plugin_contributions
+    assert len(rows) == 27
+E   AssertionError: assert 30 == 27
+E    +  where 30 = len([['', 'drawing.layers.set', 'Set shared drawing layers and dimension defaults'], ['', 'sketch.constraint.add', 'Constr... solid body'], ['body-transform', 'modify.body_transform', 'Move, rotate, mirror, or copy a selected solid body'], ...])
+____________ test_affected_object_literal_locked_to_sixteen_values _____________
+tests/core/test_document_dtos.py:91: in test_affected_object_literal_locked_to_sixteen_values
+    assert set(args) == set(AFFECTED_OBJECTS.values())
+E   AssertionError: assert {'body_pair',...er_body', ...} == {'body_pair',...er_body', ...}
+E
+E     Extra items in the right set:
+E     'drawing_note'
+E     Use -v to get more diff
+___________________ test_affected_objects_table_locked_to_b2 ___________________
+tests/core/test_document_dtos.py:95: in test_affected_objects_table_locked_to_b2
+    assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
+E   AssertionError: assert {'feature.box...ed_body', ...} == {'feature.box...ed_body', ...}
+E
+E     Omitting 22 identical items, use -vv to show
+E     Left contains 3 more items:
+E     {'drawing.note.create': 'drawing_note',
+E      'drawing.note.delete': 'drawing_note',
+E      'drawing.note.update': 'drawing_note'}
+E     Use -v to get more diff
+___________________ test_complete_projection_payload_timing ____________________
+tests/geom/test_drawing_worker.py:71: in test_complete_projection_payload_timing
+    assert elapsed <= 3, "Full DTO pipeline exceeds the warm three-view target"
+E   AssertionError: Full DTO pipeline exceeds the warm three-view target
+E   assert 4.388793505990179 <= 3
+----------------------------- Captured stdout call -----------------------------
+complete 900-edge DTO pipeline: 4.389s, curves=500
+__________________ test_all_released_builtins_appear_grouped ___________________
+tests/ui/test_command_palette.py:100: in test_all_released_builtins_appear_grouped
+    assert len(ids) == len(RELEASED_BUILTIN_IDS)
+E   AssertionError: assert 29 == 26
+E    +  where 29 = len(['drawing.annotation.create', 'drawing.annotation.delete', 'drawing.annotation.update', 'drawing.layers.set', 'drawing.note.create', 'drawing.note.delete', ...])
+E    +  and   26 = len(frozenset({'drawing.annotation.create', 'drawing.annotation.delete', 'drawing.annotation.update', 'drawing.layers.set', 'drawing.sheet.create', 'drawing.sheet.delete', ...}))
+_________ test_independent_drawing_palette_only_shows_drawing_commands _________
+tests/ui/test_command_palette.py:108: in test_independent_drawing_palette_only_shows_drawing_commands
+    assert set(_all_leaf_ids(palette)) == {
+E   AssertionError: assert {'drawing.ann....delete', ...} == {'drawing.lay...ketch.create'}
+E
+E     Extra items in the left set:
+E     'drawing.note.create'
+E     'drawing.note.delete'
+E     'drawing.annotation.update'
+E     'drawing.view.update'
+E     'drawing.sheet.create'...
+E
+E     ...Full output truncated (8 lines hidden), use '-vv' to show
+_____________________ test_search_matches_id_and_zh_label ______________________
+tests/ui/test_command_palette.py:143: in test_search_matches_id_and_zh_label
+    assert palette.apply_filter("") == len(RELEASED_BUILTIN_IDS)
+E   AssertionError: assert 29 == 26
+E    +  where 29 = apply_filter('')
+E    +    where apply_filter = <mycad.ui.command_palette.CommandPalette(0x4d568250) at 0x74096082c740>.apply_filter
+E    +  and   26 = len(frozenset({'drawing.annotation.create', 'drawing.annotation.delete', 'drawing.annotation.update', 'drawing.layers.set', 'drawing.sheet.create', 'drawing.sheet.delete', ...}))
+____________ test_multiline_template_alignment_matches_pdf[center] _____________
+tests/ui/test_drawing_templates.py:179: in test_multiline_template_alignment_matches_pdf
+    ???
+E   assert 86.39245363461949 == 100 ± 0.05
+E
+E     comparison failed
+E     Obtained: 86.39245363461949
+E     Expected: 100 ± 0.05
+_____________ test_multiline_template_alignment_matches_pdf[right] _____________
+tests/ui/test_drawing_templates.py:179: in test_multiline_template_alignment_matches_pdf
+    ???
+E   assert 72.78490726923897 == 100 ± 0.05
+E
+E     comparison failed
+E     Obtained: 72.78490726923897
+E     Expected: 100 ± 0.05
+=========================== short test summary info ============================
+FAILED tests/app/test_composition.py::test_build_app_registers_p0_and_released_p2_builtin_ids
+FAILED tests/builtin_commands/test_specs.py::test_registry_holds_the_appendix_a1_ids_and_released_p2_ids
+FAILED tests/builtin_commands/test_specs.py::test_builtin_ids_follow_catalog_order
+FAILED tests/builtin_commands/test_specs.py::test_affected_objects_static_shape
+FAILED tests/builtin_commands/test_specs.py::test_cli_aliases_are_pairwise_distinct
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_all_released_builtins
+FAILED tests/cli/test_commands_plugins.py::test_commands_json_shape - Asserti...
+FAILED tests/cli/test_commands_plugins.py::test_commands_lists_plugin_contributions
+FAILED tests/core/test_document_dtos.py::test_affected_object_literal_locked_to_sixteen_values
+FAILED tests/core/test_document_dtos.py::test_affected_objects_table_locked_to_b2
+FAILED tests/geom/test_drawing_worker.py::test_complete_projection_payload_timing
+FAILED tests/ui/test_command_palette.py::test_all_released_builtins_appear_grouped
+FAILED tests/ui/test_command_palette.py::test_independent_drawing_palette_only_shows_drawing_commands
+FAILED tests/ui/test_command_palette.py::test_search_matches_id_and_zh_label
+FAILED tests/ui/test_drawing_templates.py::test_multiline_template_alignment_matches_pdf[center]
+FAILED tests/ui/test_drawing_templates.py::test_multiline_template_alignment_matches_pdf[right]
+16 failed, 2147 passed in 1406.02s (0:23:26)

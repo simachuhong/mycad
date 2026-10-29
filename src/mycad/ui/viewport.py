@@ -66,6 +66,21 @@ from mycad.ui.theme import ThemeName, theme_tokens
 RenderMode = Literal["shaded", "shaded-edges", "engineering-wireframe", "mesh-diagnostic"]
 ViewOrientation = Literal["front", "back", "left", "right", "top", "bottom", "isometric"]
 ProjectionMode = Literal["orthographic", "perspective"]
+
+
+@dataclass(frozen=True)
+class ViewportViewState:
+    distance: float
+    elevation: float
+    azimuth: float
+    center: tuple[float, float, float]
+    orientation: ViewOrientation | None
+    projection: ProjectionMode
+    selection: SelectionState | None
+    selection_filter: SelectionKind
+    hidden_bodies: tuple[BodyId, ...]
+
+
 SelectionKind = Literal["body", "face", "edge", "vertex"]
 
 if TYPE_CHECKING:
@@ -575,6 +590,43 @@ class GLViewport(GLViewWidget):
     # ------------------------------------------------------------------
     # Document binding and refresh coalescing
     # ------------------------------------------------------------------
+
+    def set_viewport_port(self, port: ViewportPort) -> None:
+        self._port = port
+
+    def capture_view(self) -> ViewportViewState:
+        distance, center = self.camera_state()
+        return ViewportViewState(
+            distance,
+            float(self.opts["elevation"]),
+            float(self.opts["azimuth"]),
+            center,
+            self._orientation,
+            self._projection_mode,
+            self.selection(),
+            self._selection_filter,
+            self.hidden_body_ids(),
+        )
+
+    def restore_view(self, state: ViewportViewState) -> None:
+        self._orientation = state.orientation
+        self.set_projection_mode(state.projection)
+        self.setCameraPosition(
+            pos=QVector3D(*state.center),
+            distance=state.distance,
+            elevation=state.elevation,
+            azimuth=state.azimuth,
+        )
+        self.set_selection_filter(state.selection_filter)
+        for identity in state.hidden_bodies:
+            self.set_body_visible(identity, False)
+        snapshot = self._current_snapshot()
+        if (
+            snapshot is not None
+            and state.selection is not None
+            and state.selection.geometry_revision == snapshot.geometry_revision
+        ):
+            self._apply_selection_targets((state.selection,), toggle=False)
 
     def bind_document(self, loaded: LoadedDocument) -> None:
         """Subscribe the refresh union to ``loaded`` and render it once."""

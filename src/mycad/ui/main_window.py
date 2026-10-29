@@ -41,6 +41,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDockWidget,
     QFileDialog,
@@ -58,7 +59,12 @@ from PySide6.QtWidgets import (
 from mycad import app as mycad_app
 from mycad.commands.registry import CommandRegistry
 from mycad.core.bus import CommandBus
-from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, NATIVE_ARCHIVE_SUFFIXES, DocumentType
+from mycad.core.document_kinds import (
+    DRAWING2D_COMMAND_IDS,
+    NATIVE_ARCHIVE_SUFFIXES,
+    DocumentKind,
+    DocumentType,
+)
 from mycad.core.exceptions import InvalidHistoryError, MycadError, ValidationError
 from mycad.core.identity import BodyId
 from mycad.core.persistence import LoadedDocument, save_document
@@ -82,6 +88,8 @@ from mycad.ui.cad_icons import cad_icon, command_icon_name, refresh_button_icons
 from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.command_reference import CommandReferenceDialog
+from mycad.ui.document_save import DocumentSaveController, SaveResult
+from mycad.ui.document_session import DEFAULT_NAMES, DocumentSession, SessionDocument
 from mycad.ui.drawing_workbench import DrawingWorkbench
 from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
@@ -95,6 +103,7 @@ from mycad.ui.right_panel import RightPanel
 from mycad.ui.sketch_constraint_dialog import SketchConstraintDialog
 from mycad.ui.sketch_editor import SketchEditorDialog
 from mycad.ui.theme import ThemeName, apply_theme
+from mycad.ui.unsaved_documents_dialog import UnsavedDocumentsDialog
 from mycad.ui.viewport import (
     GLViewport,
     ProjectionMode,
@@ -196,7 +205,12 @@ class MainWindow(QMainWindow):
 
     _core_event_queued = Signal(int, str, object)
 
-    def __init__(self, *, services: AppServices | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        services: AppServices | None = None,
+        document_session: DocumentSession | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("MyCAD")
         self._compact_policy_ready = False
@@ -208,11 +222,21 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(640, 360)
 
         self._services = services
+        self.document_session = document_session
+        self._session_binding = False
+        self._workspace_transition = False
+        self._pending_document_activation: str | None = None
+        self.document_selector: QComboBox | None = None
+        self.document_saver: DocumentSaveController | None = None
+        self._session_close_approved = False
+        self._session_close_waiting = False
         self.execution_unit: SerializedExecutionUnit | None = None
         self._session_id = 0
         self._busy_action_states: dict[QAction, bool] = {}
         self._loaded: LoadedDocument | None = None
         self._sketch_dialog: SketchEditorDialog | None = None
+        self._after_sketch_commit: Callable[[], None] | None = None
+        self._after_sketch_failure: Callable[[], None] | None = None
         self.new_document_dialog: NewDocumentDialog | None = None
         self._sketch_dock_visibility: tuple[bool, bool] | None = None
         self._drafting_toolbar_state: QByteArray | None = None
@@ -478,7 +502,9 @@ class MainWindow(QMainWindow):
             self.viewport.history_preview_changed.connect(self._on_history_preview_changed)
         self.drawing_workbench = DrawingWorkbench(services, self.execution_unit)
         self.workspace_tabs.set_content("drawing", self.drawing_workbench)
-        self.drawing_workbench.message.connect(self._on_engineering_message)
+        self.drawing_workbench.message.connect(
+            partial(self._on_owned_engineering_message, self.drawing_workbench)
+        )
         self.drawing_workbench.sketch_requested.connect(
             lambda: self.workspace_tabs.activate("sketch")
         )
@@ -495,6 +521,31 @@ class MainWindow(QMainWindow):
             Qt.Orientation.Horizontal,
         )
         self.restore_window_state()
+        if self.document_session is not None:
+            self.document_saver = DocumentSaveController(
+                self.document_session,
+                prepare=self._prepare_session_document,
+                choose_path=self._choose_session_save_path,
+                changed=self._session_save_changed,
+                report=self._report_session_save,
+            )
+            self.document_selector = QComboBox()
+            self.document_selector.setMinimumContentsLength(24)
+            self.document_selector.setToolTip("当前编辑文档；修改标记与保存路径按文档独立记录。")
+            self.main_toolbar.addWidget(self.document_selector)
+            self.document_selector.currentIndexChanged.connect(self._on_document_choice)
+            document_menu = self.menuBar().addMenu("文档")
+            actions: tuple[tuple[str, Callable[[], object]], ...] = (
+                ("新建工程图", lambda: self.new_session_document("drawing")),
+                ("将当前二维图用于建模", self._use_current_sketch_for_model),
+                ("将内部草图分离为独立二维文档", self.separate_internal_sketch),
+                ("选择工程图来源", self._choose_engineering_source),
+                ("查看来源状态", self._show_reference_status),
+                ("更新来源引用", self._update_document_reference),
+                ("解除来源关联", self._detach_document_reference),
+            )
+            for label, callback in actions:
+                document_menu.addAction(label).triggered.connect(callback)
 
     # ------------------------------------------------------------------
     # Menus (UI draft §3)
@@ -519,6 +570,10 @@ class MainWindow(QMainWindow):
         self.act_open = self.menu_file.addAction("打开")
         self.act_save = self.menu_file.addAction("保存")
         self.act_save_as = self.menu_file.addAction("另存为")
+        self.act_save_all = self.menu_file.addAction("全部保存")
+        self.act_save_all.setEnabled(self.document_session is not None)
+        self.act_save_all.triggered.connect(self._on_save_all_documents)
+        self._set_action_shortcut(self.act_save_all, QKeySequence("Ctrl+Alt+S"))
         self.act_import = self.menu_file.addAction("导入")
         self.act_export = self.menu_file.addAction("导出（STEP/STL/DXF）")
         self.act_screenshot = self.menu_file.addAction("截图")
@@ -977,26 +1032,39 @@ class MainWindow(QMainWindow):
         dialog.document_layer_mode = True
         dialog.document_undo_requested.connect(self.request_undo)
         dialog.document_redo_requested.connect(self.request_redo)
-        dialog.layer_change_requested.connect(
-            partial(self._on_drawing_layer_update, dialog, self._session_id)
-        )
+
+        def layer_changed(payload: object) -> None:
+            self._on_drawing_layer_update(dialog, self._session_id, payload)
+
+        dialog.layer_change_requested.connect(layer_changed)
         dialog.set_document_layers(
             self._services.kernel.drawing_layers, self._services.kernel.dimension_layer
         )
         dialog.view_3d_requested.connect(self._show_3d_workspace)
-        dialog.dimensions.committed_requested.connect(
-            partial(self._on_canvas_dimension_commit, dialog, self._session_id)
-        )
-        dialog.dimensions.preview_requested.connect(
-            partial(self._on_canvas_dimension_preview, dialog, self._session_id)
-        )
+
+        def dimension_committed(sketch: Sketch, constraint: SketchConstraint) -> None:
+            self._on_canvas_dimension_commit(dialog, self._session_id, sketch, constraint)
+
+        def dimension_preview(
+            sketch: Sketch, constraint: SketchConstraint, generation: int
+        ) -> None:
+            self._on_canvas_dimension_preview(
+                dialog, self._session_id, sketch, constraint, generation
+            )
+
+        dialog.dimensions.committed_requested.connect(dimension_committed)
+        dialog.dimensions.preview_requested.connect(dimension_preview)
         dialog.restore_toolbar_layout(self._drafting_toolbar_state)
         dialog.set_toolbars_locked(self.act_lock_toolbar.isChecked())
         self._sketch_dialog = dialog
         dialog.plane_combo.currentTextChanged.connect(self._sync_camera_status)
         dialog.set_context_sketches(self._services.kernel.sketches)
-        session_id = self._session_id
-        dialog.finished.connect(partial(self._on_sketch_editor_finished, dialog, session_id))
+
+        def finished(result: int) -> None:
+            self._on_sketch_editor_finished(dialog, self._session_id, result)
+
+        dialog.finished.connect(finished)
+        dialog.canvas.changed.connect(self._refresh_document_choice)
         self._show_sketch_workbench(dialog)
         self.status_command.setText("二维绘图：主工作区内编辑；完成草图提交，取消草稿不写入。")
 
@@ -1008,7 +1076,25 @@ class MainWindow(QMainWindow):
         if self.active_workspace == "drawing":
             self.status_command.setText(text)
 
+    def _on_owned_engineering_message(self, bench: DrawingWorkbench, text: str) -> None:
+        if bench is self.drawing_workbench:
+            self._on_engineering_message(text)
+
     def _on_workspace_changed(self, previous: str, current: str) -> None:
+        if (
+            self.document_session is not None
+            and not self._session_binding
+            and not self._workspace_transition
+        ):
+            kind: DocumentKind = (
+                "part" if current == "model" else "drawing" if current == "drawing" else "sketch"
+            )
+            entry = self.document_session.latest(kind)
+            if entry is None:
+                entry = self.new_session_document(kind, placeholder=True)
+            else:
+                self.activate_session_document(entry.loaded.document.document_id)
+            return
         if previous == "model" and current != "model" and self._sketch_dock_visibility is None:
             self._modeling_toolbar_was_visible = not self.modeling_toolbar.isHidden()
             self._sketch_dock_visibility = (self.left_dock.isVisible(), self.right_dock.isVisible())
@@ -1026,7 +1112,7 @@ class MainWindow(QMainWindow):
         self._sync_workspace_actions()
         self.act_view_2d.setChecked(current == "sketch")
         self.act_view_3d.setChecked(current == "model")
-        if current == "sketch":
+        if current == "sketch" and not self._session_binding:
             self._on_sketch_start()
         elif current == "drawing":
             if self.bottom_tabs is not None and self.bottom_dock.isHidden():
@@ -1060,7 +1146,11 @@ class MainWindow(QMainWindow):
     def _show_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
         dialog.setWindowFlags(Qt.WindowType.Widget)
         self.workspace_tabs.set_content("sketch", dialog)
-        self.workspace_tabs.activate("sketch")
+        self._workspace_transition = True
+        try:
+            self.workspace_tabs.activate("sketch")
+        finally:
+            self._workspace_transition = False
         dialog.show()
         dialog.canvas.setFocus()
         if self.bottom_tabs is not None and self.bottom_dock.isHidden():
@@ -1068,13 +1158,20 @@ class MainWindow(QMainWindow):
             self.act_toggle_bottom_dock.setChecked(True)
         self.status_command.setText(dialog.status_label.text())
         self._sync_camera_status()
+        if self.document_session is not None and self.document_session.active is not None:
+            self.document_session.active.draft = dialog
+            self._refresh_document_choice()
 
     def _hide_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
         self._drafting_toolbar_state = dialog.toolbar_layout_state()
         if self.workspace_tabs.content("sketch") is dialog:
             self.workspace_tabs.set_content("sketch", None)
         if self.active_workspace == "sketch":
-            self.workspace_tabs.activate("model")
+            self._workspace_transition = True
+            try:
+                self.workspace_tabs.activate("model")
+            finally:
+                self._workspace_transition = False
         self._sync_camera_status()
 
     def _sync_drawing_layers(self) -> None:
@@ -1523,8 +1620,16 @@ class MainWindow(QMainWindow):
     def _on_sketch_editor_finished(
         self, dialog: SketchEditorDialog, session_id: int, result: int
     ) -> None:
+        if dialog is not self._sketch_dialog:
+            return
+        after_commit = self._after_sketch_commit
+        self._after_sketch_commit = None
+        after_failure = self._after_sketch_failure
+        self._after_sketch_failure = None
         if self._sketch_dialog is dialog:
             self._sketch_dialog = None
+        if self.document_session is not None and self.document_session.active is not None:
+            self.document_session.active.draft = None
         self._hide_sketch_workbench(dialog)
         sketch = dialog.result_sketch
         if result != QDialog.DialogCode.Accepted or sketch is None:
@@ -1554,6 +1659,8 @@ class MainWindow(QMainWindow):
                     dialog.status_label.setText(
                         f"草图提交失败：{result_value.error}。草稿已保留，可修正后重试或取消。"
                     )
+                if after_failure is not None:
+                    after_failure()
                 return
             if self.viewport is not None:
                 self.viewport.refresh()
@@ -1562,6 +1669,8 @@ class MainWindow(QMainWindow):
                 self._on_sketch_start()
                 if self._sketch_dialog is not None:
                     self._sketch_dialog.continue_workspace_from(dialog)
+            if after_commit is not None:
+                after_commit()
 
         if not unit.submit(
             submit_sketch,
@@ -1575,6 +1684,8 @@ class MainWindow(QMainWindow):
             self._show_sketch_workbench(dialog)
             dialog.status_label.setText("应用工作线程忙碌，草图尚未提交；请稍后重试。")
             self.status_command.setText(dialog.status_label.text())
+            if after_failure is not None:
+                after_failure()
 
     def _on_palette_command(self, command_id: str) -> None:
         if command_id == "drawing.layers.set":
@@ -3170,6 +3281,17 @@ class MainWindow(QMainWindow):
         ``functools.partial`` adapter that keeps the signal name, and this
         window holds the strong references until unbind.
         """
+        if (
+            self.document_session is not None
+            and not self._session_binding
+            and self._services is not None
+        ):
+            entry = self.document_session.find(loaded.document.document_id)
+            if entry is None:
+                entry = SessionDocument(self._services, loaded, placeholder=True)
+                self.document_session.add(entry)
+            self.activate_session_document(loaded.document.document_id)
+            return
         if self._sketch_dialog is not None:
             self._sketch_dialog.reject()
         if self._active_modeling_command is not None:
@@ -3214,6 +3336,158 @@ class MainWindow(QMainWindow):
             "sketch" if loaded.document.document_type == "drawing2d" else "model"
         )
 
+    def new_session_document(
+        self, kind: DocumentKind, *, placeholder: bool = False
+    ) -> SessionDocument:
+        session, services = self.document_session, self._services
+        if session is None or services is None:
+            raise RuntimeError("No document session")
+        services = mycad_app.fork_app_services(services)
+        entry = SessionDocument(
+            services, mycad_app.new_workspace_document(services, kind=kind), placeholder=placeholder
+        )
+        session.add(entry)
+        self.activate_session_document(entry.loaded.document.document_id)
+        return entry
+
+    def _on_document_choice(self, _index: int) -> None:
+        if self.document_selector is not None:
+            identity = self.document_selector.currentData()
+            if isinstance(identity, str):
+                self.activate_session_document(identity)
+
+    def _refresh_document_choice(self) -> None:
+        session, selector = self.document_session, self.document_selector
+        if session is None:
+            return
+        if selector is not None:
+            selector.blockSignals(True)
+            selector.clear()
+            for entry in session.documents:
+                selector.addItem(
+                    entry.label + (" *" if entry.needs_save else ""),
+                    entry.loaded.document.document_id,
+                )
+            if session.active is not None:
+                selector.setCurrentIndex(
+                    selector.findData(session.active.loaded.document.document_id)
+                )
+            selector.blockSignals(False)
+        entry = session.active
+        if entry is not None:
+            entry.draft = self._sketch_dialog
+            self._show_document_path(entry.path)
+            self.status_dirty.setText("已修改" if entry.needs_save else "未修改")
+            internal = (
+                "内部草图 — " if self.active_workspace == "sketch" and entry.kind == "part" else ""
+            )
+            self.setWindowTitle(
+                f"{internal}{entry.label}{' *' if entry.needs_save else ''} — MyCAD"
+            )
+            if selector is not None:
+                selector.setToolTip("\n".join(entry.reference_messages) or "当前编辑文档")
+
+    def activate_session_document(self, identity: str) -> None:
+        session = self.document_session
+        if session is None:
+            return
+        entry = session.find(identity)
+        if entry is None:
+            return
+        if self.execution_unit is not None and self.execution_unit.is_busy:
+            self._pending_document_activation = identity
+            self.status_command.setText("文档切换将在当前操作完成后进行。")
+            return
+        if entry is session.active and self._loaded is entry.loaded:
+            workspace: WorkspaceId = (
+                "model"
+                if entry.kind == "part"
+                else "drawing"
+                if entry.kind == "drawing"
+                else "sketch"
+            )
+            self._workspace_transition = True
+            try:
+                self.workspace_tabs.activate(workspace)
+            finally:
+                self._workspace_transition = False
+            if workspace == "sketch":
+                self._on_sketch_start()
+            self._refresh_document_choice()
+            return
+        previous = session.active
+        if previous is not None:
+            if previous.loaded is self._loaded:
+                previous.draft = self._sketch_dialog
+                previous.plan_draft = self.plan_draft
+            if self.viewport is not None:
+                previous.view_state = self.viewport.capture_view()
+        self._sketch_dialog = None
+        self.workspace_tabs.set_content("sketch", None)
+        session.activate(identity)
+        self._services = entry.services
+        self._document_path = entry.path
+        self._session_binding = True
+        try:
+            if entry.plan_draft is None:
+                entry.plan_draft = PlanDraftController(entry.services.registry)
+            self.plan_draft = entry.plan_draft
+            if self.right_panel is not None:
+                self.right_panel.bind_draft(self.plan_draft)
+            if self.plan_cards is not None:
+                self.plan_cards.bind_draft(self.plan_draft)
+            if entry.workbench is None:
+                if previous is None:
+                    entry.workbench = self.drawing_workbench
+                    entry.workbench.services = entry.services
+                else:
+                    bench = DrawingWorkbench(entry.services, self.execution_unit)
+                    bench.message.connect(partial(self._on_owned_engineering_message, bench))
+                    bench.sketch_requested.connect(lambda: self.workspace_tabs.activate("sketch"))
+                    bench.model_requested.connect(self._show_3d_workspace)
+                    bench.open_requested.connect(self._on_open_document)
+                    bench.new_requested.connect(self._on_new_document)
+                    self.destroyed.connect(lambda: bench.shutdown())
+                    entry.workbench = bench
+            self.drawing_workbench = entry.workbench
+            self.workspace_tabs.set_content("drawing", self.drawing_workbench)
+            if self.viewport is not None:
+                self.viewport.set_viewport_port(entry.services.kernel)
+            if self.cli_tab is not None:
+                self.cli_tab.set_services(entry.services)
+            if (
+                self.plan_cards is not None
+                and self.execution_unit is not None
+                and self.viewport is not None
+            ):
+                self.plan_cards.configure_execution(
+                    self.execution_unit,
+                    session_id=lambda: self._session_id,
+                    prepare_geometry=entry.services.kernel.viewport_data,
+                    preview_builder=partial(mycad_app.preview_command, entry.services),
+                    show_candidate_preview=self.viewport.show_candidate_preview,
+                    clear_candidate_preview=self.viewport.clear_candidate_preview,
+                )
+            self.bind_document(entry.loaded)
+            self._sketch_dialog = entry.draft
+            workspace = (
+                "model"
+                if entry.kind == "part"
+                else "drawing"
+                if entry.kind == "drawing"
+                else "sketch"
+            )
+            if entry.draft is not None:
+                self.workspace_tabs.set_content("sketch", entry.draft)
+            self.workspace_tabs.activate(workspace)
+            if workspace == "sketch":
+                self._on_sketch_start()
+            if self.viewport is not None and entry.view_state is not None:
+                self.viewport.restore_view(entry.view_state)
+        finally:
+            self._session_binding = False
+        self._refresh_document_choice()
+
     def _queue_core_event(
         self, session_id: int, name: SignalName, payload: Mapping[str, object]
     ) -> None:
@@ -3240,6 +3514,271 @@ class MainWindow(QMainWindow):
         if name in STRUCTURE_REFRESH_SIGNALS:
             self._on_structure_signal(name, payload)
             self.drawing_workbench.refresh()
+        self._refresh_document_choice()
+
+    def attach_session_source(self, source_id: str, *, object_id: str = "") -> None:
+        session, unit = self.document_session, self.execution_unit
+        if session is None or session.active is None or unit is None or unit.is_busy:
+            return
+        source, target = session.find(source_id), session.active
+        if source is None or source is target:
+            self._show_error("来源文档无效，文档不能引用自身。")
+            return
+        params = mycad_app.reference_parameters(
+            source.loaded.document,
+            object_id=object_id,
+            path=str(source.path) if source.path else "",
+        )
+        self._submit_reference_operation(target, "reference.attach", params)
+
+    def _submit_reference_operation(
+        self, entry: SessionDocument, command: str, params: Mapping[str, object]
+    ) -> None:
+        unit = self.execution_unit
+        if unit is None:
+            return
+
+        def finish(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self._show_error(result.error)
+                return
+            if command in ("reference.attach", "reference.update"):
+                file_id, locator = params.get("file_id"), params.get("path")
+                if isinstance(file_id, str) and isinstance(locator, str) and locator:
+                    entry.reference_locations[file_id] = locator
+                entry.reference_messages = ()
+            if self.document_session is not None and self.document_session.active is entry:
+                self.drawing_workbench.refresh()
+                self._sync_drawing_layers()
+                if self.viewport is not None:
+                    self.viewport.refresh()
+            self._refresh_document_choice()
+            self.status_command.setText("来源关联已写入当前文档；可撤销、保存和重放。")
+
+        unit.submit(
+            lambda: entry.loaded.bus.execute(command, params, "local"),
+            operation=command,
+            session_id=self._session_id,
+            on_complete=finish,
+        )
+
+    def separate_internal_sketch(self) -> None:
+        session, unit = self.document_session, self.execution_unit
+        if session is None or session.active is None or unit is None or unit.is_busy:
+            return
+        owner = session.active
+        if owner.kind != "part":
+            self.status_command.setText("先激活三维零件，再分离已完成的内部草图。")
+            return
+        linked = {
+            r.reference_id for r in owner.services.kernel.document_references if r.kind == "sketch"
+        }
+        sketches = [s for s in owner.services.kernel.sketches if s.sketch_id not in linked]
+        if not sketches:
+            self.status_command.setText("没有可分离的内部草图；关联草图需先解除来源关联。")
+            return
+        names = [s.sketch_id for s in sketches]
+        chosen, accepted = (
+            (names[0], True)
+            if len(names) == 1
+            else QInputDialog.getItem(self, "分离内部草图", "选择已完成的草图", names, 0, False)
+        )
+        if not accepted:
+            return
+
+        def finish(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self._show_error(result.error)
+                return
+            services, loaded = cast("tuple[AppServices, LoadedDocument]", result.value)
+            entry = SessionDocument(services, loaded)
+            session.add(entry)
+            self.activate_session_document(loaded.document.document_id)
+            self.status_command.setText("已分离为独立二维文档，请保存为 .my2d；原模型保持原草图。")
+
+        unit.submit(
+            lambda: mycad_app.separate_internal_sketch(owner.services, chosen),
+            operation="separate-internal-sketch",
+            session_id=self._session_id,
+            on_complete=finish,
+        )
+
+    def _show_reference_status(self) -> None:
+        session, unit = self.document_session, self.execution_unit
+        if session is None or session.active is None or unit is None or unit.is_busy:
+            return
+        entry = session.active
+
+        def finish(result: ExecutionResult) -> None:
+            if result.error is not None:
+                self._show_error(result.error)
+                return
+            entry.reference_messages = cast("tuple[str, ...]", result.value)
+            self._refresh_document_choice()
+            if session.active is entry:
+                self.status_command.setText(
+                    "\n".join(entry.reference_messages) or "当前文档没有来源关联。"
+                )
+
+        unit.submit(
+            lambda: mycad_app.reference_association_status(
+                entry.services, entry.loaded, entry.path, locations=entry.reference_locations
+            ),
+            operation="inspect-reference-status",
+            session_id=self._session_id,
+            on_complete=finish,
+        )
+
+    def _use_current_sketch_for_model(self) -> None:
+        session = self.document_session
+        if session is None or session.active is None or session.active.kind != "sketch":
+            self.status_command.setText("先激活独立平面草图文档，再使用“用于建模”。")
+            return
+        source = session.active
+
+        def prepared(success: bool) -> None:
+            if not success:
+                return
+            sketches = source.services.kernel.sketches
+            if not sketches:
+                self._show_error("来源文档中还没有已完成的草图。")
+                return
+            names = [f"草图 {i + 1} · {s.sketch_id[:8]}" for i, s in enumerate(sketches)]
+            chosen, accepted = (
+                (names[0], True)
+                if len(names) == 1
+                else QInputDialog.getItem(self, "用于建模", "选择来源草图", names, 0, False)
+            )
+            if not accepted:
+                return
+            self.new_session_document("part")
+            self.attach_session_source(
+                source.loaded.document.document_id,
+                object_id=sketches[names.index(chosen)].sketch_id,
+            )
+
+        self._prepare_session_document(source, prepared)
+
+    def _choose_engineering_source(self) -> None:
+        session = self.document_session
+        if session is None or session.active is None or session.active.kind != "drawing":
+            self.status_command.setText("先激活工程图文档，再选择来源。")
+            return
+        target = session.active
+        sources = [e for e in session.documents if e is not target and e.kind in ("part", "sketch")]
+        if not sources:
+            self._show_error("请先创建或打开来源零件或独立平面草图。")
+            return
+        names = [e.label + f" · {i + 1}" for i, e in enumerate(sources)]
+        chosen, accepted = QInputDialog.getItem(self, "工程图来源", "选择来源文档", names, 0, False)
+        if not accepted:
+            return
+        source = sources[names.index(chosen)]
+        object_id = ""
+        if source.kind == "sketch":
+            sketches = source.services.kernel.sketches
+            if not sketches:
+                self._show_error("来源二维文档中没有已完成的草图。")
+                return
+            sketch_names = [f"草图 {i + 1} · {s.sketch_id[:8]}" for i, s in enumerate(sketches)]
+            name, ok = (
+                (sketch_names[0], True)
+                if len(sketch_names) == 1
+                else QInputDialog.getItem(self, "草图来源", "选择草图", sketch_names, 0, False)
+            )
+            if not ok:
+                return
+            object_id = sketches[sketch_names.index(name)].sketch_id
+        self.attach_session_source(source.loaded.document.document_id, object_id=object_id)
+
+    def _choose_active_reference(self) -> tuple[SessionDocument, str] | None:
+        session = self.document_session
+        if session is None or session.active is None:
+            return None
+        entry = session.active
+        refs = entry.services.kernel.document_references
+        if not refs:
+            self._show_error("当前文档没有来源关联。")
+            return None
+        labels = [
+            f"{r.kind} · {Path(r.path).name if r.path else r.file_id[:8]} · {i + 1}"
+            for i, r in enumerate(refs)
+        ]
+        label, ok = (
+            (labels[0], True)
+            if len(labels) == 1
+            else QInputDialog.getItem(self, "来源关联", "选择关联", labels, 0, False)
+        )
+        return (entry, refs[labels.index(label)].reference_id) if ok else None
+
+    def _detach_document_reference(self) -> None:
+        chosen = self._choose_active_reference()
+        if chosen is not None:
+            entry, identity = chosen
+            self._submit_reference_operation(entry, "reference.detach", {"reference_id": identity})
+
+    def _update_document_reference(self) -> None:
+        chosen = self._choose_active_reference()
+        session = self.document_session
+        if chosen is None or session is None:
+            return
+        entry, identity = chosen
+        reference = next(
+            r for r in entry.services.kernel.document_references if r.reference_id == identity
+        )
+        source = next(
+            (e for e in session.documents if e.loaded.document.file_id == reference.file_id), None
+        )
+        if source is None:
+            location = entry.reference_locations.get(reference.file_id, reference.path)
+            default = (
+                (entry.path.parent / location)
+                if entry.path is not None and location
+                else Path(location)
+            )
+            selected, _filter = QFileDialog.getOpenFileName(
+                self, "定位来源文档", str(default), "MyCAD 来源 (*.my2d *.my3d)"
+            )
+            if not selected:
+                return
+            unit = self.execution_unit
+            if unit is None:
+                return
+
+            def read_source() -> dict[str, object]:
+                candidates = mycad_app.open_session_documents(entry.services, Path(selected))
+                _services, loaded = candidates[0]
+                if loaded.document.file_id != reference.file_id:
+                    raise ValidationError("来源文件身份不匹配；不能按文件名替换关联。")
+                return mycad_app.reference_parameters(
+                    loaded.document,
+                    object_id=reference.object_id,
+                    path=selected,
+                    reference_id=identity,
+                )
+
+            def finish_source(result: ExecutionResult) -> None:
+                if result.error is not None:
+                    self._show_error(result.error)
+                elif isinstance(result.value, dict):
+                    self._submit_reference_operation(
+                        entry, "reference.update", cast("dict[str, object]", result.value)
+                    )
+
+            unit.submit(
+                read_source,
+                operation="read-reference-source",
+                session_id=self._session_id,
+                on_complete=finish_source,
+            )
+            return
+        params = mycad_app.reference_parameters(
+            source.loaded.document,
+            object_id=reference.object_id,
+            path=str(source.path) if source.path else "",
+            reference_id=identity,
+        )
+        self._submit_reference_operation(entry, "reference.update", params)
 
     def _on_structure_pick(self, ordinal: int) -> None:
         """Load a clicked historical mesh on the serialized worker, then render it."""
@@ -3352,6 +3891,12 @@ class MainWindow(QMainWindow):
 
     def _guard_cli_command(self, line: str) -> str | None:
         command = line.strip()
+        if self.document_session is not None and command.split(maxsplit=1)[:1] in (
+            ["new"],
+            ["open"],
+            ["save"],
+        ):
+            return "多文档模式请使用文件菜单新建、打开或保存，以保留每份文档的路径与修改状态。"
         if (
             not command
             or command.startswith("#")
@@ -3460,6 +4005,12 @@ class MainWindow(QMainWindow):
         self.status_rebuild.setText("重建状态：就绪")
         if self._sketch_dialog is not None and self._services is not None:
             self._sync_drawing_layers()
+        if self._pending_document_activation is not None:
+            identity = self._pending_document_activation
+            self._pending_document_activation = None
+            QTimer.singleShot(0, partial(self.activate_session_document, identity))
+        if self._session_close_waiting:
+            QTimer.singleShot(0, self.close)
 
     def _finish_worker_action(self, result: ExecutionResult, label: str) -> None:
         if result.error is not None:
@@ -3701,7 +4252,7 @@ class MainWindow(QMainWindow):
         if self._services is None:
             self.status_command.setText("未组合应用服务，无法新建")
             return
-        if self._has_unsubmitted_geometry():
+        if self.document_session is None and self._has_unsubmitted_geometry():
             return
         if self.new_document_dialog is not None:
             self.new_document_dialog.raise_()
@@ -3712,10 +4263,16 @@ class MainWindow(QMainWindow):
         result = dialog.exec()
         self.new_document_dialog = None
         if result == QDialog.DialogCode.Accepted:
-            self._create_document(dialog.document_type)
+            if self.document_session is not None:
+                self.new_session_document(dialog.document_kind)
+            else:
+                self._create_document(dialog.document_type)
         dialog.deleteLater()
 
     def _on_new_drawing_document(self) -> None:
+        if self.document_session is not None:
+            self.new_session_document("sketch")
+            return
         previous = self._loaded
         self._create_document("drawing2d")
         if self._loaded is not previous:
@@ -3725,7 +4282,9 @@ class MainWindow(QMainWindow):
         if self._services is None:
             self.status_command.setText("未组合应用服务，无法新建")
             return
-        if not self._confirm_unsaved_changes():
+        if not self._confirm_unsaved_changes(
+            on_saved=partial(self._create_document, document_type)
+        ):
             return
         self._replace_document(
             mycad_app.new_document(self._services, document_type=document_type), None
@@ -3858,7 +4417,9 @@ class MainWindow(QMainWindow):
         if self._services is None:
             self.status_command.setText("未组合应用服务，无法打开")
             return
-        if not self._confirm_unsaved_changes():
+        if self.document_session is None and not self._confirm_unsaved_changes(
+            on_saved=self._on_open_document
+        ):
             return
         selected, _selected_filter = QFileDialog.getOpenFileName(
             self,
@@ -3870,6 +4431,75 @@ class MainWindow(QMainWindow):
         if not selected:
             return
         path = Path(selected).absolute()
+
+        if self.document_session is not None:
+            unit, session, services = self.execution_unit, self.document_session, self._services
+            if unit is None:
+                return
+            existing = next(
+                (
+                    d
+                    for d in session.documents
+                    if d.path is not None and d.path.resolve() == path.resolve()
+                ),
+                None,
+            )
+            if existing is not None:
+                self.activate_session_document(existing.loaded.document.document_id)
+                return
+
+            def open_candidates() -> mycad_app.SessionOpenResult:
+                return mycad_app.open_session_bundle(services, path)
+
+            def finish_candidates(result: ExecutionResult) -> None:
+                if result.error is not None:
+                    self._show_error(result.error)
+                    return
+                bundle = cast("mycad_app.SessionOpenResult", result.value)
+                candidates, migrated = bundle.documents, bundle.migrated
+                entries = tuple(
+                    SessionDocument(
+                        srv,
+                        loaded,
+                        None if migrated else path,
+                        reference_messages=bundle.reference_messages,
+                    )
+                    for srv, loaded in candidates
+                )
+                known = {e.loaded.document.file_id: e for e in session.documents}
+                if any(e.loaded.document.file_id in known for e in entries):
+                    found = next(
+                        known[e.loaded.document.file_id]
+                        for e in entries
+                        if e.loaded.document.file_id in known
+                    )
+                    self.activate_session_document(found.loaded.document.document_id)
+                    return
+                try:
+                    for entry in entries:
+                        if entry.path is not None:
+                            session.check_path(entry, entry.path)
+                    for entry in entries:
+                        session.add(entry)
+                except ValidationError as exc:
+                    self._show_error(str(exc))
+                    return
+                if entries:
+                    self.activate_session_document(entries[-1].loaded.document.document_id)
+                if migrated:
+                    self.status_command.setText(
+                        "旧档已迁移为独立待保存文档；原文件保持不变。请使用“全部保存”命名新文件。"
+                    )
+                elif bundle.reference_messages:
+                    self.status_command.setText("\n".join(bundle.reference_messages))
+
+            unit.submit(
+                open_candidates,
+                operation="open-session-document",
+                session_id=self._session_id,
+                on_complete=finish_candidates,
+            )
+            return
 
         unit = self.execution_unit
         services = self._services
@@ -3912,25 +4542,134 @@ class MainWindow(QMainWindow):
         self._replace_document(loaded, path)
 
     def _on_save_document(self) -> None:
-        if self._has_unsubmitted_geometry():
+        if self.document_saver is not None and self.document_session is not None:
+            if self.document_session.active is not None:
+                self.document_saver.save_one(self.document_session.active)
             return
-        if self._loaded is None:
-            self.status_command.setText("未绑定文档")
-            return
-        if self._document_path is None:
-            self._on_save_document_as()
-            return
-        self._store_document(self._document_path)
+        self._save_document()
 
     def _on_save_document_as(self) -> None:
-        if self._has_unsubmitted_geometry():
+        if self.document_saver is not None and self.document_session is not None:
+            if self.document_session.active is not None:
+                self.document_saver.save_one(self.document_session.active, save_as=True)
             return
+        self._save_document(save_as=True)
+
+    def _on_save_all_documents(self) -> None:
+        if self.document_saver is not None and self.document_session is not None:
+            self._refresh_document_choice()
+            self.document_saver.save_many(
+                tuple(d for d in self.document_session.documents if d.needs_save)
+            )
+
+    def _session_save_changed(self) -> None:
+        session = self.document_session
+        if session is not None and session.active is not None:
+            if self._loaded is not session.active.loaded:
+                if self._sketch_dialog is not None:
+                    self.workspace_tabs.set_content("sketch", None)
+                    self._sketch_dialog = None
+                session.active.draft = None
+                self.activate_session_document(session.active.loaded.document.document_id)
+            self._document_path = session.active.path
+        self._refresh_document_choice()
+
+    def _report_session_save(self, results: tuple[SaveResult, ...]) -> None:
+        labels = {"saved": "已保存", "failed": "失败", "pending": "尚未保存", "cancelled": "已取消"}
+        self.status_command.setText(
+            "；".join(
+                f"{r.label}：{labels[r.status]}{(' — ' + r.error) if r.error else ''}"
+                for r in results
+            )
+            or "所有文档均已保存。"
+        )
+
+    def _choose_session_save_path(self, entry: SessionDocument) -> Path | None:
+        self.activate_session_document(entry.loaded.document.document_id)
+        return self._choose_document_save_path()
+
+    def _prepare_session_document(
+        self, entry: SessionDocument, complete: Callable[[bool], None]
+    ) -> None:
+        if self.execution_unit is not None and self.execution_unit.is_busy:
+            complete(False)
+            return
+        self.activate_session_document(entry.loaded.document.document_id)
+        if self._has_unsubmitted_geometry(include_sketch=False):
+            self._show_error(self.status_command.text())
+            complete(False)
+            return
+        draft = self._sketch_dialog
+        if draft is None or not (draft.canvas.entities or draft.canvas.has_pending_geometry):
+            complete(True)
+            return
+        self._after_sketch_commit = lambda: complete(True)
+        self._after_sketch_failure = lambda: complete(False)
+        draft.finish_sketch()
+        self._after_sketch_commit = None
+        self._after_sketch_failure = None
+        if self._sketch_dialog is draft and (
+            self.execution_unit is None or not self.execution_unit.is_busy
+        ):
+            self._show_error(draft.status_label.text())
+            complete(False)
+
+    def _ask_session_close_dialog(
+        self, entries: tuple[SessionDocument, ...]
+    ) -> dict[str, str] | None:
+        dialog = UnsavedDocumentsDialog(entries, self)
+        result = dialog.exec()
+        choices = dialog.choices if result == QDialog.DialogCode.Accepted else None
+        dialog.deleteLater()
+        return choices
+
+    def _save_document(
+        self, *, save_as: bool = False, on_saved: Callable[[], object] | None = None
+    ) -> bool:
+        """Save immediately, or resume after the active sketch commits successfully."""
+        if self.execution_unit is not None and self.execution_unit.is_busy:
+            self.status_command.setText("操作正在执行，请稍候再保存文档。")
+            return False
+        if self._has_unsubmitted_geometry(include_sketch=False):
+            return False
         if self._loaded is None:
             self.status_command.setText("未绑定文档")
-            return
+            return False
+        path = self._document_path
+        if save_as or path is None:
+            path = self._choose_document_save_path()
+        if path is None:
+            return False
+
+        def store() -> bool:
+            if not self._store_document(path):
+                return False
+            self._document_path = path
+            return True
+
+        draft = self._sketch_dialog
+        if draft is not None and self._has_unsubmitted_sketch():
+
+            def after_commit() -> None:
+                if store() and on_saved is not None:
+                    on_saved()
+
+            self._after_sketch_commit = after_commit
+            draft.finish_sketch()
+            self._after_sketch_commit = None
+            if self._sketch_dialog is draft:
+                self._show_error(draft.status_label.text())
+            return False
+        return store()
+
+    def _choose_document_save_path(self) -> Path | None:
+        if self._loaded is None:
+            return None
         drawing2d = self._loaded.document.document_type == "drawing2d"
         suffix = ".my2d" if drawing2d else ".my3d"
         default_name = "untitled-drawing.my2d" if drawing2d else "untitled.my3d"
+        if self.document_session is not None and self.document_session.active is not None:
+            default_name = DEFAULT_NAMES[self.document_session.active.kind]
         default_path = self._document_path or self._document_directory() / default_name
         selected, _selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -3940,11 +4679,18 @@ class MainWindow(QMainWindow):
             + ";;旧版存档 (*.mc.json)",
         )
         if not selected:
-            return
+            return None
         path = Path(selected).absolute()
         if path.suffix.lower() == ".masm":
             self._show_error(".masm 为装配图预留；当前请保存为二维图或三维零件。")
-            return
+            return None
+        if (
+            self.document_session is not None
+            and path.suffix.lower() in (".my2d", ".my3d")
+            and path.suffix.lower() != suffix
+        ):
+            self._show_error(f"当前文档应保存为 {suffix}；请更正文件后缀。")
+            return None
         if not path.name.lower().endswith(NATIVE_ARCHIVE_SUFFIXES):
             extension = ".mc.json" if "*.mc.json" in _selected_filter else suffix
             path = path.with_name(path.name + extension)
@@ -3960,9 +4706,8 @@ class MainWindow(QMainWindow):
                 )
                 != QMessageBox.StandardButton.Yes
             ):
-                return
-        if self._store_document(path):
-            self._document_path = path
+                return None
+        return path
 
     def _document_directory(self) -> Path:
         if self._document_path is not None and self._document_path.parent.is_dir():
@@ -4101,8 +4846,8 @@ class MainWindow(QMainWindow):
         else:
             self.status_command.setText("应用工作线程忙碌，DXF 尚未导出；请稍后重试。")
 
-    def _has_unsubmitted_geometry(self) -> bool:
-        if self._has_unsubmitted_sketch():
+    def _has_unsubmitted_geometry(self, *, include_sketch: bool = True) -> bool:
+        if include_sketch and self._has_unsubmitted_sketch():
             return True
         if self.drawing_workbench.notes.pending:
             self.status_command.setText(
@@ -4132,23 +4877,25 @@ class MainWindow(QMainWindow):
         draft.status_label.setText(self.status_command.text())
         return True
 
-    def _confirm_unsaved_changes(self) -> bool:
-        """True 放行（无文档/未脏/用户放弃），False 一律不动当前文档。"""
-        if self._has_unsubmitted_geometry():
+    def _confirm_unsaved_changes(self, *, on_saved: Callable[[], object] | None = None) -> bool:
+        """放行或保留当前文档；异步保存成功后通过 on_saved 继续原操作。"""
+        if self._has_unsubmitted_geometry(include_sketch=False):
             return False
-        if self._loaded is None or not self._loaded.document.is_dirty:
+        has_draft = self._has_unsubmitted_sketch()
+        if not has_draft and (self._loaded is None or not self._loaded.document.is_dirty):
             return True
         choice = self._ask_save_dialog()
         if choice == "save":
-            self._on_save_document()
-            return not self._loaded.document.is_dirty
+            return self._save_document(on_saved=on_saved)
+        if choice == "discard" and has_draft and self._sketch_dialog is not None:
+            self._sketch_dialog.reject()
         return choice == "discard"
 
     def _ask_save_dialog(self) -> str:
         """三选弹窗：save/discard/cancel；exec 阻塞至用户选择。"""
         box = QMessageBox(self)
         box.setWindowTitle("未保存的修改")
-        box.setText("当前文档有未保存的修改。")
+        box.setText("当前文档或草图有未保存的修改。保存将先提交已完成的草图。")
         save_button = box.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("放弃修改", QMessageBox.ButtonRole.DestructiveRole)
         cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
@@ -4186,14 +4933,45 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.execution_unit is not None and self.execution_unit.is_busy:
             self.status_command.setText("操作完成前无法关闭窗口")
+            self._session_close_waiting = self._session_close_approved
             event.ignore()
             return
-        if not self._confirm_unsaved_changes():
+        self._session_close_waiting = False
+        if self.document_session is not None and not self._session_close_approved:
+            self._refresh_document_choice()
+            pending = tuple(e for e in self.document_session.documents if e.needs_save)
+            if pending:
+                choices = self._ask_session_close_dialog(pending)
+                if choices is None or any(
+                    choices.get(e.loaded.document.document_id) not in ("save", "discard")
+                    for e in pending
+                ):
+                    event.ignore()
+                    return
+                selected = tuple(
+                    e for e in pending if choices[e.loaded.document.document_id] == "save"
+                )
+                if selected and self.document_saver is not None:
+
+                    def finished(success: bool) -> None:
+                        if success:
+                            self._session_close_approved = True
+                            QTimer.singleShot(0, self.close)
+
+                    self.document_saver.save_many(selected, on_complete=finished)
+                    event.ignore()
+                    return
+            self._session_close_approved = True
+        if self.document_session is None and not self._confirm_unsaved_changes(on_saved=self.close):
             event.ignore()
             return
         if self.execution_unit is not None:
             self.execution_unit.shutdown()
         self.drawing_workbench.shutdown()
+        if self.document_session is not None:
+            for entry in self.document_session.documents:
+                if entry.workbench is not None and entry.workbench is not self.drawing_workbench:
+                    entry.workbench.shutdown()
         if self.viewport is not None:
             self.viewport.dispose()
         self.store_window_state()

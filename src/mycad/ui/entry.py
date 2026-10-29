@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
 
-from mycad.app import build_app, new_document
+from mycad.app import build_app, new_workspace_document
+from mycad.ui.document_session import DocumentSession
 from mycad.ui.main_window import MainWindow
 
 
@@ -21,8 +22,8 @@ def run_gui() -> int:
     services = build_app()
     # Fresh document; kernel reset stays exclusive to mycad.app.new_document,
     # and the window must come after it: the viewport takes the kernel port.
-    loaded = new_document(services)
-    window = MainWindow(services=services)
+    loaded = new_workspace_document(services, kind="part")
+    window = MainWindow(services=services, document_session=DocumentSession())
     window.bind_document(loaded)
     window.show()
     return qapp.exec()

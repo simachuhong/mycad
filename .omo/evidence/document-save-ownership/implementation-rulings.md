@@ -1,0 +1,35 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-10-28-document-save-ownership.md
+
+2026-10-29: User approved detailed design and implementation plan.
+Ruling: Reuse current codex/phase2-foundation checkout — approved design depends on existing uncommitted sketch-save and drawing-template work, and user wants the shared workspace updated; a fresh HEAD worktree omits those dependencies. Preserve unrelated diff; no automatic commit of user files. Cost if wrong: less isolation, mitigated by recorded baseline diff.
+Pre-flight Task 1→2: v4 identity/kind and payload builder consumed by reference snapshots; add public payload read/write helpers, keep legacy factory defaults backward compatible.
+Pre-flight Task 2→3: reference commands and independent services consumed by workspace binding; one kernel per editable document, no shared mutable geometry.
+Pre-flight Task 3→4: SessionDocument IDs, draft ownership and paths consumed by save controller; callbacks capture entry identity, never active workspace at completion.
+Pre-flight Task 2/3/4→5: migrate legacy mixed archives into candidate documents, attach sources, then atomically add to session after isolated replay.
+Task 1: in progress.
+Task 1: new archive tests RED 6 failed → GREEN 6 passed. Legacy persistence/schema tests 47 passed; composition ID-list failure reproduces existing drawing.note work mismatch. Supported-version assertion updated to intentional v4 contract. Scoped basedpyright: 0 errors.
+Task 1: complete — archive isolation/roundtrip, legacy schema/persistence and layering included in 56 passing tests.
+Task 2: complete — reference replay/update/detach tests included in 56 passing tests; basedpyright 0 errors.
+Task 3: in progress — workspace/session tests RED 2 failed → GREEN 2 passed.
+Ruling: Desktop entry supplies DocumentSession while existing MainWindow(services=...) remains a supported single-document embedding API — preserve host integrations and existing single-document regression coverage; new desktop tests opt into the same session entry used by run_gui. Cost if wrong: two lifecycle paths to maintain.
+Task 3: workspace/session cases RED→GREEN; source→model→drawing UI integration added.
+Task 4: complete — expanded save regression: 8 passed, covering partial failure, path conflicts, async requested switch, save-as IDs and deferred close discards.
+Task 5: in progress — migration tests RED 2 failed → GREEN 2 passed; scoped UI legacy regression 159 passed, core integration 28 passed.
+Ruling: Legacy split histories use new local ordinals while the full original archive is retained verbatim as migration_origin — keeping global ordinals in two histories would violate contiguous replay; audit originals remain accessible and original file is unchanged. Cost if wrong: larger files containing original audit data.
+Ruling: Saved reference paths are v4 reference_locations rather than rewriting audited command parameters — paths are locators, not geometry identity; copied/new source paths must not amend modeling history. Cost if wrong: two locator forms to resolve (index before original command hint).
+Ruling: Save-as prepares an identity-only aggregate replacement using the existing entry-owned kernel — geometry is unchanged, avoids synchronous CAD replay on the GUI thread; no second editable entry receives that kernel. Cost if wrong: replacement lifecycle must remain exclusive.
+Diagnostic: cached sketch callback captured old UI session generation; returning to editor prevented submission. Dynamic generation at signal time plus active-editor identity guard fixed it; save-all 3-document test passes.
+Diagnostic: repeated reference updates dropped historical snapshot slots; regression RED 2 snapshots vs 3 commands; preserve prior snapshots while installing regenerated current geometry.
+Infrastructure: scoped test path test_dimension_tools.py absent; selected existing test_canvas_dimensions.py/test_driving_dimensions.py, no tests skipped.
+Task 3: complete — independent workspace/session contexts and end-to-end source→model→drawing replay verified; 159 legacy UI regressions passed.
+Task 4: complete — save lifecycle tests now include same-path SaveAs identity preservation (RED→GREEN).
+Task 5: complete implementation — migration RED→GREEN including dashed source identities; docs and ADR-013 updated. Final whole-tree gates and fresh review in progress.
+Ruling: Save As targeting the current canonical path behaves as ordinary Save and preserves identity — prevents unexpectedly breaking existing source references when accepting the default filename. Cost if wrong: no new identity unless a different path is selected.
+Ruling: GUI CLI new/open/save directs users to the document lifecycle menu — avoids the legacy CLI resetting a document kernel or bypassing session path bookkeeping; standalone CLI unchanged. Cost if wrong: desktop CLI lifecycle commands require menu interaction.
+Final review: two reproduced P2 defects corrected (saved migrated v4 path retention; closed-source relative locator rebasing). Both regressions RED 2 failed → GREEN 2 passed. Added required internal-sketch separation and open-time association status; missing-behavior tests RED 2 failed → GREEN 2 passed. Expanded migration tests (v1/v2, face-attached sketch with interleaved paper commands, migration failure isolation): 4 passed.
+Diagnostic: system python command unavailable; retried with project uv run python before any edits. Catalog tests extended for released note and reference commands, reference category translated; literal drawing_note omission corrected along with new document_reference contract.
+Final timing correction: save-approved close overlapped a queued viewport refresh and lost its approval (regression timed out RED). Keep the approved close pending until serialized execution is idle; 13 save lifecycle cases GREEN, and explicit race recheck passed.
+Final locator correction: explicitly updating from a moved source left its older saved path index in precedence (RED old.my2d vs moved.my2d). Successful reference adoption now updates the session locator; 2 focused relocation/close cases passed.
+Verification note: v1/v2 migration, attached-sketch migration, and migration-failure isolation were added as review coverage and passed on their first run; no claim of RED-first for these already-implemented paths. New missing-behavior and defect regressions did fail before fixes.
+Final verification complete: full initial pytest 2189 passed / 17 failed (1556.80s); all 17 mapped to corrected contract/entry/doc fixtures or isolated performance recheck. Projection recheck 2.560s <= 3s, unchanged implementation/threshold. Final distinct focused coverage 166 passed; prior legacy UI regression 159 passed. Full static gates passed; 40 touched paths final lint/format and scoped strict types clean. Nine unrelated tracked baseline paths preserved byte-for-byte against starting diff.
+All five approved tasks complete. Native Windows/GPU hand testing not claimed; .masm stays reserved. User GUI and existing uncommitted work retained, no commit/push/merge. Evidence: .omo/evidence/document-save-ownership/acceptance.md.

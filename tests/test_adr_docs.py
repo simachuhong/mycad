@@ -3,7 +3,7 @@
 """Scripted acceptance for the numbered architecture decision records.
 
 Pathlib + regex only, no third-party deps. Asserts:
-    - docs/adr/ holds exactly twelve files named ADR-001..012 with an ASCII slug.
+    - docs/adr/ holds exactly thirteen files named ADR-001..013 with an ASCII slug.
 - Every ADR carries the five MADR-lite section headers
   (Status / Context / Decision / Consequences / References).
 - Per-ADR mandated keyword hits, located by filename prefix.
@@ -24,8 +24,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ADR_DIR = REPO_ROOT / "docs" / "adr"
 
-# File name contract: ADR-00N-<slug>.md, N in 1..12, lowercase ASCII slug.
-FILENAME_RE = re.compile(r"^ADR-(?P<number>0(?:0[1-9]|1[0-2]))-[a-z][a-z0-9-]*\.md$")
+# File name contract: ADR-00N-<slug>.md, N in 1..13, lowercase ASCII slug.
+FILENAME_RE = re.compile(r"^ADR-(?P<number>0(?:0[1-9]|1[0-3]))-[a-z][a-z0-9-]*\.md$")
 
 # MADR-lite section headers. Status is a fixed field line; the rest are
 # level-2 headings that must each appear verbatim.
@@ -75,6 +75,7 @@ REQUIRED_TOKENS: dict[str, tuple[str, ...]] = {
         "aarch64",
     ),
     "ADR-012": ("NewSOldS", "DrawingScene", "pypdf", "v3", "Bus"),
+    "ADR-013": ("file_id", "document_kind", "reference_locations", ".masm", "migration_origin"),
     "ADR-011": (
         "document_type",
         "drawing2d",
@@ -120,7 +121,7 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_adr_dir_holds_exactly_twelve_numbered_files() -> None:
+def test_adr_dir_holds_exactly_thirteen_numbered_files() -> None:
     files = _adr_files()
     assert files, "docs/adr/ does not exist or holds no files"
     numbers: list[str] = []
@@ -128,7 +129,7 @@ def test_adr_dir_holds_exactly_twelve_numbered_files() -> None:
         match = FILENAME_RE.match(path.name)
         assert match is not None, f"unexpected file name in docs/adr/: {path.name}"
         numbers.append(match.group("number"))
-    assert len(files) == 12, f"expected exactly 12 ADR files, found {len(files)}"
+    assert len(files) == 13, f"expected exactly 13 ADR files, found {len(files)}"
     assert sorted(numbers) == [
         "001",
         "002",
@@ -142,6 +143,7 @@ def test_adr_dir_holds_exactly_twelve_numbered_files() -> None:
         "010",
         "011",
         "012",
+        "013",
     ]
 
 

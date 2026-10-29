@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, cast
 
 from mycad.core.bus import CommandBus
 from mycad.core.document import CommandAmendment, Document, ExecutedCommand
-from mycad.core.document_kinds import DocumentType
+from mycad.core.document_kinds import DocumentKind, DocumentType, native_suffix
 from mycad.core.exceptions import ArchiveVersionError, UnknownCommandError, ValidationError
 from mycad.core.groups import NamedGroup
 from mycad.core.handlers import CommandHandler, resolve_handler
@@ -37,12 +37,19 @@ from mycad.core.schema_v1 import (
 )
 from mycad.core.schema_v2 import ARCHIVE_VERSION_V2, validate_archive_v2
 from mycad.core.schema_v3 import ARCHIVE_VERSION_V3, validate_archive_v3
+from mycad.core.schema_v4 import ARCHIVE_VERSION_V4, validate_archive_v4
 from mycad.core.selectors import EdgeSelector, FaceSelector
 
 if TYPE_CHECKING:
     from mycad.commands.registry import CommandRegistry
 
-__all__ = ["LoadedDocument", "open_document", "save_document"]
+__all__ = [
+    "LoadedDocument",
+    "open_document",
+    "save_document",
+    "document_payload",
+    "load_document_payload",
+]
 
 
 @dataclass(frozen=True)
@@ -189,18 +196,12 @@ def _migrate_v2_to_v3(payload: dict[str, object], document_type: DocumentType) -
     return migrated
 
 
-def save_document(
+def document_payload(
     document: Document,
-    path: Path,
     *,
     plugin_identities: Mapping[tuple[str, int], Mapping[str, str]] | None = None,
-) -> None:
-    """Atomically write the document using its current archive schema version.
-
-    Emits ``document_saving`` before and ``document_saved`` after the write.
-    Atomicity is a same-directory temp file plus ``os.replace``; a missing
-    parent directory propagates as ``OSError`` (never auto-created).
-    """
+) -> dict[str, object]:
+    """Build a validated independent JSON value without performing I/O."""
     payload = _archive_payload_v1(document)
     if document.archive_version == ARCHIVE_VERSION:
         validate_archive(payload)
@@ -209,17 +210,49 @@ def save_document(
             plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
         )
         payload = _migrate_v1_to_v2(payload, provenance)
-    elif document.archive_version == ARCHIVE_VERSION_V3:
+    elif document.archive_version in (ARCHIVE_VERSION_V3, ARCHIVE_VERSION_V4):
         provenance = _capture_provenance(
             plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
         )
-        payload = _migrate_v2_to_v3(_migrate_v1_to_v2(payload, provenance), document.document_type)
+        payload = _migrate_v1_to_v2(payload, provenance)
+        if document.archive_version == ARCHIVE_VERSION_V3:
+            payload = _migrate_v2_to_v3(payload, document.document_type)
+        else:
+            payload.update(
+                version=4, file_id=document.file_id, document_kind=document.document_kind
+            )
+            payload["document_type"] = document.document_type
+            if document.migration_origin is not None:
+                payload["migration_origin"] = document.migration_origin
+            payload["reference_locations"] = document.reference_locations
+            validate_archive_v4(payload)
     else:
         raise ArchiveVersionError(
             f"document archive version {document.archive_version} is not supported",
             found=str(document.archive_version),
-            supported=ARCHIVE_VERSION_V3,
+            supported=ARCHIVE_VERSION_V4,
         )
+    return payload
+
+
+def save_document(
+    document: Document,
+    path: Path,
+    *,
+    plugin_identities: Mapping[tuple[str, int], Mapping[str, str]] | None = None,
+    reference_locations: Mapping[str, str] | None = None,
+) -> None:
+    """Atomically write one document; mark_clean is the caller's responsibility."""
+    if (
+        document.archive_version >= 4
+        and path.suffix.lower() in (".my2d", ".my3d", ".masm")
+        and path.suffix.lower() != native_suffix(document.document_kind)
+    ):
+        raise ValidationError("native suffix does not match document kind")
+    payload = document_payload(document, plugin_identities=plugin_identities)
+    if document.archive_version >= 4 and reference_locations is not None:
+        payload["reference_locations"] = dict(reference_locations)
+        validate_archive_v4(payload)
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     document.events.emit("document_saving", {"path": str(path)})
     tmp_path: Path | None = None
@@ -302,6 +335,10 @@ def _build_document(
     *,
     archive_version: int,
     document_type: DocumentType = "part",
+    document_kind: DocumentKind | None = None,
+    file_id: str | None = None,
+    migration_origin: Mapping[str, object] | None = None,
+    reference_locations: Mapping[str, str] | None = None,
 ) -> Document:
     """Construct the Document aggregate from a validated archive dict."""
     commands = [
@@ -328,6 +365,10 @@ def _build_document(
         named_groups=groups,
         archive_version=archive_version,
         document_type=document_type,
+        document_kind=document_kind,
+        file_id=file_id,
+        migration_origin=migration_origin,
+        reference_locations=reference_locations,
     )
 
 
@@ -354,6 +395,17 @@ def open_document(
         raise ValidationError(
             f"archive: malformed JSON (line {exc.lineno}, column {exc.colno}): {exc.msg}"
         ) from exc
+    return load_document_payload(data, registry=registry, kernel=kernel, handlers=handlers)
+
+
+def load_document_payload(
+    data: object,
+    *,
+    registry: CommandRegistry,
+    kernel: Kernel,
+    handlers: Mapping[str, CommandHandler] | Mapping[tuple[str, int], CommandHandler],
+) -> LoadedDocument:
+    """Validate and replay an in-memory archive without filesystem effects."""
     if not isinstance(data, dict):
         raise ValidationError("archive: top level must be a JSON object")
     root = cast("dict[str, object]", data)
@@ -374,12 +426,13 @@ def open_document(
             ARCHIVE_VERSION,
             ARCHIVE_VERSION_V2,
             ARCHIVE_VERSION_V3,
+            ARCHIVE_VERSION_V4,
         )
     ):
         raise ArchiveVersionError(
-            f"archive version {version!r} is not supported (supported: 1, 2, {ARCHIVE_VERSION_V3})",
+            f"archive version {version!r} is not supported (supported: 1, 2, 3, {ARCHIVE_VERSION_V4})",
             found=str(version),
-            supported=ARCHIVE_VERSION_V3,
+            supported=ARCHIVE_VERSION_V4,
         )
     archive_version = cast("int", version)
     document_type: DocumentType = "part"
@@ -391,10 +444,23 @@ def open_document(
         replay_data = {key: value for key, value in root.items() if key != "provenance"}
         replay_data["version"] = ARCHIVE_VERSION
     else:
-        validate_archive_v3(root)
+        if archive_version == ARCHIVE_VERSION_V4:
+            validate_archive_v4(root)
+        else:
+            validate_archive_v3(root)
         document_type = cast("DocumentType", root["document_type"])
         replay_data = {
-            key: value for key, value in root.items() if key not in ("provenance", "document_type")
+            key: value
+            for key, value in root.items()
+            if key
+            not in (
+                "provenance",
+                "document_type",
+                "document_kind",
+                "file_id",
+                "migration_origin",
+                "reference_locations",
+            )
         }
         replay_data["version"] = ARCHIVE_VERSION
     for entry in cast("list[object]", replay_data["commands"]):
@@ -404,6 +470,10 @@ def open_document(
         registry,
         archive_version=archive_version,
         document_type=document_type,
+        document_kind=cast("DocumentKind | None", root.get("document_kind")),
+        file_id=cast("str | None", root.get("file_id")),
+        migration_origin=cast("Mapping[str, object] | None", root.get("migration_origin")),
+        reference_locations=cast("Mapping[str, str] | None", root.get("reference_locations")),
     )
     bus = CommandBus(document, registry, kernel, handlers)
     # Spec-mandated one-shot rebuild on open; the getattr bridge mirrors

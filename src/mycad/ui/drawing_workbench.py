@@ -49,6 +49,7 @@ from mycad.core.drawing_projection import (
     projected_basis,
 )
 from mycad.core.drawing_sketch import project_sketch
+from mycad.core.drawing_templates import PAPER_SIZES
 from mycad.core.persistence import LoadedDocument
 from mycad.formats.drawing_export import export_drawing_dxf
 from mycad.ui.cad_icons import cad_icon
@@ -56,6 +57,7 @@ from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
 from mycad.ui.drawing_canvas import DrawingCanvas
 from mycad.ui.drawing_note_tools import DrawingNoteTools
 from mycad.ui.drawing_pdf import export_drawing_pdf
+from mycad.ui.drawing_templates import DrawingTemplatePanel
 from mycad.ui.drawing_tools import ViewPlacement, move_view, scale_view, set_view_alignment
 from mycad.ui.drawing_updates import ProjectionBatch, ProjectionUpdates
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
@@ -210,7 +212,13 @@ class DrawingWorkbench(QMainWindow):
         self.sketch_source = QComboBox()
         self.sketch_source.setToolTip("选择当前文档中已完成的草图；按草图局部 U/V 坐标放到图纸。")
         self.paper = QComboBox()
-        self.paper.addItems(["A4 横向", "A4 纵向", "A3 横向", "A3 纵向"])
+        self.paper.addItems(
+            [f"{paper} {direction}" for paper in PAPER_SIZES for direction in ("横向", "纵向")]
+        )
+        self.templates = DrawingTemplatePanel()
+        self._settings_sheet: DrawingSheet | None = None
+        self.templates.selection_changed.connect(self._template_selected)
+        self.templates.preview_button.clicked.connect(self._preview_template)
         self.angle = QComboBox()
         self.angle.addItems(["第一角", "第三角"])
         self.scale = QDoubleSpinBox()
@@ -236,6 +244,13 @@ class DrawingWorkbench(QMainWindow):
         apply_settings.clicked.connect(self.apply_sheet_settings)
         form.addRow(apply_settings)
         self.settings_tabs.addTab(settings, "设置")
+        template_scroll = QScrollArea()
+        template_scroll.setWidgetResizable(True)
+        template_scroll.setWidget(self.templates)
+        self.settings_tabs.addTab(template_scroll, "模板")
+        template_entry = QPushButton("选择 / 导入图纸模板…")
+        template_entry.clicked.connect(lambda: self.settings_tabs.setCurrentWidget(template_scroll))
+        form.insertRow(0, template_entry)
         self.view_properties = QWidget()
         view_form = QFormLayout(self.view_properties)
         self.selected_view_label = QLabel("在图中选择视图")
@@ -388,6 +403,10 @@ class DrawingWorkbench(QMainWindow):
         self.message.emit(text)
 
     def bind_document(self, loaded: LoadedDocument, session_id: int) -> None:
+        if self.loaded is loaded:
+            self.session_id = session_id
+            self.refresh()
+            return
         self.notes.cancel()
         self.notes.select(None)
         self.annotations.cancel()
@@ -515,7 +534,10 @@ class DrawingWorkbench(QMainWindow):
         previous_sheet = self.sheet_id
         if self.sheet_id not in {s.sheet_id for s in self.state.sheets}:
             self.sheet_id = self.state.sheets[0].sheet_id if self.state.sheets else None
-        if self.sheet_id is not None and previous_sheet != self.sheet_id:
+        if self.sheet_id is not None and (
+            previous_sheet != self.sheet_id
+            or self._settings_sheet != self.state.sheet(self.sheet_id)
+        ):
             self._load_sheet_settings()
         self.tree.clear()
         self._view_items.clear()
@@ -565,14 +587,13 @@ class DrawingWorkbench(QMainWindow):
         if self.notes.pending:
             self._set_message("文字尚未提交：请先 Ctrl+Enter 完成或 Esc 取消，再新建图纸。")
             return
-        paper = "A4" if self.paper.currentIndex() < 2 else "A3"
-        sheet = DrawingSheet.for_paper(uuid4(), paper, landscape=self.paper.currentIndex() % 2 == 0)
+        sheet = self._configured_sheet(uuid4())
         sheet = replace(
             sheet,
             name=self.title.text().strip() or f"工程图 {len(self.state.sheets) + 1}",
             projection_angle="first" if self.angle.currentIndex() == 0 else "third",
             default_scale=self.scale.value(),
-            title=(("标题", self.title.text().strip()),),
+            title=self._title_values(),
         )
 
         def done() -> None:
@@ -591,8 +612,20 @@ class DrawingWorkbench(QMainWindow):
         if self.sheet_id is None:
             return
         sheet = self.state.sheet(self.sheet_id)
-        paper = 0 if max(sheet.size_mm) == 297 else 2
-        self.paper.setCurrentIndex(paper + (0 if sheet.size_mm[0] > sheet.size_mm[1] else 1))
+        self._settings_sheet = sheet
+        match = next(
+            (
+                i
+                for i, size in enumerate(PAPER_SIZES.values())
+                if tuple(sorted(sheet.size_mm)) == size
+            ),
+            None,
+        )
+        if match is not None:
+            self.paper.setCurrentIndex(
+                match * 2 + (0 if sheet.size_mm[0] > sheet.size_mm[1] else 1)
+            )
+        self.templates.load_sheet(sheet)
         self.angle.setCurrentIndex(0 if sheet.projection_angle == "first" else 1)
         self.scale.setValue(sheet.default_scale)
         self.title.setText(dict(sheet.title).get("标题", sheet.name))
@@ -617,31 +650,76 @@ class DrawingWorkbench(QMainWindow):
         if self.sheet_id is None:
             self.create_sheet()
             return
-        paper = DrawingSheet.for_paper(
-            self.sheet_id,
-            "A4" if self.paper.currentIndex() < 2 else "A3",
-            landscape=self.paper.currentIndex() % 2 == 0,
-        )
+        if self.notes.pending or self.placement is not None:
+            self._set_message("请先完成或取消图中文字/视图放置，再应用模板。")
+            return
+        sheet = self._configured_sheet(self.sheet_id)
         self._execute(
             "drawing.sheet.update",
             {
                 "sheet_id": str(self.sheet_id),
-                "size_mm": list(paper.size_mm),
+                "size_mm": list(sheet.size_mm),
+                "template": sheet.template.to_mapping() if sheet.template is not None else None,
                 "projection_angle": "first" if self.angle.currentIndex() == 0 else "third",
                 "default_scale": self.scale.value(),
                 "name": self.title.text().strip() or "工程图",
-                "title": [["标题", self.title.text()]],
+                "title": [list(pair) for pair in self._title_values()],
             },
+            self._sheet_applied,
         )
+
+    def _sheet_applied(self) -> None:
+        self._load_sheet_settings()
+        self.pages.setCurrentWidget(self.canvas)
+        self._set_message(
+            "图纸模板已应用；已有视图位置与比例保持不变，请检查是否进入图框或标题栏。"
+        )
+
+    def _title_values(self) -> tuple[tuple[str, str], ...]:
+        values = self.templates.values()
+        values["标题"] = self.title.text().strip()
+        return tuple(
+            (key, value) for key, value in values.items() if value or key not in ("比例", "页码")
+        )
+
+    def _template_selected(self) -> None:
+        self.paper.setEnabled(str(self.templates.selector.currentData()) in ("GB", "ISO", "legacy"))
+
+    def _configured_sheet(self, identity: UUID) -> DrawingSheet:
+        paper = list(PAPER_SIZES)[self.paper.currentIndex() // 2]
+        landscape = self.paper.currentIndex() % 2 == 0
+        template = self.templates.template_for(
+            paper, landscape, "first" if self.angle.currentIndex() == 0 else "third"
+        )
+        sheet = DrawingSheet.for_paper(identity, paper, landscape=landscape)
+        return replace(sheet, size_mm=template.size_mm, template=template) if template else sheet
+
+    def _preview_template(self) -> None:
+        template = self._configured_sheet(uuid4()).template
+        if template is None:
+            self._set_message("当前为旧版简单图框，请选择 GB、ISO 或导入模板进行预览。")
+            return
+        self.templates.show_preview(template, self._title_values())
 
     def _edit_sheet(self) -> None:
         if self.sheet_id is not None:
             sheet = self.state.sheet(self.sheet_id)
             if self.title.text() == dict(sheet.title).get("标题", sheet.name):
                 return
+            # This automatic title commit must not reload unrelated form drafts.
+            # Undo/redo still reloads settings because its snapshot differs.
+            self._settings_sheet = replace(
+                sheet, title=tuple({**dict(sheet.title), "标题": self.title.text()}.items())
+            )
             self._execute(
                 "drawing.sheet.update",
-                {"sheet_id": str(self.sheet_id), "title": [["标题", self.title.text()]]},
+                {
+                    "sheet_id": str(self.sheet_id),
+                    "title": [
+                        list(pair)
+                        for pair in {**dict(sheet.title), "标题": self.title.text()}.items()
+                    ],
+                },
             )
 
     def begin_placement(self) -> None:

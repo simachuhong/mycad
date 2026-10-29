@@ -30,6 +30,7 @@ from typing import cast
 import build123d
 from build123d import CenterOf, Edge, Face, GeomType, Part
 
+from mycad.core.document_references import DocumentReference
 from mycad.core.drawing import DrawingState
 from mycad.core.drawing_codec import apply_drawing_command
 from mycad.core.drawing_projection import (
@@ -222,6 +223,9 @@ class BuildKernel:
     """
 
     def __init__(self) -> None:
+        self._reference_loader: Callable[[Mapping[str, object]], BuildKernel] | None = None
+        self._references: dict[str, DocumentReference] = {}
+        self._linked_sketches: dict[str, str] = {}
         self._drawing_state = DrawingState()
         self._drawing_projection_cache: dict[tuple[str, ViewBasis], ProjectionResult] = {}
         self._drawing_revision = 0
@@ -262,6 +266,8 @@ class BuildKernel:
         # kernel first, so full replay re-populates snapshots in ordinal order.
 
         self._part = None
+        self._references = {}
+        self._linked_sketches = {}
         self._drawing_state = DrawingState()
         self._drawing_revision = 0
         self._snapshots = []
@@ -322,6 +328,8 @@ class BuildKernel:
         self._drawing_state = candidate._drawing_state
         self._drawing_revision = candidate._drawing_revision
         self._operations = deepcopy(candidate._operations)
+        self._references = deepcopy(candidate._references)
+        self._linked_sketches = dict(candidate._linked_sketches)
         self._body_origins = candidate._body_origins
         self._current_mesh_cache.clear()
         self._history_mesh_cache.clear()
@@ -336,6 +344,76 @@ class BuildKernel:
         recorded = deepcopy(dict(checked))
         self._apply_operation(command_id, checked)
         self._operations.append((command_id, recorded))
+
+    def set_reference_loader(self, loader: Callable[[Mapping[str, object]], BuildKernel]) -> None:
+        self._reference_loader = loader
+
+    @property
+    def document_references(self) -> tuple[DocumentReference, ...]:
+        return tuple(deepcopy(tuple(self._references.values())))
+
+    @property
+    def linked_sketch_ids(self) -> frozenset[str]:
+        return frozenset(self._linked_sketches)
+
+    def _apply_reference(self, command_id: str, params: Mapping[str, object]) -> None:
+        identity = cast("str", params["reference_id"])
+        if command_id == "reference.detach":
+            if identity not in self._references:
+                raise ValidationError("reference does not exist")
+            self._references.pop(identity)
+            self._linked_sketches = {
+                k: v for k, v in self._linked_sketches.items() if v != identity
+            }
+            self._record_sketch_change(command_id)
+            return
+        reference = DocumentReference.from_mapping(params)
+        if command_id == "reference.update":
+            previous = self._references.get(identity)
+            if (
+                previous is None
+                or previous.file_id != reference.file_id
+                or previous.object_id != reference.object_id
+            ):
+                raise ValidationError("reference update identity does not match adopted source")
+            candidate = BuildKernel()
+            candidate._reference_loader = self._reference_loader
+            for cid, payload in self._operations:
+                if cid == "reference.attach" and payload.get("reference_id") == identity:
+                    payload = reference.to_mapping()
+                if cid == "reference.update" and payload.get("reference_id") == identity:
+                    continue
+                candidate.apply(cid, payload)
+            operations = self._operations
+            snapshots = self._snapshots.copy()
+            feature_ids = list(self._feature_ids)
+            self.replace_state_from(candidate)
+            self._operations = operations
+            self._snapshots = snapshots
+            self._feature_ids = feature_ids
+            self._record_sketch_change(command_id)
+            return
+        if identity in self._references:
+            raise ValidationError("reference already exists")
+        if self._reference_loader is None:
+            raise ValidationError("reference replay loader is not configured")
+        source = self._reference_loader(reference.archive)
+        if reference.kind == "sketch":
+            sketch = next((s for s in source.sketches if s.sketch_id == reference.object_id), None)
+            if sketch is None or identity in self._sketches:
+                raise ValidationError("reference sketch is missing or instance identity collides")
+            self._sketches[identity] = replace(sketch, sketch_id=identity)
+            self._linked_sketches[identity] = identity
+        else:
+            if any(r.kind == "part" for r in self._references.values()):
+                raise ValidationError("engineering drawing already has a source part")
+            self._part = deepcopy(source._part)
+            self._sketches.update(deepcopy(source._sketches))
+            self._linked_sketches.update(dict.fromkeys(source._sketches, identity))
+            self._body_origins = source._body_origins
+            self._body_ids = tuple(self._identity_scope.new_body_id() for _ in source._body_ids)
+        self._references[identity] = reference
+        self._record_sketch_change(command_id)
 
     def _apply_operation(self, command_id: str, params: Mapping[str, object]) -> None:
         """Apply one feature command to the in-memory part.
@@ -356,6 +434,10 @@ class BuildKernel:
         """
 
         checked = checked_mapping(params, command_id)
+
+        if command_id.startswith("reference."):
+            self._apply_reference(command_id, checked)
+            return
 
         if command_id.startswith(
             ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")
@@ -567,6 +649,8 @@ class BuildKernel:
             command_id == "sketch.constraint.update" or params.get("rebuild_consumers") is True
         )
         sketch_id = params.get("sketch_id")
+        if isinstance(sketch_id, str) and sketch_id in self._linked_sketches:
+            raise ValidationError("关联草图只读；请先解除关联再修改。", command_id=command_id)
         current = self._sketches.get(sketch_id) if isinstance(sketch_id, str) else None
         if current is None:
             raise ValidationError("constraint references a missing sketch", command_id=command_id)
@@ -657,6 +741,7 @@ class BuildKernel:
         The candidate stays isolated until every downstream feature succeeds.
         """
         candidate = BuildKernel()
+        candidate._reference_loader = self._reference_loader
         for operation_index, (command_id, params) in enumerate(self._operations):
             if command_id in ("sketch.constraint.add", "sketch.constraint.update"):
                 continue

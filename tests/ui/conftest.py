@@ -62,6 +62,16 @@ def discard_unsaved_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(MainWindow, "_ask_save_dialog", _discard)
 
+    def _discard_session(self: MainWindow, entries: object) -> dict[str, str]:
+        session = self.document_session
+        return (
+            {}
+            if session is None
+            else {e.loaded.document.document_id: "discard" for e in session.documents}
+        )
+
+    monkeypatch.setattr(MainWindow, "_ask_session_close_dialog", _discard_session)
+
 
 @pytest.fixture
 def choose_new_part(monkeypatch: pytest.MonkeyPatch) -> None:

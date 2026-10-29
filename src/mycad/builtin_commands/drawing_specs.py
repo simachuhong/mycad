@@ -123,7 +123,9 @@ _ANNOTATION_V2 = {
 
 def _spec(kind: str, action: str, version: int = 1) -> CommandSpec:
     fields = {
-        "sheet": _SHEET,
+        "sheet": _SHEET
+        if version == 1
+        else {**_SHEET, "template": {"oneOf": [{"type": "object"}, {"const": None}]}},
         "note": _NOTE,
         "view": _VIEW if version == 1 else _VIEW_V2,
         "annotation": _ANNOTATION if version == 1 else _ANNOTATION_V2,
@@ -168,5 +170,7 @@ DRAWING_COMMAND_SPECS = tuple(
     for kind in ("sheet", "view", "annotation", "note")
     for action in ("create", "update", "delete")
 ) + tuple(
-    _spec(kind, action, 2) for kind in ("view", "annotation") for action in ("create", "update")
+    _spec(kind, action, 2)
+    for kind in ("sheet", "view", "annotation")
+    for action in ("create", "update")
 )

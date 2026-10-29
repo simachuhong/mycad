@@ -10,6 +10,7 @@ from uuid import UUID
 
 from mycad.core.drawing_projection import Point2, ViewBasis, ViewDirection, finite, projected_basis
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.core.drawing_templates import PAPER_SIZES, DrawingTemplate
 
 ProjectionAngle = Literal["first", "third"]
 AnnotationKind = Literal[
@@ -65,9 +66,12 @@ class DrawingSheet:
     projection_angle: ProjectionAngle = "first"
     default_scale: float = 1
     title: tuple[tuple[str, str], ...] = ()
+    template: DrawingTemplate | None = None
 
     def __post_init__(self) -> None:
         _identity(self.sheet_id)
+        if self.template is not None and self.template.size_mm != self.size_mm:
+            raise ValueError("模板幅面与图纸幅面不一致")
         finite((*self.size_mm, self.margin_mm, self.default_scale), "sheet")
         if min(self.size_mm) <= 0 or not 0 <= self.margin_mm < min(self.size_mm) / 2:
             raise ValueError("invalid sheet size or margin")
@@ -78,9 +82,9 @@ class DrawingSheet:
 
     @classmethod
     def for_paper(cls, sheet_id: UUID, paper: str, *, landscape: bool = True) -> DrawingSheet:
-        if paper not in ("A4", "A3"):
-            raise ValueError("supported paper sizes are A4/A3")
-        width, height = (210, 297) if paper == "A4" else (297, 420)
+        if paper not in PAPER_SIZES:
+            raise ValueError("supported paper sizes are A0–A4")
+        width, height = PAPER_SIZES[paper]
         return cls(sheet_id, size_mm=(height, width) if landscape else (width, height))
 
 

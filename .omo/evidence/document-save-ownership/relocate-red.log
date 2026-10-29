@@ -1,0 +1,59 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________ test_locating_moved_source_updates_saved_locator _______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7571c84dda60>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7571c843b1d0>
+
+    def test_locating_moved_source_updates_saved_locator(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mycad.core.persistence import save_document
+        from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
+        from uuid import uuid4
+
+        services = app.build_app(discoverers=[])
+        source = app.new_workspace_document(services, kind="sketch")
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
+        source.bus.execute("sketch.create", sketch.to_mapping(version=3), "local")
+        original = tmp_path / "old.my2d"
+        save_document(source.document, original)
+        window = window_with_session(qtbot)
+        session, unit = window.document_session, window.execution_unit
+        assert session is not None and session.active is not None and unit is not None
+        dependent = session.active
+        dependent.path = tmp_path / "model.my3d"
+        dependent.loaded.bus.execute(
+            "reference.attach",
+            app.reference_parameters(source.document, object_id=sketch.sketch_id, path=str(original)),
+            "local",
+        )
+        dependent.reference_locations[source.document.file_id] = original.name
+        moved = tmp_path / "moved.my2d"
+        original.rename(moved)
+        monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                            staticmethod(lambda *_a, **_k: (str(moved), "")))
+        menu = next(a.menu() for a in window.menuBar().actions() if a.text() == "文档")
+        assert menu is not None
+        next(a for a in menu.actions() if a.text() == "更新来源引用").trigger()
+        qtbot.waitUntil(lambda: len(dependent.loaded.document.commands) == 2 and not unit.is_busy)
+        window.act_save.trigger()
+        location = json.loads(dependent.path.read_text(encoding="utf-8"))["reference_locations"][
+            source.document.file_id
+        ]
+>       assert (dependent.path.parent / location).resolve() == moved.resolve()
+E       AssertionError: assert PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/old.my2d') == PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/moved.my2d')
+E        +  where PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/old.my2d') = resolve()
+E        +    where resolve = (PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0') / 'old.my2d').resolve
+E        +      where PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0') = PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/model.my3d').parent
+E        +        where PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/model.my3d') = SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7571c87da720>, kern...d2340) at 0x7571c84fba00>, reference_locations={'a5c8408ba78f446ba45d2958b894055a': 'old.my2d'}, reference_messages=()).path
+E        +  and   PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/moved.my2d') = resolve()
+E        +    where resolve = PosixPath('/tmp/pytest-of-sima/pytest-238/test_locating_moved_source_upd0/moved.my2d').resolve
+
+tests/ui/test_document_save_session.py:482: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_document_save_session.py::test_locating_moved_source_updates_saved_locator
+1 failed, 13 deselected in 15.83s

@@ -184,8 +184,12 @@ def test_document_switch_and_save_cannot_silently_drop_uncommitted_draft(
 
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getSaveFileName", save_target)
     window.act_save.trigger()
-    assert not (tmp_path / "incomplete.mc.json").exists()
-    draft.cancel_button.click()
+    qtbot.waitUntil((tmp_path / "incomplete.mc.json").exists)
+    loaded = window.loaded_document()
+    assert loaded is not None
+    assert len(loaded.document.commands) == 1
+    assert len(services.kernel.sketches[0].entities) == 2
+    assert not loaded.document.is_dirty
 
 
 def test_main_undo_routes_to_active_draft(qtbot: QtBot) -> None:

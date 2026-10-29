@@ -1,0 +1,94 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______________ test_saved_migrated_document_reopens_with_its_path ______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75eb71be7320>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-224/test_saved_migrated_document_r0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x75eb71be4ad0>
+
+    def test_saved_migrated_document_reopens_with_its_path(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mycad.core.persistence import save_document
+
+        window = window_with_session(qtbot)
+        services = app.fork_app_services(app.build_app(discoverers=[]))
+        legacy = app.new_document(services)
+        old = tmp_path / "legacy.mc.json"
+        save_document(legacy.document, old)
+        migrated = app.open_session_documents(services, old)[0][1]
+        target = tmp_path / "migrated.my3d"
+        save_document(migrated.document, target)
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileName", staticmethod(lambda *_a, **_k: (str(target), ""))
+        )
+        window.act_open.trigger()
+        session, unit = window.document_session, window.execution_unit
+        assert session is not None and unit is not None
+        qtbot.waitUntil(lambda: not unit.is_busy and len(session.documents) == 2)
+        assert session.active is not None
+>       assert session.active.path == target
+E       AssertionError: assert None == PosixPath('/tmp/pytest-of-sima/pytest-224/test_saved_migrated_document_r0/migrated.my3d')
+E        +  where None = SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x75eb71be72f0>, kern..._state=None, plan_draft=<mycad.ui.plan_draft.PlanDraftController(0xd6fd240) at 0x75eb71c04900>, reference_locations={}).path
+E        +    where SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x75eb71be72f0>, kern..._state=None, plan_draft=<mycad.ui.plan_draft.PlanDraftController(0xd6fd240) at 0x75eb71c04900>, reference_locations={}) = <mycad.ui.document_session.DocumentSession object at 0x75eb71be7470>.active
+
+tests/ui/test_document_save_session.py:322: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+______________ test_save_as_rebases_reference_to_a_closed_source _______________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x75eb71be47d0>
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x75eb6e945940>
+
+    def test_save_as_rebases_reference_to_a_closed_source(
+        qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mycad.core.persistence import save_document
+        from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
+        from uuid import uuid4
+
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir()
+        new.mkdir()
+        services = app.build_app(discoverers=[])
+        source = app.new_workspace_document(services, kind="sketch")
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
+        source.bus.execute("sketch.create", sketch.to_mapping(version=3), "local")
+        source_path = old / "source.my2d"
+        save_document(source.document, source_path)
+        window = window_with_session(qtbot)
+        session = window.document_session
+        assert session is not None and session.active is not None
+        dependent = session.active
+        dependent.loaded.bus.execute(
+            "reference.attach", app.reference_parameters(source.document, object_id=sketch.sketch_id),
+            "local",
+        )
+        dependent.path = old / "part.my3d"
+        dependent.reference_locations[source.document.file_id] = "source.my2d"
+        save_document(dependent.loaded.document, dependent.path,
+                      reference_locations=dependent.reference_locations)
+        target = new / "copy.my3d"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", staticmethod(lambda *_a, **_k: (str(target), ""))
+        )
+        window.act_save_as.trigger()
+        location = json.loads(target.read_text(encoding="utf-8"))["reference_locations"][
+            source.document.file_id
+        ]
+>       assert (target.parent / location).resolve() == source_path.resolve()
+E       AssertionError: assert PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/new/source.my2d') == PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/old/source.my2d')
+E        +  where PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/new/source.my2d') = resolve()
+E        +    where resolve = (PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/new') / 'source.my2d').resolve
+E        +      where PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/new') = PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/new/copy.my3d').parent
+E        +  and   PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/old/source.my2d') = resolve()
+E        +    where resolve = PosixPath('/tmp/pytest-of-sima/pytest-224/test_save_as_rebases_reference0/old/source.my2d').resolve
+
+tests/ui/test_document_save_session.py:370: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/ui/test_document_save_session.py::test_saved_migrated_document_reopens_with_its_path
+FAILED tests/ui/test_document_save_session.py::test_save_as_rebases_reference_to_a_closed_source
+2 failed, 9 deselected in 17.76s

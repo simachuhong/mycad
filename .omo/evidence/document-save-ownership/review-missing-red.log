@@ -1,0 +1,58 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______ test_reference_status_reports_missing_and_wrong_identity_sources _______
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-225/test_reference_status_reports_0')
+
+    def test_reference_status_reports_missing_and_wrong_identity_sources(tmp_path: Path) -> None:
+        from uuid import uuid4
+        from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
+
+        services = app.build_app(discoverers=[])
+        source = app.new_workspace_document(services, kind="sketch")
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
+        source.bus.execute("sketch.create", sketch.to_mapping(version=3), "local")
+        target_services = app.fork_app_services(services)
+        target = app.new_workspace_document(target_services, kind="part")
+        target.bus.execute(
+            "reference.attach",
+            app.reference_parameters(source.document, object_id=sketch.sketch_id, path="source.my2d"),
+            "local",
+        )
+        target_path = tmp_path / "part.my3d"
+        save_document(target.document, target_path)
+        opened = app.open_session_bundle(services, target_path)
+>       assert "缺失" in " ".join(opened.reference_messages)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SessionOpenResult' object has no attribute 'reference_messages'
+
+tests/core/test_document_archive_v4.py:99: AttributeError
+_________ test_internal_sketch_can_be_separated_without_changing_model _________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x742254b87380>
+
+    def test_internal_sketch_can_be_separated_without_changing_model(qtbot: QtBot) -> None:
+        from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
+
+        window = managed_window(qtbot)
+        session, unit = window.document_session, window.execution_unit
+        assert session is not None and session.active is not None and unit is not None
+        model = session.active
+        sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
+        model.loaded.bus.execute("sketch.create", sketch.to_mapping(version=3), "local")
+        model.loaded.bus.execute(
+            "feature.extrude",
+            {"profile": {"type": "sketch", "sketch_id": sketch.sketch_id}, "distance": 8}, "local",
+        )
+        original = model.loaded.document.commands
+>       window._separate_internal_sketch()
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'MainWindow' object has no attribute '_separate_internal_sketch'
+
+tests/ui/test_document_session.py:158: AttributeError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+=========================== short test summary info ============================
+FAILED tests/core/test_document_archive_v4.py::test_reference_status_reports_missing_and_wrong_identity_sources
+FAILED tests/ui/test_document_session.py::test_internal_sketch_can_be_separated_without_changing_model
+2 failed, 10 deselected in 20.48s

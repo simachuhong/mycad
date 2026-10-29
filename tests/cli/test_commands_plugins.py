@@ -66,14 +66,17 @@ def test_commands_lists_all_released_builtins(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 26
+    assert len(lines) == 32
     rows = [line.split("\t") for line in lines]
     assert all(len(row) == 3 for row in rows)
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)
-    assert verbs.count("") == 3
+    assert verbs.count("") == 6
     assert [row[1] for row in rows if not row[0]] == [
         "drawing.layers.set",
+        "reference.attach",
+        "reference.detach",
+        "reference.update",
         "sketch.constraint.add",
         "sketch.constraint.update",
     ]
@@ -89,11 +92,14 @@ def test_commands_json_shape(
     payload = json.loads(raw)
     assert set(payload) == {"commands"}
     commands = payload["commands"]
-    assert len(commands) == 26
+    assert len(commands) == 32
     verbs = [entry["verb"] for entry in commands]
     assert verbs == sorted(verbs)
     assert [entry["id"] for entry in commands if not entry["verb"]] == [
         "drawing.layers.set",
+        "reference.attach",
+        "reference.detach",
+        "reference.update",
         "sketch.constraint.add",
         "sketch.constraint.update",
     ]
@@ -119,7 +125,7 @@ def test_commands_lists_plugin_contributions(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
     assert main(["commands"]) == 0
     rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
-    assert len(rows) == 27
+    assert len(rows) == 33
     assert "demo.ping" in {row[1] for row in rows}
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)

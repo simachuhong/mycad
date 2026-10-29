@@ -56,6 +56,12 @@ EXPECTED_IDS: tuple[str, ...] = (
     "drawing.annotation.create",
     "drawing.annotation.update",
     "drawing.annotation.delete",
+    "drawing.note.create",
+    "drawing.note.update",
+    "drawing.note.delete",
+    "reference.attach",
+    "reference.update",
+    "reference.detach",
 )
 
 
@@ -863,7 +869,7 @@ def test_no_datum_namespace_leak() -> None:
 
 
 def test_affected_objects_static_shape() -> None:
-    assert len(AFFECTED_OBJECTS) == 22
+    assert len(AFFECTED_OBJECTS) == 28
     ids = _registered_ids(_builtin_registry())
     # Legacy sketch/layer commands remain outside agent plans.
     assert set(AFFECTED_OBJECTS) == set(ids) - {
@@ -872,7 +878,7 @@ def test_affected_objects_static_shape() -> None:
         "sketch.constraint.update",
         "drawing.layers.set",
     }
-    assert len(set(AFFECTED_OBJECTS.values())) == 16
+    assert len(set(AFFECTED_OBJECTS.values())) == 18
     assert set(AFFECTED_OBJECTS.values()) == {
         "box_body",
         "cylinder_body",
@@ -890,6 +896,8 @@ def test_affected_objects_static_shape() -> None:
         "drawing_sheet",
         "drawing_view",
         "drawing_annotation",
+        "drawing_note",
+        "document_reference",
     }
 
 
@@ -958,8 +966,8 @@ def test_cli_aliases_are_pairwise_distinct() -> None:
         if spec.id not in latest or spec.version > latest[spec.id].version:
             latest[spec.id] = spec
     aliases = [alias for spec in latest.values() for alias in spec.cli.verb_aliases]
-    assert len(aliases) == 23
-    assert len(set(aliases)) == 23
+    assert len(aliases) == 26
+    assert len(set(aliases)) == 26
 
 
 def test_cut_verb_is_exclusive_to_boolean_cut() -> None:

@@ -7,6 +7,12 @@ from __future__ import annotations
 from typing import Literal
 
 DocumentType = Literal["part", "drawing2d"]
+DocumentKind = Literal["sketch", "drawing", "part"]
+
+
+def native_suffix(kind: DocumentKind) -> str:
+    return ".my3d" if kind == "part" else ".my2d"
+
 
 # Extensions name native JSON archives; the payload remains the source of type/version.
 # .masm is reserved for assembly documents, which are not supported yet.
@@ -32,7 +38,16 @@ DRAWING2D_COMMAND_IDS = frozenset(
         "drawing.note.create",
         "drawing.note.update",
         "drawing.note.delete",
+        "reference.attach",
+        "reference.update",
+        "reference.detach",
     }
 )
 
-__all__ = ["DRAWING2D_COMMAND_IDS", "NATIVE_ARCHIVE_SUFFIXES", "DocumentType"]
+__all__ = [
+    "DRAWING2D_COMMAND_IDS",
+    "NATIVE_ARCHIVE_SUFFIXES",
+    "DocumentKind",
+    "DocumentType",
+    "native_suffix",
+]

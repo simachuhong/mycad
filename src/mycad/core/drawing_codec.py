@@ -22,6 +22,7 @@ from mycad.core.drawing import (
 )
 from mycad.core.drawing_projection import Point2, Point3, ViewBasis, ViewDirection, finite
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.core.drawing_templates import DrawingTemplate
 
 
 def _record(value: object) -> dict[str, object]:
@@ -115,6 +116,7 @@ def drawing_object_mapping(
             "projection_angle": value.projection_angle,
             "default_scale": value.default_scale,
             "title": [list(item) for item in value.title],
+            **({"template": value.template.to_mapping()} if value.template is not None else {}),
         }
     if isinstance(value, DrawingView):
         return {
@@ -181,6 +183,7 @@ def _sheet(obj: Mapping[str, object]) -> DrawingSheet:
         cast("ProjectionAngle", _text(obj.get("projection_angle", "first"))),
         _number(obj.get("default_scale", 1)),
         tuple(title),
+        DrawingTemplate.from_mapping(obj["template"]) if obj.get("template") is not None else None,
     )
 
 
@@ -248,7 +251,16 @@ def _note(obj: Mapping[str, object]) -> DrawingNote:
 _FIELDS: dict[str, frozenset[str]] = {
     "note": frozenset({"note_id", "sheet_id", "text", "position_mm", "height_mm", "layer"}),
     "sheet": frozenset(
-        {"sheet_id", "name", "size_mm", "margin_mm", "projection_angle", "default_scale", "title"}
+        {
+            "sheet_id",
+            "name",
+            "size_mm",
+            "margin_mm",
+            "projection_angle",
+            "default_scale",
+            "title",
+            "template",
+        }
     ),
     "view": frozenset(
         {

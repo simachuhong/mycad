@@ -15,6 +15,7 @@ from mycad.core.drawing_references import DrawingGeometryReference
 if TYPE_CHECKING:
     from mycad.core.drawing import DrawingAnnotation, DrawingNote, DrawingState
     from mycad.core.drawing_annotations import SceneAnnotation
+    from mycad.core.drawing_templates import DrawingTemplate
 
 Point2 = tuple[float, float]
 Point3 = tuple[float, float, float]
@@ -248,6 +249,10 @@ class DrawingScene:
     source_fingerprint: str = ""
     resolved_annotations: tuple[SceneAnnotation, ...] = ()
     notes: tuple[DrawingNote, ...] = ()
+    template: DrawingTemplate | None = None
+    default_scale: float = 1
+    sheet_number: int = 1
+    sheet_count: int = 1
 
 
 def build_drawing_scene(
@@ -316,6 +321,10 @@ def build_drawing_scene(
         next(iter(fingerprints), ""),
         tuple(resolved),
         tuple(note for note in state.notes if note.sheet_id == sheet_id),
+        sheet.template,
+        sheet.default_scale,
+        next(i + 1 for i, item in enumerate(state.sheets) if item.sheet_id == sheet_id),
+        len(state.sheets),
     )
 
 
