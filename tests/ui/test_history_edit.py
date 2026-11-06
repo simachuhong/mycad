@@ -30,6 +30,94 @@ def _sketch_entities(params: Mapping[str, object]) -> list[dict[str, object]]:
     return [dict(cast("Mapping[str, object]", entity)) for entity in cast("list[object]", value)]
 
 
+@pytest.mark.parametrize("action", ["discard", "commit"])
+@pytest.mark.parametrize("notification", [False, True])
+def test_stale_history_candidate_does_not_clear_current_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, action: str, notification: bool
+) -> None:
+    from mycad.app import create_replay_candidate
+    from mycad.core.replay_proposal import ReplayChangeSet
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 10, "size_y": 10, "size_z": 4})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    unit, viewport, panel = window.execution_unit, window.viewport, window.right_panel
+    assert unit is not None and viewport is not None and panel is not None and unit.session_id > 0
+    old_session = unit.session_id - 1
+    candidate = create_replay_candidate(services, loaded, session_identity=old_session)
+    candidate.stage(ReplayChangeSet((), (), False), current_session_identity=old_session)
+    before = loaded.document.commands
+    cleared: list[bool] = []
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+
+    def perform_action(_result: object = None) -> None:
+        if action == "discard":
+            panel.history_candidate_discard_requested.emit(candidate)
+        else:
+            panel.history_candidate_commit_requested.emit(candidate, 0)
+
+    if notification:
+        unit.result_ready.connect(perform_action)
+        assert unit.submit(lambda: None, operation="test-stale-history", session_id=unit.session_id)
+        qtbot.waitUntil(lambda: candidate.state == "cancelled", timeout=10000)
+        unit.result_ready.disconnect(perform_action)
+    else:
+        perform_action()
+    assert not cleared
+    assert loaded.document.commands == before
+    assert candidate.state == "cancelled"
+
+
+@pytest.mark.parametrize("action", ["discard", "commit"])
+def test_completed_history_candidate_ignores_late_actions(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    from mycad.app import create_replay_candidate
+    from mycad.core.replay_proposal import ReplayChangeSet, ReplayEdit
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 10, "size_y": 10, "size_z": 4})
+    candidate = create_replay_candidate(services, loaded, session_identity=0)
+    candidate.stage(
+        ReplayChangeSet(
+            (ReplayEdit(0, {"size_x": 12, "size_y": 10, "size_z": 4}, "local", "调整尺寸"),),
+            (),
+            False,
+        ),
+        current_session_identity=0,
+    )
+    assert candidate.preview(current_session_identity=0).state == "succeeded"
+    candidate.commit(
+        candidate.authorize_commit(current_session_identity=0), current_session_identity=0
+    )
+    before = loaded.document.commands
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, panel = window.viewport, window.right_panel
+    assert viewport is not None and panel is not None
+    cleared: list[bool] = []
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    if action == "discard":
+        panel.history_candidate_discard_requested.emit(candidate)
+    else:
+        panel.history_candidate_commit_requested.emit(candidate, 0)
+    assert not cleared and candidate.state == "committed"
+    assert loaded.document.commands == before
+
+
 def _history_with_downstream_commands() -> tuple[AppServices, LoadedDocument]:
     services = build_app(discoverers=[])
     loaded = new_document(services)
@@ -37,6 +125,239 @@ def _history_with_downstream_commands() -> tuple[AppServices, LoadedDocument]:
     loaded.bus.execute("feature.cylinder", {"radius": 1.0, "height": 20.0, "mode": "cut"}, "test")
     loaded.bus.execute("feature.cylinder", {"radius": 0.5, "height": 20.0, "mode": "cut"}, "test")
     return services, loaded
+
+
+@pytest.mark.parametrize("operation", ["confirm", "preview", "repair", "accept"])
+def test_history_dialog_waits_before_consuming_candidate(qtbot: QtBot, operation: str) -> None:
+    services, loaded = _history_with_downstream_commands()
+    command = loaded.document.commands[0]
+    busy = [False]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+        can_cancel=lambda: not busy[0],
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.parameter_form.set_value("radius", 6.0)
+    dialog.reason_field.setText("调整外径")
+    dialog.preview_changes()
+    candidate = object()
+    assert dialog.candidate_preview_finished(
+        candidate, "候选就绪", repairable=operation == "repair"
+    )
+    busy[0] = True
+    if operation == "confirm":
+        dialog.confirm_changes()
+    elif operation == "preview":
+        dialog.preview_changes()
+    elif operation == "repair":
+        dialog.begin_repair()
+    else:
+        dialog.accept()
+    assert dialog.isVisible()
+    assert dialog.candidate is candidate
+    assert "等待" in dialog.impact_label.text()
+    assert loaded.document.commands[0].params["radius"] == 5.0
+    busy[0] = False
+    dialog.reject()
+
+
+@pytest.mark.parametrize("notification", ["idle", "result"])
+def test_history_edit_does_not_start_during_execution_notification(
+    qtbot: QtBot, notification: str
+) -> None:
+    services, loaded = _history_with_downstream_commands()
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    unit, panel = window.execution_unit, window.right_panel
+    assert unit is not None and panel is not None
+    command = loaded.document.commands[0]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    observed: list[tuple[bool, bool, str]] = []
+
+    def on_result(_result: object) -> None:
+        panel.history_candidate_open_requested.emit(dialog, command.ordinal)
+        observed.append(
+            (window.history_edit_task is None, dialog.isVisible(), window.status_command.text())
+        )
+
+    def on_idle(busy: bool) -> None:
+        if not busy:
+            on_result(None)
+
+    if notification == "idle":
+        unit.busy_changed.connect(on_idle)
+    else:
+        unit.result_ready.connect(on_result)
+    assert unit.submit(lambda: None, operation="test-history-open", session_id=unit.session_id)
+    qtbot.waitUntil(lambda: bool(observed) and not unit.is_delivering_result, timeout=10000)
+    assert observed[0][:2] == (True, False)
+    assert "等待" in observed[0][2] or "忙" in observed[0][2]
+    assert loaded.document.commands[0].params["radius"] == 5.0
+
+
+def test_history_edit_can_start_in_owning_completion_callback(qtbot: QtBot) -> None:
+    services, loaded = _history_with_downstream_commands()
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    unit, panel = window.execution_unit, window.right_panel
+    assert unit is not None and panel is not None
+    command = loaded.document.commands[0]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+    )
+    qtbot.addWidget(dialog)
+    opened: list[bool] = []
+
+    def on_complete(_result: object) -> None:
+        panel.history_candidate_open_requested.emit(dialog, command.ordinal)
+        opened.append(window.history_edit_task is dialog)
+
+    assert unit.submit(
+        lambda: None,
+        operation="test-history-open-followup",
+        session_id=unit.session_id,
+        on_complete=on_complete,
+    )
+    qtbot.waitUntil(lambda: bool(opened), timeout=10000)
+    assert opened == [True]
+    dialog.reject()
+
+
+@pytest.mark.parametrize("phase", ["busy", "notification"])
+def test_history_dialog_cancel_completes_after_execution_handoff(qtbot: QtBot, phase: str) -> None:
+    from threading import Event
+
+    services, loaded = _history_with_downstream_commands()
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    unit = window.execution_unit
+    assert unit is not None
+    command = loaded.document.commands[0]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+        can_cancel=lambda: not (unit.is_busy or unit.is_notifying_idle or unit.is_notifying_result),
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    finished: list[int] = []
+    observed: list[int] = []
+    dialog.finished.connect(finished.append)
+    entered, release = Event(), Event()
+
+    def work() -> None:
+        entered.set()
+        assert release.wait(10)
+
+    def cancel_on_result(_result: object) -> None:
+        dialog.reject()
+        observed.append(len(finished))
+
+    if phase == "notification":
+        unit.result_ready.connect(cancel_on_result)
+    assert unit.submit(work, operation="test-history-cancel", session_id=unit.session_id)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=5000)
+        if phase == "busy":
+            dialog.reject()
+            observed.append(len(finished))
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: bool(finished), timeout=10000)
+    assert observed == [0] and len(finished) == 1
+    assert loaded.document.commands[0].params["radius"] == 5.0
+
+
+def test_history_dialog_rejects_preview_result_after_cancel_requested(qtbot: QtBot) -> None:
+    services, loaded = _history_with_downstream_commands()
+    command = loaded.document.commands[0]
+    busy = [False]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+        can_cancel=lambda: not busy[0],
+    )
+    qtbot.addWidget(dialog)
+    dialog.parameter_form.set_value("radius", 6.0)
+    dialog.reason_field.setText("调整外径")
+    dialog.preview_changes()
+    busy[0] = True
+    dialog.reject()
+    assert dialog.cancel_requested
+    assert not dialog.candidate_preview_finished(object(), "迟到的预览")
+    assert dialog.candidate is None and not dialog.confirm_button.isEnabled()
+    busy[0] = False
+    qtbot.waitUntil(lambda: not dialog.cancel_requested, timeout=5000)
+
+
+def test_closed_history_dialog_ignores_late_controls_and_results(qtbot: QtBot) -> None:
+    services, loaded = _history_with_downstream_commands()
+    command = loaded.document.commands[0]
+    dialog = HistoryEditDialog(
+        services.registry.get(command.id, command.version),
+        command.params,
+        services.registry,
+        ordinal=command.ordinal,
+        downstream=loaded.document.commands[1:],
+        candidate_preview=True,
+    )
+    qtbot.addWidget(dialog)
+    dialog.parameter_form.set_value("radius", 6.0)
+    dialog.reason_field.setText("调整外径")
+    dialog.preview_changes()
+    candidate = object()
+    assert dialog.candidate_preview_finished(candidate, "候选就绪")
+    finished: list[int] = []
+    discarded: list[object] = []
+    requested: list[bool] = []
+
+    def record_request(_params: object, _reason: str) -> None:
+        requested.append(True)
+
+    dialog.finished.connect(finished.append)
+    dialog.candidate_discard_requested.connect(discarded.append)
+    dialog.candidate_preview_requested.connect(record_request)
+    dialog.confirm_changes()
+    dialog.reason_field.setText("迟到的修改")
+    dialog.preview_changes()
+    dialog.begin_repair()
+    dialog.confirm_changes()
+    assert not dialog.candidate_preview_finished(object(), "迟到的结果")
+    dialog.reject()
+    dialog.accept()
+    assert len(finished) == 1 and not discarded and not requested
+    assert dialog.candidate is candidate
 
 
 def test_datum_tree_edit_previews_and_commits_name(qtbot: QtBot, tmp_path: Path) -> None:
@@ -702,8 +1023,15 @@ def test_history_candidate_preview_preserves_unsubmitted_drawing_note(qtbot: QtB
     window.close()
 
 
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize("external_preview", [False, True])
+@pytest.mark.parametrize("external_cancel", [False, True])
 def test_cancelling_history_candidate_preserves_original_model(
-    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    followup: bool,
+    external_preview: bool,
+    external_cancel: bool,
 ) -> None:
     from mycad.app import ReplayCandidateSession
 
@@ -721,7 +1049,8 @@ def test_cancelling_history_candidate_preserves_original_model(
     assert button is not None
     cancelled: list[ReplayCandidateSession] = []
     viewport = window.viewport
-    assert viewport is not None
+    unit = window.execution_unit
+    assert viewport is not None and unit is not None
     rendered: list[object] = []
     cleared: list[bool] = []
     original_show = viewport.show_candidate_preview
@@ -760,18 +1089,86 @@ def test_cancelling_history_candidate_preserves_original_model(
     monkeypatch.setattr(ReplayCandidateSession, "cancel", record_cancel)
 
     def inspect_dialog() -> None:
+        from mycad.core.viewport_protocol import ViewportData
+
         dialog = window.findChild(HistoryEditDialog)
         assert dialog is not None
+        other_snapshot: ViewportData | None = None
         try:
             dialog.parameter_form.set_value("radius", 6.0)
             dialog.reason_field.setText("调整外径")
             dialog.preview_changes()
             qtbot.waitUntil(lambda: dialog.confirm_button.isEnabled(), timeout=20000)
-            dialog.reason_field.setText("调整外径并说明原因")
-            assert not dialog.confirm_button.isEnabled()
+            original_candidate = dialog.candidate
+            held_during_notification: list[tuple[bool, bool]] = []
+
+            def try_actions_on_result(_result: object) -> None:
+                dialog.confirm_changes()
+                dialog.preview_changes()
+                dialog.begin_repair()
+                held_during_notification.append(
+                    (dialog.isVisible(), dialog.candidate is original_candidate)
+                )
+
+            unit.result_ready.connect(try_actions_on_result)
+            assert unit.submit(
+                lambda: None, operation="test-history-handover", session_id=unit.session_id
+            )
+            qtbot.waitUntil(
+                lambda: bool(held_during_notification) and not unit.is_delivering_result,
+                timeout=10000,
+            )
+            unit.result_ready.disconnect(try_actions_on_result)
+            assert held_during_notification == [(True, True)]
+            clear_before = len(cleared)
+            during_notification: list[tuple[int, bool, bool]] = []
+
+            def invalidate_on_result(_result: object) -> None:
+                unit.result_ready.disconnect(invalidate_on_result)
+                dialog.reason_field.setText("调整外径并说明原因")
+                during_notification.append(
+                    (len(cleared), dialog.candidate is None, dialog.confirm_button.isEnabled())
+                )
+
+            unit.result_ready.connect(invalidate_on_result)
+            assert unit.submit(
+                lambda: None,
+                operation="test-history-invalidate",
+                session_id=unit.session_id,
+                on_complete=(lambda _result: dialog.preview_changes()) if followup else None,
+            )
+            qtbot.waitUntil(lambda: bool(during_notification), timeout=10000)
+            assert during_notification == [(clear_before, True, False)]
+            qtbot.waitUntil(lambda: len(cancelled) == 1, timeout=10000)
             assert len(cancelled) == 1 and cancelled[0].state == "cancelled"
-            dialog.preview_changes()
+            if followup:
+                assert len(cleared) == clear_before
+            else:
+                assert not dialog.confirm_button.isEnabled()
+                dialog.preview_changes()
             qtbot.waitUntil(lambda: dialog.confirm_button.isEnabled(), timeout=20000)
+            clear_count = len(cleared)
+            panel.history_candidate_discard_requested.emit(cancelled[0])
+            assert len(cleared) == clear_count
+            assert dialog.confirm_button.isEnabled()
+            if external_preview:
+                from dataclasses import replace
+
+                other_snapshot = replace(cast("ViewportData", rendered[-1]))
+                viewport.show_candidate_preview(other_snapshot, preserve_view=True)
+            if external_cancel:
+                current_candidate = dialog.candidate
+                assert isinstance(current_candidate, ReplayCandidateSession)
+                current_candidate.cancel()
+                clear_count = len(cleared)
+                panel.history_candidate_discard_requested.emit(current_candidate)
+                assert len(cleared) == clear_count + int(not external_preview)
+            if external_preview:
+                assert other_snapshot is not None
+                clear_count = len(cleared)
+                dialog.reject()
+                assert len(cleared) == clear_count
+                assert viewport.displays_candidate_preview(other_snapshot)
         finally:
             dialog.reject()
 
@@ -779,8 +1176,8 @@ def test_cancelling_history_candidate_preserves_original_model(
     button.click()
     qtbot.waitUntil(lambda: window.history_edit_task is None, timeout=30000)
     assert len(cancelled) == 2 and all(item.state == "cancelled" for item in cancelled)
-    assert len(rendered) == 2
-    assert len(cleared) >= 2
+    assert len(rendered) == (3 if external_preview else 2)
+    assert len(cleared) >= (0 if followup else 1) + int(not external_preview)
     assert loaded.document.commands == before
     assert services.kernel.mass_properties().volume == pytest.approx(volume)
     window.close()
@@ -810,7 +1207,26 @@ def test_failed_bound_hole_candidate_offers_explicit_repair_without_confirm(qtbo
     assert dialog.candidate is None
 
 
-@pytest.mark.parametrize("completion", ["commit", "cancel", "stale", "busy_cancel"])
+@pytest.mark.parametrize(
+    "completion",
+    [
+        "commit",
+        "cancel",
+        "stale",
+        "busy_cancel",
+        "stale_entry",
+        "stale_callback",
+        "notification",
+        "notification_no_preview",
+        "notification_idle",
+        "notification_stale",
+        "followup",
+        "cancel_notification",
+        "cancel_commit_notification",
+        "cancel_unrelated_busy",
+        "cancel_followup",
+    ],
+)
 def test_failed_upstream_history_edit_rebinds_hole_in_prefix_and_commits(
     qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completion: str
 ) -> None:
@@ -871,6 +1287,219 @@ def test_failed_upstream_history_edit_rebinds_hole_in_prefix_and_commits(
     qtbot.waitUntil(lambda: window.history_repair_task is not None, timeout=30000)
     task, viewport, unit = window.history_repair_task, window.viewport, window.execution_unit
     assert task is not None and viewport is not None and unit is not None
+    if completion == "cancel_followup":
+        cancel_cleared: list[bool] = []
+        cancel_callback_clears: list[int] = []
+        cancel_finished: list[int] = []
+        task.finished.connect(cancel_finished.append)
+
+        def record_cancel_clear() -> None:
+            cancel_cleared.append(True)
+
+        def cancel_before_callback(_result: object) -> None:
+            task.reject()
+
+        def restart_after_cancel(_result: object) -> None:
+            task.reselect()
+            cancel_callback_clears.append(len(cancel_cleared))
+
+        monkeypatch.setattr(viewport, "clear_candidate_preview", record_cancel_clear)
+        unit.result_ready.connect(cancel_before_callback)
+        assert unit.submit(
+            lambda: None,
+            operation="test-repair-cancel-restart",
+            session_id=unit.session_id,
+            on_complete=restart_after_cancel,
+        )
+        qtbot.waitUntil(lambda: bool(cancel_finished), timeout=10000)
+        assert cancel_callback_clears == [0] and cancel_cleared == [True]
+        assert not unit.is_busy and loaded.document.commands == before
+        return
+    if completion == "cancel_unrelated_busy":
+        from threading import Event
+
+        busy_finished: list[int] = []
+        task.finished.connect(busy_finished.append)
+        entered, release = Event(), Event()
+
+        def unrelated_work() -> None:
+            entered.set()
+            assert release.wait(10)
+
+        assert unit.submit(
+            unrelated_work, operation="test-repair-unrelated", session_id=unit.session_id
+        )
+        try:
+            qtbot.waitUntil(entered.is_set, timeout=5000)
+            task.reject()
+            assert not busy_finished
+        finally:
+            release.set()
+        qtbot.waitUntil(lambda: bool(busy_finished), timeout=5000)
+        assert len(busy_finished) == 1 and loaded.document.commands == before
+        return
+    if completion in {"cancel_notification", "cancel_commit_notification"}:
+        cancellation_finished: list[int] = []
+        cancellation_observed: list[int] = []
+        task.finished.connect(cancellation_finished.append)
+        monkeypatch.setattr(task, "_committing", completion == "cancel_commit_notification")
+
+        def cancel_on_result(_result: object) -> None:
+            task.reject()
+            cancellation_observed.append(len(cancellation_finished))
+
+        unit.result_ready.connect(cancel_on_result)
+        assert unit.submit(lambda: None, operation="test-repair-cancel", session_id=unit.session_id)
+        qtbot.waitUntil(
+            lambda: bool(cancellation_observed) and not unit.is_delivering_result, timeout=10000
+        )
+        assert cancellation_observed == [0]
+        if completion == "cancel_commit_notification":
+            qtbot.wait(100)
+            assert not cancellation_finished and "提交" in task.status_label.text()
+            monkeypatch.setattr(task, "_committing", False)
+            task.reject()
+        else:
+            qtbot.waitUntil(lambda: bool(cancellation_finished), timeout=10000)
+        assert len(cancellation_finished) == 1
+        assert loaded.document.commands == before
+        return
+    if completion == "followup":
+        followup_cleared: list[bool] = []
+
+        def record_followup_clear() -> None:
+            followup_cleared.append(True)
+
+        def change_before_followup(_result: object) -> None:
+            unit.result_ready.disconnect(change_before_followup)
+            task.u_field.setValue(1.0)
+
+        monkeypatch.setattr(viewport, "clear_candidate_preview", record_followup_clear)
+        monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+        monkeypatch.setattr(task, "_preview_params", {"diameter": 2.0})
+        unit.result_ready.connect(change_before_followup)
+        assert unit.submit(
+            lambda: None,
+            operation="test-repair-followup",
+            session_id=unit.session_id,
+            on_complete=lambda _result: task.reselect(),
+        )
+        qtbot.waitUntil(lambda: task.scene is not None and not unit.is_busy, timeout=20000)
+        qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=10000)
+        qtbot.wait(100)
+        assert followup_cleared == [True]
+        task.reject()
+        assert loaded.document.commands == before
+        return
+    if completion in {
+        "notification",
+        "notification_no_preview",
+        "notification_idle",
+        "notification_stale",
+    }:
+        handover_cleared: list[bool] = []
+        handover_observed: list[tuple[int, bool]] = []
+        handover_session = [unit.session_id]
+
+        def record_handover_clear() -> None:
+            handover_cleared.append(True)
+
+        def on_result(_result: object) -> None:
+            task.u_field.setValue(1.0)
+            task.u_field.setValue(2.0)
+            task.reselect()
+            handover_observed.append((len(handover_cleared), task.confirm_button.isEnabled()))
+            if completion == "notification_stale":
+                handover_session[0] += 1
+
+        def on_idle(busy: bool) -> None:
+            if not busy:
+                on_result(None)
+
+        monkeypatch.setattr(viewport, "clear_candidate_preview", record_handover_clear)
+        monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+        monkeypatch.setattr(
+            task,
+            "_preview_params",
+            None if completion == "notification_no_preview" else {"diameter": 2.0},
+        )
+        monkeypatch.setattr(task, "_current_session", lambda: handover_session[0])
+        task.confirm_button.setEnabled(True)
+        if completion == "notification_idle":
+            unit.busy_changed.connect(on_idle)
+        else:
+            unit.result_ready.connect(on_result)
+        assert unit.submit(
+            lambda: None, operation="test-repair-handover", session_id=unit.session_id
+        )
+        qtbot.waitUntil(
+            lambda: bool(handover_observed) and not unit.is_delivering_result, timeout=10000
+        )
+        assert handover_observed == [(0, False)]
+        if completion == "notification_stale":
+            qtbot.wait(150)
+            assert not handover_cleared
+        else:
+            qtbot.waitUntil(task.preview_button.isEnabled, timeout=5000)
+            assert len(handover_cleared) == int(completion != "notification_no_preview")
+        assert not task.confirm_button.isEnabled()
+        task.reject()
+        assert loaded.document.commands == before
+        return
+    if completion == "stale_callback":
+        session = [unit.session_id]
+        delivered: list[bool] = []
+        shown: list[bool] = []
+
+        def record_scene(*_args: object, **_kwargs: object) -> None:
+            shown.append(True)
+
+        def change_session(_result: object) -> None:
+            session[0] += 1
+            delivered.append(True)
+
+        monkeypatch.setattr(task, "_current_session", lambda: session[0])
+        monkeypatch.setattr(viewport, "show_interaction_scene", record_scene)
+        unit.result_ready.connect(change_session)
+        task.reselect()
+        qtbot.waitUntil(lambda: bool(delivered) and not unit.is_busy, timeout=20000)
+        qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=20000)
+        assert not shown and task.scene is None
+        assert loaded.document.commands == before
+        return
+    if completion == "stale_entry":
+        cleared: list[bool] = []
+        submitted: list[bool] = []
+        finished: list[int] = []
+        task.finished.connect(finished.append)
+
+        def record_clear() -> None:
+            cleared.append(True)
+
+        def reject_submit(*_args: object, **_kwargs: object) -> bool:
+            submitted.append(True)
+            return False
+
+        monkeypatch.setattr(task, "_current_session", lambda: -1)
+        monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+        monkeypatch.setattr(unit, "submit", reject_submit)
+        monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+        monkeypatch.setattr(task, "_preview_params", {"diameter": 2.0})
+        task.u_field.setValue(1.0)
+        task.reselect()
+        task.preview()
+        task.commit()
+        task.reject()
+        monkeypatch.setattr(task, "_current_session", lambda: unit.session_id)
+        task.reselect()
+        task.preview()
+        task.commit()
+        task.u_field.setValue(2.0)
+        task.accept()
+        assert not cleared and not submitted
+        assert len(finished) == 1
+        assert loaded.document.commands == before
+        return
     window.act_save.trigger()
     assert "完成或取消历史修复" in window.status_command.text()
     window.request_undo()

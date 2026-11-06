@@ -459,6 +459,9 @@ class SketchCanvas(QWidget):
     committed_rotation_requested = Signal(object, object, object)
     committed_mirror_requested = Signal(object, object, object)
     committed_delete_requested = Signal(object)
+    committed_line_edit_requested = Signal(object, object, object)
+    committed_drag_trim_requested = Signal(object, object, object, object, object)
+    source_revision_invalidated = Signal()
     copy_mode_changed = Signal(int)
 
     def __init__(
@@ -557,6 +560,7 @@ class SketchCanvas(QWidget):
         self._transform_keep_source = True
         self._transform_angle_text = ""
         self._transform_preview: tuple[SketchEntity, ...] = ()
+        self._transform_source_revision: int | None = None
         self._copy_placements: list[tuple[Point2D, int, int]] = []
         self.copy_mode = 0
         self._copy_repeat = True
@@ -569,6 +573,15 @@ class SketchCanvas(QWidget):
         self._trim_drag_changed_count = 0
         self._trim_drag_last_error: str | None = None
         self._trim_drag_moved = False
+        self._trim_drag_saved_target = False
+        self._trim_drag_blocked = False
+        self._trim_drag_original_background: tuple[tuple[SketchEntity, SketchLayer], ...] | None = (
+            None
+        )
+        self._trim_drag_saved_events: list[tuple[str, tuple[SketchEntity, ...]]] = []
+        self.source_revision_provider: Callable[[], int] | None = None
+        self.source_context_revision: int | None = None
+        self._trim_drag_source_revision: int | None = None
         self.message: str = "选择绘图工具；单击画布放置几何。"
 
     def local_to_screen(self, point: Point2D) -> QPoint:
@@ -634,7 +647,7 @@ class SketchCanvas(QWidget):
             else:
                 points.extend(point for _reference, point in self._entity_handles(entity))
         dimension_entities = self.dimension_entities()
-        for constraint in (*self.constraints, *self.background_constraints):
+        for constraint in self.dimension_constraints():
             if constraint.kind not in DIMENSION_KINDS or self.annotation_layer(constraint).frozen:
                 continue
             layout = self.dimension_layout(constraint, dimension_entities)
@@ -668,6 +681,12 @@ class SketchCanvas(QWidget):
         self._scale = other._scale
         self._pan = QPointF(other._pan)
         self.update()
+
+    def set_source_context_revision(self, revision: int) -> None:
+        if self.source_context_revision != revision:
+            self._clear_line_edit_preview()
+            self._hovered_line_edit_entity_id = None
+        self.source_context_revision = revision
 
     def set_background_sketches(self, sketches: tuple[Sketch, ...], frame: WorkPlaneFrame) -> None:
         """Project parallel canonical planes without making source geometry editable."""
@@ -721,6 +740,8 @@ class SketchCanvas(QWidget):
                 self.message = "来源或工作平面已变化；暂存变换不能提交，请撤销或取消。"
         if self.background_entities != projected:
             self._cancel_selection_box()
+            self._clear_line_edit_preview()
+            self._hovered_line_edit_entity_id = None
         self.background_entities = projected
         self.selected_entity_ids.intersection_update(
             entity.entity_id for entity in self.selectable_entities()
@@ -756,9 +777,21 @@ class SketchCanvas(QWidget):
         return entities
 
     def dimension_constraints(self) -> tuple[SketchConstraint, ...]:
+        retained = (
+            {
+                c.constraint_id
+                for sketch in self.mixed_move.current_saved
+                for c in sketch.constraints
+            }
+            if self.mixed_move is not None and self.mixed_move_is_valid
+            else None
+        )
         constraints = {
-            c.constraint_id: c for c in (*self.background_constraints, *self.constraints)
+            c.constraint_id: c
+            for c in self.background_constraints
+            if retained is None or c.constraint_id in retained
         }
+        constraints.update((c.constraint_id, c) for c in self.constraints)
         if self.dimension_preview is not None:
             constraints.update((c.constraint_id, c) for c in self.dimension_preview.constraints)
         return tuple(constraints.values())
@@ -860,6 +893,70 @@ class SketchCanvas(QWidget):
         merged.extend(trailing_hidden)
         return tuple(merged)
 
+    def _edit_draft_with_boundaries(
+        self,
+        original: tuple[SketchEntity, ...],
+        mode: str,
+        point: Point2D,
+        target_id: str,
+        *,
+        allow_endpoint_intersections: bool = False,
+    ) -> tuple[SketchEntity, ...]:
+        result = self._edit_visible_geometry(
+            original,
+            mode,
+            point,
+            target_id,
+            allow_endpoint_intersections=allow_endpoint_intersections,
+        )
+        boundary_ids = {
+            entity.entity_id
+            for entity, layer in self.background_entities
+            if self.select_committed_entities and layer.displayed
+        }
+        draft_result = tuple(entity for entity in result if entity.entity_id not in boundary_ids)
+        return self._merge_hidden_entities(original, draft_result)
+
+    def _edit_visible_geometry(
+        self,
+        original: tuple[SketchEntity, ...],
+        mode: str,
+        point: Point2D,
+        target_id: str,
+        *,
+        allow_endpoint_intersections: bool = False,
+    ) -> tuple[SketchEntity, ...]:
+        visible = tuple(entity for entity in original if self._layer(entity).displayed)
+        boundaries = tuple(
+            entity
+            for entity, layer in self.background_entities
+            if self.select_committed_entities and layer.displayed
+        )
+        identities = [entity.entity_id for entity in original]
+        if self.select_committed_entities:
+            identities.extend(entity.entity_id for entity, _layer in self.background_entities)
+        if len(identities) != len(set(identities)):
+            raise ValueError("图元身份不唯一；无法安全确定边界，草稿未修改。")
+        combined = (*visible, *boundaries)
+        tolerance = _SNAP_RADIUS_PX / self._scale
+        if mode == "修剪":
+            result = trim_curve_at(
+                combined,
+                point,
+                hit_tolerance_mm=tolerance,
+                target_entity_id=target_id,
+                allow_endpoint_intersections=allow_endpoint_intersections,
+            )
+        elif mode == "延伸":
+            result = extend_curve_at(
+                combined, point, hit_tolerance_mm=tolerance, target_entity_id=target_id
+            )
+        else:
+            result = split_entity_at(
+                combined, point, hit_tolerance_mm=tolerance, target_entity_id=target_id
+            )
+        return result
+
     def _current_layer_can_draw(self) -> bool:
         layer = self.layer_table.get(self.active_layer_name)
         return layer.displayed and not layer.locked
@@ -940,13 +1037,32 @@ class SketchCanvas(QWidget):
         self.update()
         return True
 
-    def apply_mixed_move(self, state: MixedMoveState, entities: tuple[SketchEntity, ...]) -> None:
+    def apply_mixed_move(
+        self,
+        state: MixedMoveState,
+        entities: tuple[SketchEntity, ...],
+        *,
+        erase: bool = False,
+    ) -> None:
         """Record one validated provisional move across draft and committed geometry."""
         original = tuple(self.entities)
-        self._reject_user_constraint_reference_edits(entities)
+        if not erase:
+            self._reject_user_constraint_reference_edits(entities)
         self._record_undo()
         self.entities = list(entities)
-        self._preserve_satisfied_relations(entities, original_entities=original)
+        if erase:
+            available = {entity.entity_id for entity in entities}
+            self.constraints = [
+                constraint
+                for constraint in self.constraints
+                if all(ref.entity_id in available for ref in constraint.references)
+            ]
+        else:
+            self._preserve_satisfied_relations(entities, original_entities=original)
+        self.selected_entity_ids.intersection_update(
+            {entity.entity_id for entity in entities}
+            | {entity.entity_id for entity, _ in state.overlay_background}
+        )
         self.mixed_move = state
         self.background_entities = state.overlay_background
         self._snap_candidates_cache = None
@@ -989,12 +1105,18 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return False
         if self._selected_committed_entities() and not self.selected_constraint_ids:
-            if any(entity.entity_id in self.selected_entity_ids for entity in self.entities):
-                self.message = "暂不支持同时删除草稿和已提交图元；请选择同类对象。"
+            selected = [
+                entity.entity_id
+                for entity in (*self.entities, *(item for item, _ in self.background_entities))
+                if entity.entity_id in self.selected_entity_ids
+            ]
+            if len(selected) != len(set(selected)):
+                self.message = "选择的图元身份不唯一；请先解决重复身份，图元未修改。"
                 self.changed.emit()
                 return False
-            if self.mixed_move is not None:
-                self.message = "请先完成或撤销暂存变换，再删除已提交图元。"
+            error = self.transform_selection_error("delete_mixed")
+            if error:
+                self.message = error
                 self.changed.emit()
                 return False
             if any(
@@ -1491,7 +1613,20 @@ class SketchCanvas(QWidget):
     def begin_transform(
         self, operation: str, *, reference_rotation: bool = False, keep_source: bool = True
     ) -> None:
-        if operation not in {"move", "copy", "rotate", "mirror"} or self.has_pending_geometry:
+        if (
+            operation not in {"move", "copy", "rotate", "mirror", "erase"}
+            or self.has_pending_geometry
+        ):
+            return
+        if (
+            self.source_revision_provider is not None
+            and self.source_context_revision is not None
+            and self.source_revision_provider() != self.source_context_revision
+        ):
+            self.cancel_transform()
+            self.source_revision_invalidated.emit()
+            self.message = "文档已变化；请重新选择图元并开始操作。"
+            self.changed.emit()
             return
         if not self.set_tool("选择元素"):
             return
@@ -1501,6 +1636,9 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return
         self._transform_operation = operation
+        self._transform_source_revision = (
+            self.source_revision_provider() if self.source_revision_provider is not None else None
+        )
         self._transform_reference_mode = reference_rotation
         self._transform_reference = None
         self._transform_keep_source = keep_source
@@ -1511,7 +1649,11 @@ class SketchCanvas(QWidget):
         self._transform_preview = ()
         self._copy_placements.clear()
         self.message = (
-            "选择要变换的图元，Enter / 右键结束选择。"
+            (
+                "选择要删除的图元，Enter / 右键确认。"
+                if operation == "erase"
+                else "选择要变换的图元，Enter / 右键结束选择。"
+            )
             if self._transform_selecting
             else self._transform_point_hint()
         )
@@ -1539,10 +1681,25 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
 
+    def _transform_revision_current(self) -> bool:
+        if (
+            self._transform_source_revision is None
+            or self.source_revision_provider is None
+            or self.source_revision_provider() == self._transform_source_revision
+        ):
+            return True
+        self.cancel_transform()
+        self.source_revision_invalidated.emit()
+        self.message = "文档已变化；操作已取消，请重新选择图元。"
+        self.changed.emit()
+        self.update()
+        return False
+
     def cancel_transform(self) -> bool:
         if self._transform_operation is None:
             return False
         self._transform_operation = None
+        self._transform_source_revision = None
         self._transform_base = None
         self._transform_preview = ()
         self._transform_selecting = False
@@ -1586,13 +1743,30 @@ class SketchCanvas(QWidget):
             "copy",
             "rotate",
             "mirror",
+            "delete_mixed",
+            "offset",
+            "linear_array",
+            "circular_array",
         }:
             return "选择包含已提交图元；几何修改请通过历史编辑，当前选择已保留。"
-        if operation in {"move", "copy", "rotate", "mirror"} and any(
+        if operation in {
+            "move",
+            "copy",
+            "rotate",
+            "mirror",
+            "offset",
+            "linear_array",
+            "circular_array",
+        } and any(
             layer.locked and entity.entity_id in self.selected_entity_ids
             for entity, layer in self.background_entities
         ):
             return "选择包含已锁定图层；草稿未修改。"
+        if operation in {"offset", "linear_array", "circular_array"} and any(
+            not layer.displayed and entity.entity_id in self.selected_entity_ids
+            for entity, layer in self.background_entities
+        ):
+            return "选择包含隐藏图层；草稿未修改。"
         if any(
             self._layer(entity).locked
             for entity in self.entities
@@ -1679,6 +1853,10 @@ class SketchCanvas(QWidget):
         if self._selection_anchor is not None:
             self._finish_selection_box(self._selection_corner)
         if self._transform_selecting and self.selected_entity_ids:
+            if self._transform_operation == "erase":
+                self.cancel_transform()
+                self.delete_selected()
+                return
             error = self.transform_selection_error(self._transform_operation or "move")
             if error:
                 self.message = error
@@ -1797,6 +1975,8 @@ class SketchCanvas(QWidget):
 
     def apply_rotation_angle(self, angle_deg: float) -> bool:
         """Apply an explicit relative angle about the currently picked center."""
+        if not self._transform_revision_current():
+            return False
         if self._transform_operation != "rotate" or self._transform_base is None:
             return False
         try:
@@ -1862,6 +2042,8 @@ class SketchCanvas(QWidget):
         self.update()
 
     def _transform_point(self, point: Point2D, *, commit: bool) -> None:
+        if not self._transform_revision_current():
+            return
         if self._transform_selecting:
             if commit:
                 self._select_at(point, additive=True)
@@ -1936,6 +2118,8 @@ class SketchCanvas(QWidget):
             self.point_accepted.emit(point)
 
     def _confirm_transform_default(self) -> None:
+        if not self._transform_revision_current():
+            return
         if self._transform_selecting:
             self._finish_transform_selection()
         elif self._transform_operation == "copy" and self._transform_base is not None:
@@ -1959,6 +2143,8 @@ class SketchCanvas(QWidget):
 
     def undo_copy_placement(self) -> bool:
         """Undo only the latest placement in the active repeated-copy gesture."""
+        if not self._transform_revision_current():
+            return False
         if self._transform_operation != "copy" or not self._copy_placements:
             self.message = "没有可撤销的复制；请选择目标点。"
             self.changed.emit()
@@ -1995,6 +2181,17 @@ class SketchCanvas(QWidget):
         self._trim_drag_changed_count = 0
         self._trim_drag_last_error = None
         self._trim_drag_moved = False
+        self._trim_drag_saved_target = False
+        self._trim_drag_blocked = False
+        self._trim_drag_original_background = self.background_entities
+        self._trim_drag_saved_events = []
+        self._trim_drag_source_revision = (
+            self.source_context_revision
+            if self.source_context_revision is not None
+            else self.source_revision_provider()
+            if self.source_revision_provider is not None
+            else None
+        )
 
     def _clear_trim_drag(self) -> None:
         self._clear_line_edit_preview()
@@ -2007,6 +2204,11 @@ class SketchCanvas(QWidget):
         self._trim_drag_changed_count = 0
         self._trim_drag_last_error = None
         self._trim_drag_moved = False
+        self._trim_drag_saved_target = False
+        self._trim_drag_blocked = False
+        self._trim_drag_original_background = None
+        self._trim_drag_saved_events = []
+        self._trim_drag_source_revision = None
 
     def _update_trim_drag(self, point: Point2D) -> None:
         start = self._trim_drag_start
@@ -2037,25 +2239,74 @@ class SketchCanvas(QWidget):
                 None,
             )
             if target is None:
+                saved = next(
+                    (
+                        (entity, layer)
+                        for entity, layer in self.background_entities
+                        if entity.entity_id == target_id
+                    ),
+                    None,
+                )
+                if saved is not None:
+                    self._trim_drag_saved_target = True
+                    if saved[1].locked:
+                        self._trim_drag_last_error = "目标图元所在图层已锁定；图元未修改。"
+                        self._trim_drag_blocked = True
+                        continue
+                    try:
+                        changed = self._edit_visible_geometry(
+                            candidate_entities,
+                            "修剪",
+                            sample,
+                            target_id,
+                            allow_endpoint_intersections=True,
+                        )
+                        known = {
+                            e.entity_id
+                            for e in (
+                                *candidate_entities,
+                                *(e for e, _ in self.background_entities),
+                            )
+                        }
+                        fragments = tuple(
+                            replace(e, entity_id=uuid4().hex)
+                            if e.entity_id == target_id and type(e) is not type(saved[0])
+                            else e
+                            for e in changed
+                            if e.entity_id == target_id or e.entity_id not in known
+                        )
+                    except ValueError as exc:
+                        self._trim_drag_last_error = str(exc)
+                        if "没有与其他直线段的内部交点" not in str(exc):
+                            self._trim_drag_blocked = True
+                    else:
+                        self._trim_drag_saved_events.append((target_id, fragments))
+                        overlay: list[tuple[SketchEntity, SketchLayer]] = []
+                        for entity, layer in self.background_entities:
+                            if entity.entity_id == target_id:
+                                overlay.extend((fragment, layer) for fragment in fragments)
+                            else:
+                                overlay.append((entity, layer))
+                        self.background_entities = tuple(overlay)
+                        self._trim_drag_changed_count += 1
                 continue
             if self._layer(target).locked:
                 self._trim_drag_last_error = "目标图元所在图层已锁定；草图未修改。"
+                self._trim_drag_blocked = True
                 continue
-            visible = tuple(
-                entity for entity in candidate_entities if self._layer(entity).displayed
-            )
             try:
-                updated_visible = trim_curve_at(
-                    visible,
+                updated = self._edit_draft_with_boundaries(
+                    candidate_entities,
+                    "修剪",
                     sample,
-                    hit_tolerance_mm=_SNAP_RADIUS_PX / self._scale,
-                    target_entity_id=target_id,
+                    target_id,
                     allow_endpoint_intersections=True,
                 )
             except ValueError as exc:
                 self._trim_drag_last_error = str(exc)
+                if "没有与其他直线段的内部交点" not in str(exc):
+                    self._trim_drag_blocked = True
                 continue
-            updated = self._merge_hidden_entities(candidate_entities, updated_visible)
             if updated == candidate_entities:
                 continue
             candidate_entities = updated
@@ -2085,6 +2336,17 @@ class SketchCanvas(QWidget):
         last_error = self._trim_drag_last_error
         if start is None or original is None or original_constraints is None or candidate is None:
             return False
+        if self.source_revision_provider is not None:
+            revision = self.source_revision_provider()
+            if revision != self._trim_drag_source_revision or (
+                self.source_context_revision is not None
+                and revision != self.source_context_revision
+            ):
+                self._cancel_trim_drag()
+                self.source_revision_invalidated.emit()
+                self.message = "文档已变化；拖动修剪已取消，请重新操作。"
+                self.changed.emit()
+                return True
         if not moved:
             self.entities = list(original)
             self.constraints = list(original_constraints)
@@ -2093,6 +2355,57 @@ class SketchCanvas(QWidget):
             self._clear_trim_drag()
             self._hovered_line_edit_entity_id = None
             self._accept_point(start)
+            return True
+        if self._trim_drag_blocked and not self._trim_drag_saved_target:
+            self._cancel_trim_drag()
+            self.message = "拖动修剪未能安全完成；本次未修改。"
+            if last_error:
+                self.message += f" {last_error}"
+            self.changed.emit()
+            return True
+        if self._trim_drag_saved_target:
+            saved_events = tuple(self._trim_drag_saved_events)
+            source_revision = self._trim_drag_source_revision
+            original_background = self._trim_drag_original_background
+            final_background = self.background_entities
+            candidate_constraints = original_constraints
+            blocked = self._trim_drag_blocked or not saved_events
+            if not blocked:
+                try:
+                    self._reject_user_constraint_reference_edits(
+                        candidate, original_entities=original
+                    )
+                    self.constraints = list(original_constraints)
+                    self._preserve_satisfied_relations(candidate, original_entities=original)
+                    candidate_constraints = tuple(self.constraints)
+                except ValueError as exc:
+                    blocked = True
+                    last_error = str(exc)
+            self.entities = list(original)
+            self.constraints = list(original_constraints)
+            self.selected_entity_ids = set(original_selection or ())
+            if original_background is not None:
+                self.background_entities = original_background
+            self._snap_candidates_cache = None
+            self._clear_trim_drag()
+            self._hovered_line_edit_entity_id = None
+            if not blocked:
+                self.message = "正在校验拖动修剪。"
+                self.changed.emit()
+                self.update()
+                self.committed_drag_trim_requested.emit(
+                    saved_events,
+                    candidate,
+                    candidate_constraints,
+                    final_background,
+                    source_revision,
+                )
+                return True
+            self.message = "拖动修剪未能安全完成；本次未修改。"
+            if last_error:
+                self.message += f" {last_error}"
+            self.changed.emit()
+            self.update()
             return True
         if candidate != original:
             try:
@@ -2151,6 +2464,8 @@ class SketchCanvas(QWidget):
         self.entities = list(original)
         self.constraints = list(original_constraints)
         self.selected_entity_ids = set(self._trim_drag_original_selection or ())
+        if self._trim_drag_original_background is not None:
+            self.background_entities = self._trim_drag_original_background
         self._snap_candidates_cache = None
         self._clear_trim_drag()
         self._hovered_line_edit_entity_id = None
@@ -2354,7 +2669,7 @@ class SketchCanvas(QWidget):
     def _trim_target_at(self, point: Point2D, *, lines_only: bool = False) -> str | None:
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[SketchEntity, float]] = []
-        for entity in self._visible_entities():
+        for entity in self.selectable_entities():
             if isinstance(entity, PointEntity | SplineEntity):
                 continue
             if isinstance(entity, LineEntity):
@@ -2410,7 +2725,7 @@ class SketchCanvas(QWidget):
     def _extend_target_at(self, point: Point2D) -> str | None:
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[LineEntity | ArcEntity | PolylineEntity, float]] = []
-        for entity in self._visible_entities():
+        for entity in self.selectable_entities():
             if isinstance(entity, LineEntity):
                 endpoints = (entity.start_mm, entity.end_mm)
             elif isinstance(entity, ArcEntity):
@@ -2446,34 +2761,58 @@ class SketchCanvas(QWidget):
 
     def _refresh_line_edit_preview(self, mode: str | None) -> None:
         self._clear_line_edit_preview()
+        if (
+            self.source_revision_provider is not None
+            and self.source_context_revision is not None
+            and self.source_revision_provider() != self.source_context_revision
+        ):
+            return
         target_id = self._hovered_line_edit_entity_id
         point = self._cursor
         if mode not in {"修剪", "延伸"} or target_id is None or point is None:
             return
-        visible_entities = self._visible_entities()
+        visible_entities = self.selectable_entities()
         original = next(
             (entity for entity in visible_entities if entity.entity_id == target_id), None
         )
-        if original is None or self._layer(original).locked:
+        if original is None:
             return
-        operation = trim_curve_at if mode == "修剪" else extend_curve_at
-        try:
-            updated_visible = operation(
-                visible_entities,
-                point,
-                hit_tolerance_mm=_SNAP_RADIUS_PX / self._scale,
-                target_entity_id=target_id,
+        saved_layer = next(
+            (layer for entity, layer in self.background_entities if entity.entity_id == target_id),
+            None,
+        )
+        if saved_layer is not None:
+            if saved_layer.locked:
+                return
+            try:
+                updated_saved = self._edit_visible_geometry(
+                    tuple(self.entities), mode, point, target_id
+                )
+            except ValueError:
+                return
+            original_ids = {entity.entity_id for entity in visible_entities}
+            result = tuple(
+                entity
+                for entity in updated_saved
+                if entity.entity_id == target_id or entity.entity_id not in original_ids
             )
-            updated = self._merge_hidden_entities(tuple(self.entities), updated_visible)
+            if result:
+                self._line_edit_preview_original = original
+                self._line_edit_preview_result = result
+            return
+        if self._layer(original).locked:
+            return
+        try:
+            updated = self._edit_draft_with_boundaries(tuple(self.entities), mode, point, target_id)
             self._reject_user_constraint_reference_edits(updated)
         except ValueError:
             return
-        if updated_visible == visible_entities:
+        if updated == tuple(self.entities):
             return
-        original_ids = {entity.entity_id for entity in visible_entities}
+        original_ids = {entity.entity_id for entity in self.entities}
         result = tuple(
             entity
-            for entity in updated_visible
+            for entity in updated
             if entity.entity_id == target_id or entity.entity_id not in original_ids
         )
         if result:
@@ -3166,11 +3505,18 @@ class SketchCanvas(QWidget):
         self._snap_kind = snap_kind
         self._cursor = point
         if active_tool in {"修剪", "延伸", "分割"}:
-            operation = {
-                "修剪": trim_curve_at,
-                "延伸": extend_curve_at,
-                "分割": split_entity_at,
-            }[active_tool]
+            if (
+                self.source_revision_provider is not None
+                and self.source_context_revision is not None
+                and self.source_revision_provider() != self.source_context_revision
+            ):
+                self._clear_line_edit_preview()
+                self._hovered_line_edit_entity_id = None
+                self.source_revision_invalidated.emit()
+                self.message = "文档已变化；请重新选择图元并操作。"
+                self.changed.emit()
+                self.update()
+                return
             target_id = (
                 self._extend_target_at(point)
                 if active_tool == "延伸"
@@ -3191,20 +3537,53 @@ class SketchCanvas(QWidget):
             target = next(
                 (entity for entity in self.entities if entity.entity_id == target_id), None
             )
+            if target is None and self.select_committed_entities:
+                saved = next(
+                    (
+                        (entity, layer)
+                        for entity, layer in self.background_entities
+                        if entity.entity_id == target_id
+                    ),
+                    None,
+                )
+                if saved is None:
+                    self.message = "目标图元已变化；草稿未修改。"
+                elif saved[1].locked:
+                    self.message = "目标图元所在图层已锁定；草稿未修改。"
+                else:
+                    try:
+                        updated = self._edit_visible_geometry(
+                            tuple(self.entities), active_tool, point, target_id
+                        )
+                    except ValueError as exc:
+                        self.message = str(exc)
+                    else:
+                        original_ids = {entity.entity_id for entity in self.selectable_entities()}
+                        edited = tuple(
+                            replace(entity, entity_id=uuid4().hex)
+                            if entity.entity_id == target_id and type(entity) is not type(saved[0])
+                            else entity
+                            for entity in updated
+                            if entity.entity_id == target_id or entity.entity_id not in original_ids
+                        )
+                        self._clear_line_edit_preview()
+                        self.message = f"正在校验{active_tool}。"
+                        self.changed.emit()
+                        self.update()
+                        self.committed_line_edit_requested.emit(active_tool, target_id, edited)
+                        return
+                self.changed.emit()
+                self.update()
+                return
             if target is not None and self._layer(target).locked:
                 self.message = "目标图元所在图层已锁定；草图未修改。"
                 self.changed.emit()
                 self.update()
                 return
             try:
-                visible_entities = self._visible_entities()
-                updated_visible = operation(
-                    visible_entities,
-                    point,
-                    hit_tolerance_mm=_SNAP_RADIUS_PX / self._scale,
-                    target_entity_id=target_id,
+                updated = self._edit_draft_with_boundaries(
+                    tuple(self.entities), active_tool, point, target_id
                 )
-                updated = self._merge_hidden_entities(tuple(self.entities), updated_visible)
                 self._reject_user_constraint_reference_edits(updated)
             except ValueError as exc:
                 self.message = str(exc)
@@ -3806,6 +4185,11 @@ class SketchCanvas(QWidget):
         painter.drawLine(0, origin.y(), self.width(), origin.y())
         painter.drawLine(origin.x(), 0, origin.x(), self.height())
         for entity, layer in self.background_entities:
+            if (
+                self._line_edit_preview_original is not None
+                and entity.entity_id == self._line_edit_preview_original.entity_id
+            ):
+                continue
             self._draw_entity(
                 painter,
                 entity,
@@ -4895,7 +5279,12 @@ class SketchEditorDialog(QDialog):
             button.setIconSize(QSize(26, 26))
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             button.setMinimumHeight(54)
-            button.setToolTip(label + "：先选择草稿图元，再设置下方修改参数。")
+            button.setToolTip(
+                label + "：选择草稿或已保存图元，并设置下方修改参数。"
+                if operation in {"offset", "linear_array", "circular_array"}
+                and select_committed_entities
+                else label + "：先选择草稿图元，再设置下方修改参数。"
+            )
             button.setEnabled(False)
             button.clicked.connect(
                 lambda _checked=False, selected_operation=operation: self._start_transform(
@@ -5200,7 +5589,14 @@ class SketchEditorDialog(QDialog):
             self.layer_table,
             self._support_face,
         )
-        return (draft, *self._context_sketches)
+        mixed = self.canvas.mixed_move
+        if mixed is None or not self.canvas.mixed_move_is_valid:
+            return (draft, *self._context_sketches)
+        current = {sketch.sketch_id: sketch for sketch in mixed.current_saved}
+        return (
+            draft,
+            *(current.get(sketch.sketch_id, sketch) for sketch in self._context_sketches),
+        )
 
     def preview_dimension(
         self, original: Sketch, candidate: SketchConstraint
@@ -5227,8 +5623,7 @@ class SketchEditorDialog(QDialog):
             if candidate is not None:
                 conflicts.add(candidate.constraint_id)
             constraints = (
-                *self.canvas.constraints,
-                *self.canvas.background_constraints,
+                *self.canvas.dimension_constraints(),
                 *((candidate,) if candidate is not None else ()),
             )
             self.canvas.dimension_error_constraint_ids = frozenset(conflicts)
@@ -5284,6 +5679,8 @@ class SketchEditorDialog(QDialog):
 
     def set_context_sketches(self, sketches: tuple[Sketch, ...]) -> None:
         self._context_sketches = sketches
+        if self.canvas.source_revision_provider is not None:
+            self.canvas.set_source_context_revision(self.canvas.source_revision_provider())
         if not self.document_layer_mode:
             self.layer_table = merge_layer_tables(
                 *(s.layers for s in sketches), self.layer_table, include_dim=True
@@ -5535,7 +5932,7 @@ class SketchEditorDialog(QDialog):
         if self.canvas.has_pending_geometry:
             self.status_label.setText("当前图元未完成；先完成图元或按 Esc 清除后再完成草图。")
             return
-        if not self.canvas.entities:
+        if not self.canvas.entities and self.canvas.mixed_move is None:
             self.status_label.setText("草图至少需要一个有效元素。")
             return
         try:
@@ -5584,7 +5981,11 @@ class SketchEditorDialog(QDialog):
         return True
 
     def _change_plane(self, plane: str) -> None:
-        if self.canvas.entities or self.canvas.has_pending_geometry:
+        if (
+            self.canvas.entities
+            or self.canvas.has_pending_geometry
+            or self.canvas.mixed_move is not None
+        ):
             blocker = QSignalBlocker(self.plane_combo)
             self.plane_combo.setCurrentText(self._selected_plane)
             del blocker
@@ -5840,15 +6241,79 @@ class SketchEditorDialog(QDialog):
         self.dynamic_input.clear_locks()
 
     def _activate_command_transform(self, operation: str) -> bool:
+        if operation == "erase" and self.canvas.selected_entity_ids:
+            return self.canvas.delete_selected()
+        if operation == "erase":
+            self.canvas.begin_transform(operation)
+            return self.canvas.active_transform == operation
         self._start_transform(operation)
         return self.canvas.active_transform == operation
 
     def _apply_transform(self, operation: str) -> None:
         self.canvas.cancel_transform()
+        if (
+            self.canvas.source_revision_provider is not None
+            and self.canvas.source_context_revision is not None
+            and self.canvas.source_revision_provider() != self.canvas.source_context_revision
+            and any(
+                entity.entity_id in self.canvas.selected_entity_ids
+                for entity, _layer in self.canvas.background_entities
+            )
+        ):
+            self.canvas.source_revision_invalidated.emit()
+            self.status_label.setText("文档已变化；请重新选择图元。")
+            return
         error = self.canvas.transform_selection_error(operation)
         if error:
             self.canvas.message = error
             self.canvas.changed.emit()
+            return
+        if operation in {"offset", "linear_array", "circular_array"} and any(
+            entity.entity_id in self.canvas.selected_entity_ids
+            for entity, _layer in self.canvas.background_entities
+        ):
+            background = tuple(entity for entity, _layer in self.canvas.background_entities)
+            source = (*self.canvas.entities, *background)
+            selected = tuple(
+                entity.entity_id
+                for entity in source
+                if entity.entity_id in self.canvas.selected_entity_ids
+            )
+            if len(selected) != len(set(selected)):
+                self.status_label.setText("选择的图元身份不唯一；操作未应用。")
+                return
+            if set(selected) != self.canvas.selected_entity_ids:
+                self.status_label.setText("选择的图元已变化；操作未应用。")
+                return
+            try:
+                if operation == "offset":
+                    result = offset_entities(source, selected, self.offset_distance_field.value())
+                elif operation == "linear_array":
+                    result = linear_array_entities(
+                        source,
+                        selected,
+                        count=self.count_field.value(),
+                        step_mm=(self.delta_u_field.value(), self.delta_v_field.value()),
+                    )
+                else:
+                    result = circular_array_entities(
+                        source,
+                        selected,
+                        count=self.count_field.value(),
+                        center_mm=(self.center_u_field.value(), self.center_v_field.value()),
+                        total_angle_deg=self.pattern_angle_field.value(),
+                    )
+            except ValueError as exc:
+                self.status_label.setText(str(exc))
+                return
+            self.canvas.message = {
+                "offset": "已创建所选元素的平行偏移副本。",
+                "linear_array": "已生成线性阵列；数量包含原始元素。",
+                "circular_array": "已生成环形阵列；完整 360° 阵列不重复首末元素。",
+            }[operation]
+            self.canvas.replace_draft_entities(
+                (*self.canvas.entities, *result[len(source) :]), select_new=True
+            )
             return
         if operation == "move" and any(
             entity.entity_id in self.canvas.selected_entity_ids
@@ -6042,6 +6507,8 @@ class SketchEditorDialog(QDialog):
         with QSignalBlocker(self.tool_combo):
             self.tool_combo.setCurrentText(self.canvas.tool)
         plane = self.plane_combo.currentText()
+        for field in self.origin_fields.values():
+            field.setReadOnly(self._support_face is not None or self.canvas.mixed_move is not None)
         horizontal, vertical = {"XY": ("X", "Y"), "XZ": ("X", "−Z"), "YZ": ("Y", "Z")}.get(
             plane, ("U", "V")
         )
@@ -6065,7 +6532,7 @@ class SketchEditorDialog(QDialog):
             suffix += f" · {label} {background_count}"
         self.entity_count_label.setText(f"{len(self.canvas.entities)} 个草图元素{suffix}")
         self.finish_button.setEnabled(
-            bool(self.canvas.entities)
+            (bool(self.canvas.entities) or self.canvas.mixed_move is not None)
             and not self.canvas.has_pending_geometry
             and not self.canvas.has_active_edit_gesture
         )

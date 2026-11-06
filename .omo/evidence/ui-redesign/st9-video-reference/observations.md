@@ -118,3 +118,34 @@ V09 属完整同步直接建模参考，当前第一包和已有有序历史功�
 | 01:10 | [图纸结果](v10-0070.png)：图框、标题栏、三个正投影视图、等角图及多处尺寸可见。 | 可对照工程图最终画面的层级和组成；源模型更新、保存重开和尺寸关联仍待另行验证。 |
 
 这组仅作为 ST9 工程图参考；ST10 Draft 仍需单独证据，截图也不是 MyCAD 用户验收。
+
+## V02–V08 与 MyCAD 验收项的工程对照索引（2026-11-06）
+
+下表将已抽样画面与适用条目及现有自动测试关联，便于后续逐条实际操作；关联表示测试覆盖相关 MyCAD 行为，不表示已完成视频逐段核对、两种建模模式等价或用户验收通过。工程回归使用 Xvfb/xcb 与软件 OpenGL，真实 GPU、维护包、显示缩放及视频未展示步骤仍待核对。
+
+| 参考片段 | 验收映射 | MyCAD 工程证据与范围差异 |
+| --- | --- | --- |
+| V02 00:40–01:20，矩形选面、尺寸输入、区域 | ST10-S03、S05、S06、S09；U04/U05/U07 | `tests/ui/test_part_sketch_workbench.py::test_resident_rectangle_entry_selects_tool_before_plane`、`test_locked_rectangle_and_circle_dimensions_commit_exact_values`、`test_select_part_sketch_region_then_preview_and_confirm`；零件草图测试在 200% 缩放曾通过 116 项，之后的事件守卫另作专项复验。视频的角度输入与同步模式操作不能仅由这些测试证明等价。 |
+| V03 00:10–00:58，选择区域、对称预览、数值 | ST10-S09、S12；U07 | `tests/ui/test_part_sketch_workbench.py::test_selected_region_from_sketch_drives_extrude`、`tests/ui/test_modeling_interaction.py::test_symmetric_sketch_extrude_previews_without_writing_then_commits_centered_body`；建模交互与倒角组合 56 项通过。MyCAD 按草图和有序特征路径核验，不宣称具备同步方向盘操作。 |
+| V04 00:15–00:55，实体面上线条及边缘附近输入 | ST10-S03、S05–S07；U04/U05 | `tests/ui/test_part_sketch_workbench.py::test_line_preview_matches_inferred_endpoint`、`test_locked_line_dimensions_match_preview_and_committed_geometry`；对应的面边缘关联与捕捉行为仍须逐项核对，不能由画面外观推定。 |
+| V05 00:15–01:25，草图尺寸、区域与除料 | ST10-S08、S09、S12；U06/U07 | `tests/ui/test_part_sketch_workbench.py::test_canvas_dimension_selects_geometry_and_places_annotation`、`test_edit_driving_dimension_refreshes_reference_and_downstream`、`test_selected_region_from_sketch_drives_extrude`；视频的贯穿除料、方向和确认过程仍需按相同条件操作对照。 |
+| V06 00:22–01:07，圆输入、区域与实体预览 | ST10-S05、S06、S09、S12；U05/U07 | `tests/ui/test_part_sketch_workbench.py::test_locked_rectangle_and_circle_dimensions_commit_exact_values`、`test_offset_circle_produces_a_consumable_annular_profile`；视频中的实体端点定位和引用关联尚未由这些测试覆盖。 |
+| V07 00:22–01:22，孔类型、参数与定位 | U04/U11 的孔任务 | `tests/ui/test_bound_hole_task.py::test_bound_hole_select_preview_and_commit_upgrade`、`test_bound_hole_invalid_position_preserves_inputs_and_can_retry`；绑定孔测试与历史编辑专项有 200% 缩放回归。视频沉头孔类型及完整同步孔操作不能由已有绑定孔测试代替。 |
+| V08 00:22–01:07，圆角半径与模型尺寸 | U04 圆角；ST10-S08 尺寸范围需区分 | `tests/ui/test_fillet_interaction.py::test_fillet_selection_previews_and_commits_one_group`、`test_fillet_confirmation_requires_current_preview`；视频中的模型尺寸与方向键不等同草图尺寸或完整 PMI。 |
+
+V09 的同步直接面编辑和 V10/V11 的工程图材料仍按已有独立记录处理，不能用有序历史编辑或其他环境的测试冒充对应操作。上表引用的工程回归时间及其边界见上级目录的 `u04-progress.md`、`u05-progress.md`、`u06-progress.md`、`u07-progress.md` 和 `u11-baseline.md`。
+
+## V01 同步零件环境与选面取样
+
+来源：`01 - 01基本介紹【Solid Edge 入門課程】【同步建模技術】.mp4`，SHA-256 `7bf429551f7ada550bf9b80eb77dc84645192e40467c14fcb4ba3b02f0e31c14`，约 130.0 秒，1280×720，画面显示 ST9 同步零件、繁体中文；维护包和屏幕缩放未知。
+
+| 视频时间 | 画面与限定 | 对照范围 |
+| --- | --- | --- |
+| 00:20 | [文件菜单](v01-020.png)显示打开、最近文件及新建入口，字幕提及通过新建创建文件。 | ST9 文件菜单仅作辅助画面，不能补作 ST10 首页证据，也不能证明四入口或生命周期行为。 |
+| 00:50 | [零件工作区](v01-050.png)显示功能区多页、左侧树、画布坐标和右下视图方块。 | U03 可核对同步零件环境的画面层级；具体分组和各页操作需继续核实。 |
+| 01:20 | [直线命令条](v01-080.png)显示长度和角度，画布右下有视图方块。 | ST10-S05/S06、U05 可对照输入反馈；该静帧不能证明锁定、落点或实际尺寸。 |
+| 01:50 | [平面候选](v01-0110.png)显示多个基准平面和高亮面，字幕说明光标靠近平面后选取。 | ST10-S03/S04、U04 可对照工具先行时的选面反馈；锁面、正视和引用持久性须另行验证。 |
+
+这些为四个离散画面，并非完整操作顺序或人工验收；上述 ST10 编号是 MyCAD 验收目标的关联，不把 ST9 画面冒称 ST10。
+
+2026-11-06：上述对照中的矩形工具先选、矩形与圆精确输入、选区拉伸、对称拉伸、绑定孔与圆角六条工程测试在当前工作区以 Xvfb/xcb、软件 OpenGL、200% 缩放复验，6 项通过；此结果仍不替代参考软件的逐步对照及用户验收。

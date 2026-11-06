@@ -996,9 +996,11 @@ def test_extrude_zero_input_cannot_confirm_old_preview_and_escape_restores(qtbot
     window.show()
     view, bar = window.viewport, window.modeling_command_bar
     assert view is not None and bar is not None and window.command_palette is not None
+    window.selection_filter_actions["vertex"].trigger()
     window.command_palette.command_activated.emit("feature.extrude")
     view.set_orientation("top")
     view.fit_view()
+    camera = view.capture_view()
     assert view.pick_at(view.width() / 2, view.height() / 2)
     commit = bar.findChild(QPushButton, "modelingCommitButton")
     field = bar.findChild(QDoubleSpinBox, "distance")
@@ -1024,6 +1026,11 @@ def test_extrude_zero_input_cannot_confirm_old_preview_and_escape_restores(qtbot
     cancel.click()
     assert not view.extrude_manipulator.active
     assert loaded.document.commands == before
+    assert view.selection_filter() == "vertex"
+    assert window.selection_filter_actions["vertex"].isChecked()
+    assert view.camera_state() == (camera.distance, camera.center)
+    assert view.capture_view().orientation == camera.orientation
+    assert view.capture_view().rotation == camera.rotation
 
 
 def test_first_right_click_accepts_handle_second_commits_once(qtbot: QtBot) -> None:

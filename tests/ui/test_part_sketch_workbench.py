@@ -3444,10 +3444,13 @@ def test_tool_then_pick_model_face_and_lock(qtbot: QtBot) -> None:
     view.resize(800, 600)
     view.set_orientation("top")
     view.fit_view()
+    window.selection_filter_actions["edge"].trigger()
+    initial_view = view.capture_view()
     window.act_part_rectangle.trigger()
     task = window.part_sketch_task
     assert task is not None
     assert view.selection_filter() == "face"
+    assert window.selection_filter_actions["face"].isChecked()
     assert view.pick_at(view.width() / 2, view.height() / 2)
     assert task.plane_combo.currentText() == "所选模型平面（查询）"
     task.lock_plane()
@@ -3456,6 +3459,13 @@ def test_tool_then_pick_model_face_and_lock(qtbot: QtBot) -> None:
     assert task.session.sketch.support_face is not None
     assert isinstance(task.session.sketch.entities[0], RectangleEntity)
     task.reject()
+    assert view.selection_filter() == "edge"
+    assert window.selection_filter_actions["edge"].isChecked()
+    restored_view = view.capture_view()
+    assert restored_view.distance == initial_view.distance
+    assert restored_view.center == initial_view.center
+    assert restored_view.orientation == initial_view.orientation
+    assert restored_view.rotation == initial_view.rotation
 
 
 def test_2d_entry_does_not_turn_part_into_a_drawing(qtbot: QtBot) -> None:
@@ -3501,6 +3511,165 @@ def test_escape_before_plane_lock_cancels_selected_tool(qtbot: QtBot) -> None:
     assert task.select_button.isChecked()
     assert not task.rectangle_button.isChecked()
     task.reject()
+
+
+def test_stale_part_sketch_cleanup_preserves_current_session_filter(qtbot: QtBot) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    view.set_selection_filter("edge")
+    session = [4]
+    task = PartSketchWorkbench(
+        services, loaded, view, session_identity=4, current_session=lambda: session[0]
+    )
+    qtbot.addWidget(task)
+    assert view.selection_filter() == "face"
+    session[0] = 5
+    view.set_selection_filter("vertex")
+    task.reject()
+    assert view.selection_filter() == "vertex"
+
+
+def test_stale_part_sketch_does_not_intercept_current_session_input(qtbot: QtBot) -> None:
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QKeyEvent, QMouseEvent
+
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    session = [4]
+    task = PartSketchWorkbench(
+        services,
+        loaded,
+        view,
+        session_identity=4,
+        current_session=lambda: session[0],
+        can_execute=lambda: False,
+    )
+    qtbot.addWidget(task)
+    session[0] = 5
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier)
+    assert not task.eventFilter(view, event)
+    mouse = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(20, 20),
+        QPointF(20, 20),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert not task.eventFilter(view, mouse)
+    task.reject()
+
+
+def test_closed_part_sketch_cannot_modify_active_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    busy = [False]
+    task = PartSketchWorkbench(
+        services, loaded, view, session_identity=4, can_execute=lambda: not busy[0]
+    )
+    qtbot.addWidget(task)
+    finished: list[int] = []
+    task.finished.connect(finished.append)
+    task.reject()
+    calls: list[bool] = []
+
+    def record_curves(*_args: object, **_kwargs: object) -> None:
+        calls.append(True)
+
+    monkeypatch.setattr(view, "set_draft_sketch_curves", record_curves)
+    monkeypatch.setattr(view, "clear_candidate_preview", record_curves)
+    busy[0] = True
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier)
+    assert not task.eventFilter(view, event)
+    busy[0] = False
+    task.select_tool("line")
+    task.lock_plane()
+    loaded.bus.execute("feature.box", {"size_x": 2, "size_y": 2, "size_z": 2})
+    task.reject()
+    task.accept()
+    assert not calls
+    assert len(finished) == 1
+    assert len(loaded.document.commands) == 1
+
+
+def test_part_sketch_normal_view_works_before_and_after_lock(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    task = PartSketchWorkbench(services, loaded, view, session_identity=4)
+    qtbot.addWidget(task)
+    calls: list[object] = []
+
+    def record_view(frame: object) -> None:
+        calls.append(frame)
+
+    monkeypatch.setattr(view, "look_at_workplane", record_view)
+    task.normal_view_button.click()
+    assert len(calls) == 1
+    task.lock_plane()
+    calls.clear()
+    task.normal_view_button.click()
+    assert len(calls) == 1
+    task.reject()
+
+
+@pytest.mark.parametrize("expiry", ["session", "closed", "revision"])
+def test_old_dynamic_input_cannot_clear_current_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, expiry: str
+) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    session = [4]
+    task = PartSketchWorkbench(
+        services, loaded, view, session_identity=4, current_session=lambda: session[0]
+    )
+    qtbot.addWidget(task)
+    task.lock_plane()
+    task.select_tool("line")
+    task.place_uv((0.0, 0.0))
+    monkeypatch.setattr(task, "_last_dynamic_point", (1.0, 1.0))
+    if expiry == "closed":
+        task.reject()
+    elif expiry == "session":
+        session[0] = 5
+    else:
+        loaded.bus.execute("feature.box", {"size_x": 2, "size_y": 2, "size_z": 2})
+    calls: list[str] = []
+
+    def record_view(*_args: object, **_kwargs: object) -> None:
+        calls.append("view")
+
+    monkeypatch.setattr(view, "set_draft_sketch_regions", record_view)
+    monkeypatch.setattr(view, "set_position_markers", record_view)
+    monkeypatch.setattr(view, "look_at_workplane", record_view)
+    monkeypatch.setattr(task, "_preview_drawing", record_view)
+    task.dynamic_input.changed.emit()
+    task.dynamic_input.escape_requested.emit()
+    task.normal_view_button.click()
+    assert calls == []
+    if expiry != "closed":
+        task.reject()
 
 
 def test_sketch_ribbon_is_resident_grouped_and_reuses_active_page(qtbot: QtBot) -> None:

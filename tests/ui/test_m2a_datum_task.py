@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Datum tasks preview isolated candidates before an explicit Bus commit."""
 
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -47,6 +48,152 @@ def test_empty_part_datum_task_cancel_and_commit(qtbot: QtBot) -> None:
     assert loaded.document.archive_version == 6
     assert loaded.document.commands[-1].id == "datum.coordinate_system.create"
     assert services.kernel.datum_display_data()[0].name == "工作坐标"
+
+
+@pytest.mark.parametrize("positioning", [False, True])
+def test_stale_datum_task_does_not_touch_current_session_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, positioning: bool
+) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    session = [7]
+    task = DatumTaskDialog(
+        services, loaded, view, session_identity=7, current_session=lambda: session[0]
+    )
+    qtbot.addWidget(task)
+    task.preview()
+    assert task.confirm_button.isEnabled()
+    if positioning:
+        task.open_positioning()
+        assert task.position_dialog is not None
+        task.position_dialog.lock_plane()
+    else:
+        task.start_origin_pick()
+    session[0] = 8
+    calls: list[str] = []
+
+    def recorder(method: str) -> Callable[..., None]:
+        def record(*_args: object) -> None:
+            calls.append(method)
+
+        return record
+
+    for name in (
+        "clear_candidate_preview",
+        "set_origin_hotspot",
+        "set_position_markers",
+        "set_datum_pick_filter",
+        "set_workplane_grid",
+    ):
+        monkeypatch.setattr(view, name, recorder(name))
+    task.name_field.setText("旧会话")
+    task.preview()
+    task.confirm()
+    assert not loaded.document.commands
+    previous_dialog = task.position_dialog
+    task.open_positioning()
+    assert task.position_dialog is previous_dialog
+    task.kind_combo.setCurrentIndex(1)
+    mouse = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(20, 20),
+        QPointF(20, 20),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert not task.eventFilter(view, mouse)
+    if task.position_dialog is not None:
+        task.position_dialog.u_field.setValue(10.0)
+        assert not task.position_dialog.eventFilter(view, mouse)
+    loaded.bus.execute("feature.box", {"size_x": 2, "size_y": 2, "size_z": 2})
+    qtbot.waitUntil(lambda: "模型已改变" in task.status_label.text(), timeout=5000)
+    task.reject()
+    assert calls == []
+
+
+def test_closed_positioning_dialog_cannot_change_active_task_or_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    task = DatumTaskDialog(services, loaded, view, session_identity=7)
+    qtbot.addWidget(task)
+    task.preview()
+    task.open_positioning()
+    dialog = task.position_dialog
+    assert dialog is not None
+    dialog.lock_plane()
+    finished: list[int] = []
+    dialog.finished.connect(finished.append)
+    dialog.reject()
+    original_origin = tuple(field.value() for field in task.origin_fields)
+    calls: list[str] = []
+
+    def recorder(method: str) -> Callable[..., None]:
+        def record(*_args: object) -> None:
+            calls.append(method)
+
+        return record
+
+    for name in ("set_workplane_grid", "set_position_markers", "look_at_workplane"):
+        monkeypatch.setattr(view, name, recorder(name))
+    dialog.u_field.setValue(10.0)
+    dialog.grid_visible.setChecked(not dialog.grid_visible.isChecked())
+    dialog.look_button.click()
+    dialog.adopt()
+    dialog.reject()
+    dialog.accept()
+    assert not calls
+    assert len(finished) == 1
+    assert tuple(field.value() for field in task.origin_fields) == original_origin
+    task.reject()
+
+
+def test_closed_datum_task_cannot_change_active_viewport(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.bind_document(loaded)
+    task = DatumTaskDialog(services, loaded, view, session_identity=7)
+    qtbot.addWidget(task)
+    task.preview()
+    finished: list[int] = []
+    task.finished.connect(finished.append)
+    task.reject()
+    calls: list[str] = []
+
+    def recorder(method: str) -> Callable[..., None]:
+        def record(*_args: object) -> None:
+            calls.append(method)
+
+        return record
+
+    for name in (
+        "clear_candidate_preview",
+        "set_origin_hotspot",
+        "set_position_markers",
+        "set_datum_pick_filter",
+    ):
+        monkeypatch.setattr(view, name, recorder(name))
+    task.kind_combo.setCurrentIndex(1)
+    task.preview()
+    task.start_origin_pick()
+    task.open_positioning()
+    task.reject()
+    task.accept()
+    assert not calls
+    assert len(finished) == 1
+    assert not loaded.document.commands
 
 
 def test_v4_datum_preview_cancel_preserves_redo(qtbot: QtBot) -> None:

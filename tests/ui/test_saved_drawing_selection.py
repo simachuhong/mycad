@@ -7,7 +7,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from pytestqt.qtbot import QtBot
 
@@ -129,7 +129,7 @@ def test_selected_saved_objects_are_cleared_by_document_undo(
     assert canvas.selected_entity_ids == {inside.entity_id}
 
 
-def test_saved_and_new_objects_share_selection_without_partial_transform(
+def test_saved_and_new_objects_share_selection_without_changing_history(
     reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
 ) -> None:
     window, inside, _crosses = reopened_drawing
@@ -137,6 +137,7 @@ def test_saved_and_new_objects_share_selection_without_partial_transform(
     loaded = window.loaded_document()
     assert draft is not None and loaded is not None
     canvas = draft.canvas
+    original_commands = loaded.document.commands
     draft.tool_buttons["选择元素"].click()
     QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((0.0, 0.0)))
     new_line = LineEntity(uuid4().hex, (10.0, -10.0), (20.0, -10.0))
@@ -149,14 +150,1732 @@ def test_saved_and_new_objects_share_selection_without_partial_transform(
         canvas.local_to_screen((15.0, -10.0)),
     )
     assert canvas.selected_entity_ids == {inside.entity_id, new_line.entity_id}
-    original_commands = loaded.document.commands
-    draft.transform_buttons["offset"].click()
     assert not canvas.has_active_edit_gesture
     assert tuple(canvas.entities) == (new_line,)
     assert loaded.document.commands == original_commands
     assert canvas.selected_entity_ids == {inside.entity_id, new_line.entity_id}
-    assert "历史编辑" in draft.status_label.text()
     draft.cancel_button.click()
+
+
+def test_offset_saved_and_draft_creates_replayable_copies(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    canvas = editor.canvas
+    line = LineEntity(uuid4().hex, (10.0, 4.0), (20.0, 4.0))
+    canvas.replace_draft_entities((line,))
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {saved.entity_id, line.entity_id}
+    canvas.changed.emit()
+    editor.offset_distance_field.setValue(3.0)
+    before = loaded.document.commands
+    editor.transform_buttons["offset"].click()
+    assert loaded.document.commands == before
+    assert tuple(e for e, _ in canvas.background_entities) == (saved, other)
+    assert len(canvas.entities) == 3
+    copies = [entity for entity in canvas.entities if entity.entity_id != line.entity_id]
+    assert len({entity.entity_id for entity in copies}) == 2
+    assert all(isinstance(entity, LineEntity) for entity in copies)
+    assert {
+        (entity.start_mm, entity.end_mm) for entity in copies if isinstance(entity, LineEntity)
+    } == {((-5.0, 3.0), (5.0, 3.0)), ((10.0, 7.0), (20.0, 7.0))}
+    window.request_undo()
+    assert canvas.entities == [line]
+    window.request_redo()
+    assert len(canvas.entities) == 3
+    expected = tuple(canvas.entities)
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    submitted = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not submitted and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    actual = {entity.entity_id: entity for entity, _ in reopened.canvas.background_entities}
+    assert all(actual[entity.entity_id] == entity for entity in expected)
+    assert actual[saved.entity_id] == saved and actual[other.entity_id] == other
+
+
+@pytest.mark.parametrize("failure", ["zero", "spline"])
+def test_offset_saved_mixed_failure_preserves_selection_and_geometry(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], failure: str
+) -> None:
+    from mycad.core.sketch import SplineEntity
+
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = SplineEntity(uuid4().hex, ((10, 10), (12, 15), (16, 15), (20, 10)))
+    canvas.replace_draft_entities((draft,))
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {saved.entity_id, draft.entity_id}
+    canvas.changed.emit()
+    editor.offset_distance_field.setValue(0.0 if failure == "zero" else 2.0)
+    before = loaded.document.commands
+    editor.transform_buttons["offset"].click()
+    assert canvas.entities == [draft]
+    assert tuple(e for e, _ in canvas.background_entities) == (saved, other)
+    assert canvas.selected_entity_ids == {saved.entity_id, draft.entity_id}
+    assert loaded.document.commands == before
+    assert ("非零" if failure == "zero" else "样条") in editor.status_label.text()
+
+
+def test_offset_saved_uses_current_workplane_coordinates(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    editor.origin_fields["X"].setValue(10.0)
+    editor.tool_buttons["选择元素"].click()
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    canvas.changed.emit()
+    editor.offset_distance_field.setValue(3.0)
+    editor.transform_buttons["offset"].click()
+    assert len(canvas.entities) == 1
+    offset = canvas.entities[0]
+    assert isinstance(offset, LineEntity)
+    assert offset.start_mm == pytest.approx((-15.0, 3.0))
+    assert offset.end_mm == pytest.approx((-5.0, 3.0))
+
+
+@pytest.mark.parametrize("tool", ["修剪", "延伸", "分割"])
+def test_saved_geometry_is_read_only_boundary_for_draft_edit(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], tool: str
+) -> None:
+    window, first, boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    end_y = 0.0 if tool == "延伸" else 10.0
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, end_y))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool(tool)
+    before = loaded.document.commands
+    point = (25.0, 0.0) if tool != "修剪" else (25.0, 8.0)
+    canvas.add_coordinate_point(point, exact_point=True)
+    assert loaded.document.commands == before
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, boundary)
+    if tool == "分割":
+        assert len(canvas.entities) == 2
+        assert canvas.entities[0].entity_id == draft.entity_id
+    else:
+        assert len(canvas.entities) == 1
+        result = canvas.entities[0]
+        assert isinstance(result, LineEntity)
+        assert result.entity_id == draft.entity_id
+        assert result.end_mm == pytest.approx((25.0, 5.0))
+    window.request_undo()
+    assert canvas.entities == [draft]
+
+
+@pytest.mark.parametrize("tool", ["修剪", "延伸"])
+def test_saved_boundary_preview_matches_mouse_commit(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], tool: str
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    end_y = 0.0 if tool == "延伸" else 10.0
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, end_y))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool(tool)
+    point = (25.0, 0.0) if tool == "延伸" else (25.0, 8.0)
+    pixel = canvas.local_to_screen(point)
+    QTest.mouseMove(canvas, pixel)
+    qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    preview = canvas.previewed_line_edit_entities
+    assert canvas.entities == [draft]
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=pixel)
+    assert tuple(canvas.entities) == preview
+
+
+def test_line_edit_preview_clears_when_document_revision_changes(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool("修剪")
+    QTest.mouseMove(canvas, canvas.local_to_screen((25.0, 8.0)))
+    qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    editor.set_context_sketches(editor.dimension_sources()[1:])
+    assert canvas.previewed_line_edit_original is None
+    assert not canvas.previewed_line_edit_entities
+    assert canvas.entities == [draft]
+
+
+def test_line_edit_hover_does_not_preview_stale_boundaries(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool("修剪")
+    QTest.mouseMove(canvas, canvas.local_to_screen((25.0, 8.0)))
+    qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    QTest.mouseMove(canvas, canvas.local_to_screen((25.0, 9.0)))
+    assert canvas.previewed_line_edit_original is None
+    assert not canvas.previewed_line_edit_entities
+
+
+@pytest.mark.parametrize("drag", [False, True])
+@pytest.mark.parametrize("refresh", [False, True])
+def test_draft_trim_rejects_stale_saved_boundaries(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], drag: bool, refresh: bool
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool("修剪")
+    end = canvas.local_to_screen((26.0, 8.0))
+    if drag:
+        start = canvas.local_to_screen((24.0, 8.0))
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(canvas, end)
+        assert canvas.entities != [draft]
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    if refresh:
+        editor.set_context_sketches(editor.dimension_sources()[1:])
+    if drag:
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    else:
+        canvas.add_coordinate_point((25.0, 8.0), exact_point=True)
+    if refresh and not drag:
+        # A fresh click after a context refresh uses the refreshed boundaries.
+        assert canvas.entities != [draft]
+        assert loaded.document.commands == after_external
+        return
+    assert canvas.entities == [draft]
+    assert loaded.document.commands == after_external
+    assert "变化" in editor.status_label.text()
+
+
+@pytest.mark.parametrize("tool", ["延伸", "分割"])
+def test_draft_line_edit_rejects_stale_saved_boundaries(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], tool: str
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    end_y = 0.0 if tool == "延伸" else 10.0
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, end_y))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool(tool)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    canvas.add_coordinate_point((25.0, 0.0), exact_point=True)
+    assert canvas.entities == [draft]
+    assert loaded.document.commands == after_external
+    assert "变化" in editor.status_label.text()
+
+
+def test_drag_started_on_stale_context_is_not_revived_by_refresh(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, _first, _boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool("修剪")
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    start = canvas.local_to_screen((24.0, 8.0))
+    end = canvas.local_to_screen((26.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    assert canvas.entities != [draft]
+    editor.set_context_sketches(editor.dimension_sources()[1:])
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [draft]
+    assert loaded.document.commands == after_external
+    assert "变化" in editor.status_label.text()
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_saved_boundary_visibility_and_lock_state(qtbot: QtBot, locked: bool) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    boundary = LineEntity(uuid4().hex, (-10.0, 0.0), (10.0, 0.0), layer_name="boundary")
+    layers = SketchLayerTable().add(SketchLayer("boundary", locked=locked, visible=locked))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (boundary,), layers=layers),), frame)
+    target = LineEntity(uuid4().hex, (0.0, -10.0), (0.0, 10.0))
+    canvas.replace_draft_entities((target,))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((0.0, 8.0), exact_point=True)
+    if locked:
+        assert canvas.entities == [LineEntity(target.entity_id, (0.0, -10.0), (0.0, 0.0))]
+    else:
+        assert canvas.entities == [target]
+    assert canvas.background_entities[0][0] == boundary
+
+
+@pytest.mark.parametrize("select_saved", [False, True])
+def test_hidden_saved_identity_collision_cannot_remove_draft_on_trim(
+    qtbot: QtBot, select_saved: bool
+) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=select_saved)
+    qtbot.addWidget(canvas)
+    identity = uuid4().hex
+    hidden = LineEntity(identity, (-30.0, -20.0), (30.0, -20.0), layer_name="hidden")
+    layers = SketchLayerTable().add(SketchLayer("hidden", visible=False))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (hidden,), layers=layers),), frame)
+    target = LineEntity(identity, (0.0, -10.0), (0.0, 10.0))
+    boundary = LineEntity(uuid4().hex, (-10.0, 0.0), (10.0, 0.0))
+    canvas.replace_draft_entities((target, boundary))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((0.0, 8.0), exact_point=True)
+    if select_saved:
+        assert canvas.entities == [target, boundary]
+        assert "身份" in canvas.message
+    else:
+        assert canvas.entities == [
+            LineEntity(identity, (0.0, -10.0), (0.0, 0.0)),
+            boundary,
+        ]
+
+
+def test_saved_boundary_drag_trim_is_one_draft_undo(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, first, boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    target = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((target,))
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    start, end = canvas.local_to_screen((25.0, 8.0)), canvas.local_to_screen((25.0, 9.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [LineEntity(target.entity_id, (25.0, -10.0), (25.0, 5.0))]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, boundary)
+    window.request_undo()
+    assert canvas.entities == [target]
+
+
+def test_saved_boundary_duplicate_identity_is_rejected(qtbot: QtBot) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    identity = uuid4().hex
+    boundary = LineEntity(identity, (-10.0, 0.0), (10.0, 0.0))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (boundary,)),), frame)
+    draft = LineEntity(identity, (0.0, -10.0), (0.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((0.0, 8.0), exact_point=True)
+    assert canvas.entities == [draft]
+    assert canvas.background_entities[0][0] == boundary
+    assert "身份不唯一" in canvas.message
+
+
+def test_part_reference_is_not_used_as_drawing_boundary(qtbot: QtBot) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=False)
+    qtbot.addWidget(canvas)
+    boundary = LineEntity(uuid4().hex, (-10.0, 0.0), (10.0, 0.0))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (boundary,)),), frame)
+    target = LineEntity(uuid4().hex, (0.0, -10.0), (0.0, 10.0))
+    canvas.replace_draft_entities((target,))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((0.0, 8.0), exact_point=True)
+    assert canvas.entities == [target]
+
+
+def test_boundary_preview_does_not_include_hidden_draft_geometry(qtbot: QtBot) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    layers = SketchLayerTable().add(SketchLayer("hidden", visible=False))
+    canvas.set_layer_table(layers, "0")
+    boundary = LineEntity(uuid4().hex, (-10.0, 0.0), (10.0, 0.0))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (boundary,)),), frame)
+    target = LineEntity(uuid4().hex, (0.0, -10.0), (0.0, 10.0))
+    hidden = LineEntity(uuid4().hex, (20.0, 0.0), (30.0, 0.0), layer_name="hidden")
+    canvas.replace_draft_entities((target, hidden))
+    canvas.set_tool("修剪")
+    QTest.mouseMove(canvas, canvas.local_to_screen((0.0, 8.0)))
+    qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    assert {e.entity_id for e in canvas.previewed_line_edit_entities} == {target.entity_id}
+    assert canvas.entities == [target, hidden]
+
+
+def test_trim_against_saved_boundary_survives_save_and_reopen(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, first, boundary = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    canvas = editor.canvas
+    target = LineEntity(uuid4().hex, (25.0, -10.0), (25.0, 10.0))
+    canvas.replace_draft_entities((target,))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((25.0, 8.0), exact_point=True)
+    expected = LineEntity(target.entity_id, (25.0, -10.0), (25.0, 5.0))
+    assert canvas.entities == [expected]
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    actual = {entity.entity_id: entity for entity, _layer in reopened.canvas.background_entities}
+    assert actual[first.entity_id] == first and actual[boundary.entity_id] == boundary
+    assert actual[target.entity_id] == expected
+
+
+@pytest.mark.parametrize("tool", ["修剪", "延伸", "分割"])
+def test_saved_target_edits_are_replayable_and_undoable(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], tool: str
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    boundary_x = 40.0 if tool == "延伸" else 20.0
+    boundary = LineEntity(uuid4().hex, (boundary_x, -5.0), (boundary_x, 10.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    qtbot.waitUntil(lambda: not unit.is_busy and not unit.is_delivering_result, timeout=10000)
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool(tool)
+    before = loaded.document.commands
+    point = (30.0, 5.0) if tool == "延伸" else (25.0, 5.0)
+    pixel = canvas.local_to_screen(point)
+    if tool != "分割":
+        QTest.mouseMove(canvas, pixel + QPoint(4, 4))
+        QTest.mouseMove(canvas, pixel)
+        qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=pixel)
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) > len(before) and not unit.is_busy, timeout=10000
+    )
+    result = {entity.entity_id: entity for entity, _layer in canvas.background_entities}
+    assert result[boundary.entity_id] == boundary
+    assert isinstance(result[target.entity_id], LineEntity)
+    if tool == "分割":
+        assert len(result) == 4
+    else:
+        edited = result[target.entity_id]
+        assert isinstance(edited, LineEntity)
+        assert edited.end_mm == pytest.approx((boundary_x, 5.0))
+    window.act_save.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy,
+        timeout=10000,
+    )
+    editor = window.active_sketch_dialog()
+    reopened_loaded = window.loaded_document()
+    assert editor is not None and reopened_loaded is not None
+    canvas = editor.canvas
+    assert {entity.entity_id: entity for entity, _layer in canvas.background_entities} == result
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(reopened_loaded.document.commands) == len(before),
+        timeout=10000,
+    )
+    restored = {entity.entity_id: entity for entity, _layer in canvas.background_entities}
+    assert restored[target.entity_id] == target and restored[boundary.entity_id] == boundary
+
+
+@pytest.mark.parametrize("tool", ["修剪", "延伸", "分割"])
+def test_saved_edit_with_draft_boundary_is_staged_and_undoable(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], tool: str
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    canvas = editor.canvas
+    boundary_x = 40.0 if tool == "延伸" else 20.0
+    boundary = LineEntity(uuid4().hex, (boundary_x, -5.0), (boundary_x, 10.0))
+    canvas.replace_draft_entities((boundary,))
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool(tool)
+    before = loaded.document.commands
+    point = (30.0, 5.0) if tool == "延伸" else (25.0, 5.0)
+    pixel = canvas.local_to_screen(point)
+    if tool != "分割":
+        QTest.mouseMove(canvas, pixel + QPoint(4, 4))
+        QTest.mouseMove(canvas, pixel)
+        qtbot.waitUntil(lambda: bool(canvas.previewed_line_edit_entities), timeout=5000)
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=pixel)
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    assert loaded.document.commands == before and canvas.entities == [boundary]
+    edited = {entity.entity_id: entity for entity, _layer in canvas.background_entities}[
+        target.entity_id
+    ]
+    assert isinstance(edited, LineEntity) and edited.end_mm == pytest.approx((boundary_x, 5.0))
+    window.request_undo()
+    assert {entity.entity_id: entity for entity, _layer in canvas.background_entities}[
+        target.entity_id
+    ] == target
+    assert canvas.entities == [boundary]
+    window.request_redo()
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    restored = {entity.entity_id: entity for entity, _layer in reopened.canvas.background_entities}
+    assert restored[target.entity_id] == target and restored[boundary.entity_id] == boundary
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_saved_trim_rejects_violating_driving_dimension(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], mixed: bool
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    target = LineEntity(uuid4().hex, (-30.0, 30.0), (30.0, 30.0))
+    dimension = SketchConstraint(
+        uuid4().hex, "length", (SketchGeometryReference(target.entity_id, "geometry"),), 60.0, "mm"
+    )
+    editor.canvas.replace_draft_entities((target,))
+    editor.canvas.constraints = [dimension]
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    boundary = LineEntity(uuid4().hex, (20.0, 20.0), (20.0, 40.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    if not mixed:
+        editor.finish_button.click()
+        qtbot.waitUntil(
+            lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+        )
+        editor = window.active_sketch_dialog()
+        assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    assert canvas.set_tool("修剪")
+    before = loaded.document.commands
+    canvas.add_coordinate_point((25.0, 30.0), exact_point=True)
+    qtbot.waitUntil(
+        lambda: "失败" in editor.status_label.text() and not unit.is_busy, timeout=10000
+    )
+    assert loaded.document.commands == before
+    assert canvas.entities == ([boundary] if mixed else [])
+    assert {e.entity_id: e for e, _layer in canvas.background_entities}[target.entity_id] == target
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+
+
+def test_saved_trim_converts_from_current_workplane_to_source_frame(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    editor.origin_fields["X"].setValue(10.0)
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((15.0, 5.0), exact_point=True)
+    qtbot.waitUntil(
+        lambda: (
+            not unit.is_busy
+            and any(
+                e.entity_id == target.entity_id
+                and isinstance(e, LineEntity)
+                and e.end_mm[0] == pytest.approx(10.0)
+                for e, _layer in canvas.background_entities
+            )
+        ),
+        timeout=10000,
+    )
+    editor.origin_fields["X"].setValue(0.0)
+    actual = {entity.entity_id: entity for entity, _layer in canvas.background_entities}
+    edited = actual[target.entity_id]
+    assert isinstance(edited, LineEntity) and edited.end_mm == pytest.approx((20.0, 5.0))
+    assert actual[boundary.entity_id] == boundary
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_saved_line_edit_rejects_hidden_or_locked_target(qtbot: QtBot, locked: bool) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    layer = SketchLayer("restricted", locked=locked, visible=locked)
+    layers = SketchLayerTable().add(layer)
+    target = LineEntity(uuid4().hex, (-30.0, 5.0), (30.0, 5.0), layer_name="restricted")
+    boundary = LineEntity(uuid4().hex, (20.0, 0.0), (20.0, 10.0))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches(
+        (Sketch(uuid4().hex, frame, (target, boundary), layers=layers),), frame
+    )
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((25.0, 5.0), exact_point=True)
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (target, boundary)
+    assert ("锁定" if locked else "点选") in canvas.message
+
+
+def test_trim_saved_circle_creates_new_arc_identity_and_undoes(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch import ArcEntity, CircleEntity
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    circle = CircleEntity(uuid4().hex, (0.0, 30.0), 10.0)
+    cutters = tuple(LineEntity(uuid4().hex, (x, 20.0), (x, 40.0)) for x in (-5.0, 5.0))
+    editor.canvas.replace_draft_entities((circle, *cutters))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    canvas.add_coordinate_point((0.0, 40.0), exact_point=True)
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert len(loaded.document.commands) == len(before) + 1, editor.status_label.text()
+    objects = tuple(e for e, _layer in canvas.background_entities)
+    assert circle.entity_id not in {e.entity_id for e in objects}
+    arcs = [e for e in objects if isinstance(e, ArcEntity) and e.center_mm == circle.center_mm]
+    assert len(arcs) == 1 and arcs[0].entity_id != circle.entity_id
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(loaded.document.commands) == len(before), timeout=10000
+    )
+    assert circle in tuple(e for e, _layer in canvas.background_entities)
+
+
+def test_drag_trim_saved_circle_creates_new_arc_and_undoes(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch import ArcEntity, CircleEntity
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    circle = CircleEntity(uuid4().hex, (0.0, 30.0), 10.0)
+    cutters = tuple(LineEntity(uuid4().hex, (x, 20.0), (x, 40.0)) for x in (-5.0, 5.0))
+    editor.canvas.replace_draft_entities((circle, *cutters))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=10000)
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((-1.0, 40.0)), canvas.local_to_screen((1.0, 40.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) > len(before) and not unit.is_busy, timeout=10000
+    )
+    objects = tuple(e for e, _layer in canvas.background_entities)
+    assert circle.entity_id not in {e.entity_id for e in objects}
+    arcs = [e for e in objects if isinstance(e, ArcEntity) and e.center_mm == circle.center_mm]
+    assert len(arcs) == 1 and arcs[0].entity_id != circle.entity_id
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(loaded.document.commands) == len(before), timeout=10000
+    )
+    assert circle in tuple(e for e, _layer in canvas.background_entities)
+
+
+@pytest.mark.parametrize("drag", [False, True])
+def test_trim_saved_circle_with_dimension_rejects_identity_change(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], drag: bool
+) -> None:
+    from mycad.core.sketch import CircleEntity
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    circle = CircleEntity(uuid4().hex, (0.0, 30.0), 10.0)
+    dimension = SketchConstraint(
+        uuid4().hex, "radius", (SketchGeometryReference(circle.entity_id, "geometry"),), 10.0, "mm"
+    )
+    cutters = tuple(LineEntity(uuid4().hex, (x, 20.0), (x, 40.0)) for x in (-5.0, 5.0))
+    editor.canvas.replace_draft_entities((circle, *cutters))
+    editor.canvas.constraints = [dimension]
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    if drag:
+        start = canvas.local_to_screen((-1.0, 40.0))
+        end = canvas.local_to_screen((1.0, 40.0))
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(canvas, end)
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    else:
+        canvas.add_coordinate_point((0.0, 40.0), exact_point=True)
+    qtbot.waitUntil(
+        lambda: "失败" in editor.status_label.text() and not unit.is_busy, timeout=10000
+    )
+    assert loaded.document.commands == before
+    assert circle in tuple(e for e, _layer in canvas.background_entities)
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+
+
+@pytest.mark.parametrize("drag", [False, True])
+def test_trim_saved_circle_with_draft_boundaries_preserves_history(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], drag: bool
+) -> None:
+    from mycad.core.sketch import ArcEntity, CircleEntity
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    circle = CircleEntity(uuid4().hex, (0.0, 30.0), 10.0)
+    editor.canvas.replace_draft_entities((circle,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    cutters = tuple(LineEntity(uuid4().hex, (x, 20.0), (x, 40.0)) for x in (-5.0, 5.0))
+    canvas.replace_draft_entities(cutters)
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    if drag:
+        start = canvas.local_to_screen((-1.0, 40.0))
+        end = canvas.local_to_screen((1.0, 40.0))
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(canvas, end)
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    else:
+        canvas.add_coordinate_point((0.0, 40.0), exact_point=True)
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    assert loaded.document.commands == before
+    arcs = [
+        e
+        for e, _layer in canvas.background_entities
+        if isinstance(e, ArcEntity) and e.center_mm == circle.center_mm
+    ]
+    assert len(arcs) == 1 and arcs[0].entity_id != circle.entity_id
+    window.request_undo()
+    assert circle in tuple(e for e, _layer in canvas.background_entities)
+    assert tuple(canvas.entities) == cutters
+    window.request_redo()
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    objects = tuple(e for e, _layer in reopened.canvas.background_entities)
+    assert circle in objects and all(cutter in objects for cutter in cutters)
+
+
+@pytest.mark.parametrize("drag", [False, True])
+def test_saved_trim_with_later_draft_edit_keeps_history_order(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], drag: bool
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    canvas = editor.canvas
+    first_boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    second_boundary = LineEntity(uuid4().hex, (0.0, -5.0), (0.0, 10.0))
+    canvas.replace_draft_entities((first_boundary,))
+    canvas.set_tool("修剪")
+    canvas.add_coordinate_point((25.0, 5.0), exact_point=True)
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    canvas.replace_draft_entities((*canvas.entities, second_boundary))
+    if drag:
+        start, end = canvas.local_to_screen((15.0, 5.0)), canvas.local_to_screen((18.0, 5.0))
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(canvas, end)
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    else:
+        canvas.add_coordinate_point((15.0, 5.0), exact_point=True)
+    qtbot.waitUntil(
+        lambda: (
+            not unit.is_busy
+            and any(
+                e.entity_id == target.entity_id
+                and isinstance(e, LineEntity)
+                and e.end_mm == pytest.approx((0.0, 5.0))
+                for e, _layer in canvas.background_entities
+            )
+        ),
+        timeout=10000,
+    )
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    submitted = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not submitted and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    first = {e.entity_id: e for e, _layer in reopened.canvas.background_entities}
+    first_target = first[target.entity_id]
+    assert isinstance(first_target, LineEntity)
+    assert first_target.end_mm == pytest.approx((20.0, 5.0))
+    assert second_boundary.entity_id in first
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    second = {e.entity_id: e for e, _layer in reopened.canvas.background_entities}
+    assert second_boundary.entity_id not in second
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    third = {e.entity_id: e for e, _layer in reopened.canvas.background_entities}
+    assert third[target.entity_id] == target and third[first_boundary.entity_id] == first_boundary
+
+
+def test_drag_trim_mixed_targets_is_one_staged_operation(
+    qtbot: QtBot,
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    canvas.replace_draft_entities((draft, boundary))
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    commands = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    assert canvas.entities == [LineEntity(draft.entity_id, (-30.0, 0.0), (20.0, 0.0)), boundary]
+    result = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert result[first.entity_id] == first
+    assert result[saved.entity_id] == LineEntity(saved.entity_id, (-30.0, 5.0), (20.0, 5.0))
+    assert loaded.document.commands == commands
+    window.request_undo()
+    assert canvas.entities == [draft, boundary]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, saved)
+    window.request_redo()
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    restored = {entity.entity_id: entity for entity, _layer in reopened.canvas.background_entities}
+    assert restored[saved.entity_id] == saved
+    assert restored[draft.entity_id] == draft and restored[boundary.entity_id] == boundary
+
+
+def test_drag_trim_mixed_targets_preserves_satisfied_inferred_relation(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    relation = SketchConstraint(
+        uuid4().hex,
+        "horizontal",
+        (SketchGeometryReference(draft.entity_id, "geometry"),),
+        source="inferred",
+    )
+    canvas.replace_draft_entities((draft, boundary))
+    canvas.constraints = [relation]
+    canvas.set_tool("修剪")
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    assert canvas.constraints == [relation]
+    window.request_undo()
+    assert canvas.entities == [draft, boundary] and canvas.constraints == [relation]
+    assert {e.entity_id: e for e, _layer in canvas.background_entities}[saved.entity_id] == saved
+
+
+@pytest.mark.parametrize("draft_boundary", [False, True])
+def test_drag_trim_single_saved_target_uses_one_replayable_revision(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], draft_boundary: bool
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    if not draft_boundary:
+        editor.finish_button.click()
+        qtbot.waitUntil(
+            lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+        )
+        editor = window.active_sketch_dialog()
+        assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 5.0)), canvas.local_to_screen((27.0, 5.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    if draft_boundary:
+        qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+        assert loaded.document.commands == before and canvas.entities == [boundary]
+    else:
+        qtbot.waitUntil(
+            lambda: len(loaded.document.commands) == len(before) + 1 and not unit.is_busy,
+            timeout=10000,
+        )
+    result = {e.entity_id: e for e, _layer in canvas.background_entities}
+    edited = result[target.entity_id]
+    assert isinstance(edited, LineEntity) and edited.end_mm == pytest.approx((20.0, 5.0))
+    if not draft_boundary:
+        assert result[boundary.entity_id] == boundary
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(loaded.document.commands) == len(before), timeout=10000
+    )
+    assert {e.entity_id: e for e, _layer in canvas.background_entities}[target.entity_id] == target
+
+
+def test_drag_trim_across_two_saved_segments_is_one_atomic_undo(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, target = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    cutters = tuple(LineEntity(uuid4().hex, (x, -5.0), (x, 10.0)) for x in (10.0, 20.0))
+    editor.canvas.replace_draft_entities(cutters)
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((15.0, 5.0)), canvas.local_to_screen((25.0, 5.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert len(loaded.document.commands) == len(before) + 1, editor.status_label.text()
+    result = {e.entity_id: e for e, _layer in canvas.background_entities}
+    edited = result[target.entity_id]
+    assert isinstance(edited, LineEntity) and edited.end_mm == pytest.approx((10.0, 5.0))
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) == len(before) and not unit.is_busy, timeout=10000
+    )
+    assert {e.entity_id: e for e, _layer in canvas.background_entities}[target.entity_id] == target
+
+
+def test_drag_trim_saved_target_escape_preserves_draft_and_history(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    canvas.replace_draft_entities((boundary,))
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 5.0)), canvas.local_to_screen((27.0, 5.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.keyClick(canvas, Qt.Key.Key_Escape)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [boundary]
+    assert tuple(e for e, _layer in canvas.background_entities) == (first, saved)
+    assert loaded.document.commands == before and canvas.mixed_move is None
+
+
+def test_drag_trim_two_saved_targets_is_one_atomic_undo(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    second = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((second, boundary))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) == len(before) + 1 and not unit.is_busy, timeout=10000
+    )
+    result = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert result[saved.entity_id] == LineEntity(saved.entity_id, (-30.0, 5.0), (20.0, 5.0))
+    assert result[second.entity_id] == LineEntity(second.entity_id, (-30.0, 0.0), (20.0, 0.0))
+    assert result[boundary.entity_id] == boundary
+    window.act_save.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    reopened_loaded = window.loaded_document()
+    assert reopened is not None and reopened_loaded is not None
+    canvas = reopened.canvas
+    assert {e.entity_id: e for e, _layer in canvas.background_entities} == result
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(reopened_loaded.document.commands) == len(before),
+        timeout=10000,
+    )
+    restored = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert restored[saved.entity_id] == saved and restored[second.entity_id] == second
+
+
+def test_saved_drag_trim_rejects_stale_source_and_refreshes_canvas(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    second = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((second, boundary))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    extra_line = LineEntity(uuid4().hex, (100.0, 0.0), (110.0, 0.0))
+    extra = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (extra_line,))
+    loaded.bus.execute("sketch.create", extra.to_state_mapping(), confirmed_by="local")
+    after_external = loaded.document.commands
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert loaded.document.commands == after_external
+    visible = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert visible[saved.entity_id] == saved and visible[second.entity_id] == second
+    assert visible[extra_line.entity_id] == extra_line
+    assert "变化" in editor.status_label.text()
+
+
+def test_saved_drag_trim_rejects_revision_change_without_geometry_change(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    second = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((second, boundary))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=10000)
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert loaded.document.commands == after_external
+    visible = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert visible[saved.entity_id] == saved and visible[second.entity_id] == second
+    assert "变化" in editor.status_label.text()
+
+
+def test_drag_trim_multiple_saved_targets_uses_source_workplane(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    second = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((second, boundary))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    editor.origin_fields["X"].setValue(10.0)
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((15.0, 0.0)), canvas.local_to_screen((15.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) == len(before) + 1 and not unit.is_busy, timeout=10000
+    )
+    editor.origin_fields["X"].setValue(0.0)
+    result = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert result[saved.entity_id] == LineEntity(saved.entity_id, (-30.0, 5.0), (20.0, 5.0))
+    assert result[second.entity_id] == LineEntity(second.entity_id, (-30.0, 0.0), (20.0, 0.0))
+    assert result[boundary.entity_id] == boundary
+
+
+def test_saved_click_trim_rejects_stale_source_and_refreshes_canvas(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    extra_line = LineEntity(uuid4().hex, (100.0, 0.0), (110.0, 0.0))
+    extra = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (extra_line,))
+    loaded.bus.execute("sketch.create", extra.to_state_mapping(), confirmed_by="local")
+    after_external = loaded.document.commands
+    canvas.add_coordinate_point((25.0, 5.0), exact_point=True)
+    assert loaded.document.commands == after_external
+    visible = {e.entity_id: e for e, _layer in canvas.background_entities}
+    assert visible[saved.entity_id] == saved and visible[extra_line.entity_id] == extra_line
+    assert "变化" in editor.status_label.text()
+
+
+def test_saved_click_trim_rejects_revision_change_without_geometry_change(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, _first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((boundary,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=10000)
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    canvas.add_coordinate_point((25.0, 5.0), exact_point=True)
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert loaded.document.commands == after_external
+    assert {e.entity_id: e for e, _layer in canvas.background_entities}[saved.entity_id] == saved
+    assert "变化" in editor.status_label.text()
+
+
+@pytest.mark.parametrize("operation", ["move", "rotate", "mirror", "delete"])
+def test_saved_transform_rejects_stale_document_revision(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    if operation in {"move", "rotate", "mirror"}:
+        canvas.begin_transform(operation, keep_source=False)
+        canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    if operation == "move":
+        canvas.add_coordinate_point((5.0, 0.0), exact_point=True)
+    elif operation == "rotate":
+        canvas.apply_rotation_angle(45.0)
+    elif operation == "mirror":
+        canvas.add_coordinate_point((5.0, 0.0), exact_point=True)
+    else:
+        canvas.delete_selected()
+    assert loaded.document.commands == after_external
+    assert tuple(e for e, _layer in canvas.background_entities) == (saved, other)
+    assert "变化" in editor.status_label.text()
+
+
+@pytest.mark.parametrize("operation", ["move", "rotate", "mirror"])
+def test_transform_gesture_rejects_revision_change_after_context_refresh(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    canvas.begin_transform(operation, keep_source=False)
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    editor.set_context_sketches(editor.dimension_sources()[1:])
+    if operation == "rotate":
+        canvas.apply_rotation_angle(45.0)
+    else:
+        canvas.add_coordinate_point((5.0, 0.0), exact_point=True)
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert loaded.document.commands == after_external
+    assert tuple(e for e, _layer in canvas.background_entities) == (saved, other)
+    assert "变化" in editor.status_label.text()
+
+
+def test_starting_transform_with_stale_context_cancels_previous_gesture(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    canvas.begin_transform("move")
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    canvas.begin_transform("copy")
+    assert "变化" in editor.status_label.text()
+    canvas.add_coordinate_point((5.0, 0.0), exact_point=True)
+    assert loaded.document.commands == after_external
+    assert canvas.entities == []
+
+
+@pytest.mark.parametrize(
+    "operation", ["copy", "mirror", "offset", "linear_array", "circular_array"]
+)
+def test_numeric_saved_copy_rejects_stale_document_revision(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {saved.entity_id}
+    canvas.changed.emit()
+    editor.delta_u_field.setValue(2.0)
+    editor.offset_distance_field.setValue(2.0)
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    if operation == "copy":
+        editor.numeric_copy_button.click()
+    elif operation == "mirror":
+        editor.numeric_mirror_button.click()
+    else:
+        editor.transform_buttons[operation].click()
+    assert loaded.document.commands == after_external
+    assert canvas.entities == []
+    assert tuple(e for e, _layer in canvas.background_entities) == (saved, other)
+    assert "变化" in editor.status_label.text()
+
+
+def test_repeated_copy_revision_change_keeps_placed_copies(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    canvas.begin_transform("copy")
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    canvas.add_coordinate_point((5.0, 0.0), exact_point=True)
+    assert len(canvas.entities) == 1
+    placed = canvas.entities[0]
+    loaded.bus.execute(
+        "drawing.layers.set",
+        {"layers": editor.layer_table.to_mapping(), "dimension_layer": editor.dimension_layer},
+        confirmed_by="local",
+    )
+    after_external = loaded.document.commands
+    editor.set_context_sketches(editor.dimension_sources()[1:])
+    canvas.add_coordinate_point((10.0, 0.0), exact_point=True)
+    assert canvas.active_transform is None and canvas.entities == [placed]
+    assert tuple(e for e, _layer in canvas.background_entities) == (saved, other)
+    assert loaded.document.commands == after_external
+    assert "变化" in editor.status_label.text()
+
+
+def test_drag_trim_locked_saved_target_rolls_back_draft_preview(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    from dataclasses import replace
+
+    window, first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    canvas.background_entities = tuple(
+        (entity, replace(layer, locked=True) if entity.entity_id == saved.entity_id else layer)
+        for entity, layer in canvas.background_entities
+    )
+    draft = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    canvas.replace_draft_entities((draft, boundary))
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [draft, boundary]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, saved)
+    assert loaded.document.commands == before and canvas.mixed_move is None
+
+
+def test_drag_trim_locked_draft_target_rolls_back_saved_preview(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    from mycad.core.sketch_layers import SketchLayer
+
+    window, first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    layers = editor.layer_table.add(SketchLayer("restricted", locked=True))
+    editor.set_document_layers(layers, editor.dimension_layer)
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0), layer_name="restricted")
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    canvas.replace_draft_entities((draft, boundary))
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 0.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [draft, boundary]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, saved)
+    assert loaded.document.commands == before and canvas.mixed_move is None
+
+
+def test_drag_trim_locked_draft_target_rolls_back_other_draft_targets(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    from mycad.core.sketch_layers import SketchLayer
+
+    window, _first, _saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    layers = editor.layer_table.add(SketchLayer("restricted", locked=True))
+    editor.set_document_layers(layers, editor.dimension_layer)
+    canvas = editor.canvas
+    editable = LineEntity(uuid4().hex, (-30.0, 15.0), (30.0, 15.0))
+    locked = LineEntity(uuid4().hex, (-30.0, 20.0), (30.0, 20.0), layer_name="restricted")
+    boundary = LineEntity(uuid4().hex, (20.0, 10.0), (20.0, 25.0))
+    canvas.replace_draft_entities((editable, locked, boundary))
+    canvas.set_tool("修剪")
+    history_position = canvas.history_position
+    start, end = canvas.local_to_screen((25.0, 15.0)), canvas.local_to_screen((25.0, 23.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [editable, locked, boundary]
+    assert canvas.history_position == history_position
+    assert "锁定" in editor.status_label.text()
+
+
+def test_drag_trim_invalid_draft_target_rolls_back_saved_preview(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    from mycad.core.sketch import CircleEntity
+
+    window, first, saved = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = CircleEntity(uuid4().hex, (25.0, 0.0), 3.0)
+    boundary = LineEntity(uuid4().hex, (20.0, -10.0), (20.0, 10.0))
+    canvas.replace_draft_entities((draft, boundary))
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 3.0)), canvas.local_to_screen((25.0, 8.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert canvas.entities == [draft, boundary]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (first, saved)
+    assert loaded.document.commands == before and canvas.mixed_move is None
+
+
+def test_drag_trim_constraint_failure_rolls_back_every_saved_target(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    constrained = LineEntity(uuid4().hex, (-30.0, 20.0), (30.0, 20.0))
+    other = LineEntity(uuid4().hex, (-30.0, 15.0), (30.0, 15.0))
+    boundary = LineEntity(uuid4().hex, (20.0, 10.0), (20.0, 25.0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(constrained.entity_id, "geometry"),),
+        60.0,
+        "mm",
+    )
+    editor.canvas.replace_draft_entities((constrained, other, boundary))
+    editor.canvas.constraints = [dimension]
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_tool("修剪")
+    before = loaded.document.commands
+    start, end = canvas.local_to_screen((25.0, 15.0)), canvas.local_to_screen((25.0, 23.0))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    qtbot.waitUntil(
+        lambda: "失败" in editor.status_label.text() and not unit.is_busy, timeout=10000
+    )
+    assert loaded.document.commands == before
+    actual = {entity.entity_id: entity for entity, _layer in canvas.background_entities}
+    assert actual[constrained.entity_id] == constrained
+    assert actual[other.entity_id] == other and actual[boundary.entity_id] == boundary
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+
+
+@pytest.mark.parametrize("operation", ["linear_array", "circular_array"])
+def test_array_saved_and_draft_creates_replayable_copies(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    canvas = editor.canvas
+    line = LineEntity(uuid4().hex, (10.0, 4.0), (20.0, 4.0))
+    canvas.replace_draft_entities((line,))
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {saved.entity_id, line.entity_id}
+    canvas.changed.emit()
+    editor.count_field.setValue(2)
+    editor.delta_u_field.setValue(0.0)
+    editor.delta_v_field.setValue(5.0)
+    editor.pattern_angle_field.setValue(180.0)
+    before = loaded.document.commands
+    editor.transform_buttons[operation].click()
+    assert loaded.document.commands == before
+    assert tuple(e for e, _ in canvas.background_entities) == (saved, other)
+    assert len(canvas.entities) == 3
+    copies = [entity for entity in canvas.entities if entity.entity_id != line.entity_id]
+    assert len({entity.entity_id for entity in copies}) == 2
+    assert all(isinstance(entity, LineEntity) for entity in copies)
+    centers = [
+        ((entity.start_mm[0] + entity.end_mm[0]) / 2, (entity.start_mm[1] + entity.end_mm[1]) / 2)
+        for entity in copies
+        if isinstance(entity, LineEntity)
+    ]
+    expected_centers = (
+        [(0.0, 5.0), (15.0, 9.0)] if operation == "linear_array" else [(0.0, 0.0), (-15.0, -4.0)]
+    )
+    for actual_center, expected_center in zip(
+        sorted(centers), sorted(expected_centers), strict=True
+    ):
+        assert actual_center == pytest.approx(expected_center, abs=1e-8)
+    window.request_undo()
+    assert canvas.entities == [line]
+    window.request_redo()
+    expected = tuple(canvas.entities)
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    submitted = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not submitted and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    actual = {entity.entity_id: entity for entity, _ in reopened.canvas.background_entities}
+    assert all(actual[entity.entity_id] == entity for entity in expected)
+    assert actual[saved.entity_id] == saved and actual[other.entity_id] == other
+
+
+@pytest.mark.parametrize("operation", ["linear_array", "circular_array"])
+def test_array_saved_invalid_parameters_preserve_mixed_selection(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (10.0, 4.0), (20.0, 4.0))
+    canvas.replace_draft_entities((draft,))
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {saved.entity_id, draft.entity_id}
+    canvas.changed.emit()
+    editor.delta_u_field.setValue(0)
+    editor.delta_v_field.setValue(0)
+    editor.pattern_angle_field.setValue(0)
+    before = loaded.document.commands
+    editor.transform_buttons[operation].click()
+    assert canvas.entities == [draft]
+    assert tuple(entity for entity, _layer in canvas.background_entities) == (saved, other)
+    assert canvas.selected_entity_ids == {saved.entity_id, draft.entity_id}
+    assert loaded.document.commands == before
+    assert ("步距" if operation == "linear_array" else "角度") in editor.status_label.text()
 
 
 def test_delete_saved_object_can_be_undone(
@@ -236,7 +1955,33 @@ def test_delete_all_saved_entities_and_undo(
     )
 
 
-def test_delete_mixed_selection_does_not_partially_delete(
+def test_erase_command_deletes_saved_object_and_can_undo(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, saved, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {saved.entity_id}
+    bar = editor.drawing_command_bar
+    bar.input.setText("ERASE")
+    QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    qtbot.waitUntil(
+        lambda: (
+            not unit.is_busy
+            and {entity.entity_id for entity, _ in canvas.background_entities} == {other.entity_id}
+        ),
+        timeout=10000,
+    )
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and len(canvas.background_entities) == 2, timeout=10000
+    )
+
+
+def test_delete_mixed_selection_is_atomic_and_saved(
+    qtbot: QtBot,
     reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
 ) -> None:
     window, saved, _other = reopened_drawing
@@ -248,11 +1993,238 @@ def test_delete_mixed_selection_does_not_partially_delete(
     canvas.replace_draft_entities((new_line,))
     canvas.selected_entity_ids = {saved.entity_id, new_line.entity_id}
     original = loaded.document.commands
-    assert not canvas.delete_selected()
-    assert tuple(canvas.entities) == (new_line,)
+    unit = window.execution_unit
+    assert unit is not None
+    editor_bar = draft.drawing_command_bar
+    editor_bar.input.setText("ERASE")
+    QTest.keyClick(editor_bar.input, Qt.Key.Key_Return)
+    qtbot.waitUntil(lambda: not unit.is_busy and canvas.mixed_move is not None, timeout=10000)
+    assert not canvas.entities
+    assert saved.entity_id not in {e.entity_id for e, _layer in canvas.background_entities}
     assert loaded.document.commands == original
-    assert canvas.selected_entity_ids == {saved.entity_id, new_line.entity_id}
-    assert "同时删除" in canvas.message
+    assert draft.finish_button.isEnabled()
+    assert all(field.isReadOnly() for field in draft.origin_fields.values())
+    plane = draft.plane_combo.currentText()
+    draft.plane_combo.setCurrentText("YZ")
+    assert draft.plane_combo.currentText() == plane
+    window.request_undo()
+    assert canvas.entities == [new_line]
+    assert not any(field.isReadOnly() for field in draft.origin_fields.values())
+    assert saved.entity_id in {e.entity_id for e, _layer in canvas.background_entities}
+    window.request_redo()
+    assert not canvas.entities
+    assert all(field.isReadOnly() for field in draft.origin_fields.values())
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not draft and not unit.is_busy, timeout=10000
+    )
+    submitted = window.active_sketch_dialog()
+    assert submitted is not None
+    assert saved.entity_id not in {
+        e.entity_id for e, _layer in submitted.canvas.background_entities
+    }
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not submitted and not unit.is_busy, timeout=10000
+    )
+    submitted = window.active_sketch_dialog()
+    assert submitted is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    restored = {e.entity_id for e, _layer in submitted.canvas.background_entities}
+    assert {saved.entity_id, new_line.entity_id}.issubset(restored)
+
+
+def test_delete_mixed_selection_removes_and_restores_draft_constraint(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    loaded = window.loaded_document()
+    assert editor is not None and unit is not None and loaded is not None
+    line = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    canvas = editor.canvas
+    canvas.replace_draft_entities((line,))
+    relation = SketchConstraint(
+        uuid4().hex, "length", (SketchGeometryReference(line.entity_id, "geometry"),), 10.0, "mm"
+    )
+    canvas.constraints = [relation]
+    canvas.selected_entity_ids = {saved.entity_id, line.entity_id}
+    commands = loaded.document.commands
+    assert canvas.delete_selected()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert canvas.mixed_move is not None, editor.status_label.text()
+    assert not canvas.constraints
+    window.request_undo()
+    assert canvas.entities == [line]
+    assert canvas.constraints == [relation]
+    window.request_redo()
+    assert not canvas.constraints
+    editor.cancel_button.click()
+    assert loaded.document.commands == commands
+
+
+def test_delete_mixed_selection_rejects_locked_dependent_dimension(
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+    from mycad.core.sketch_layers import SketchLayer
+
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None
+    line = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    canvas = editor.canvas
+    canvas.replace_draft_entities((line,))
+    layers = editor.layer_table.add(SketchLayer("locked-dimension", locked=True))
+    editor.set_document_layers(layers, editor.dimension_layer)
+    relation = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        10.0,
+        "mm",
+        layer_name="locked-dimension",
+    )
+    canvas.constraints = [relation]
+    canvas.selected_entity_ids = {saved.entity_id, line.entity_id}
+    commands = loaded.document.commands
+    assert canvas.delete_selected()
+    assert "锁定" in editor.status_label.text()
+    assert canvas.entities == [line] and canvas.constraints == [relation]
+    assert canvas.mixed_move is None and loaded.document.commands == commands
+
+
+def test_mixed_delete_removes_saved_dimension_until_undo(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    window, _first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    saved = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    dimension = SketchConstraint(
+        uuid4().hex, "length", (SketchGeometryReference(saved.entity_id, "geometry"),), 10.0, "mm"
+    )
+    editor.canvas.replace_draft_entities((saved,))
+    editor.canvas.constraints = [dimension]
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+    draft = LineEntity(uuid4().hex, (10.0, -10.0), (20.0, -10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.selected_entity_ids = {saved.entity_id, draft.entity_id}
+    assert canvas.delete_selected()
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    assert dimension.constraint_id not in {c.constraint_id for c in canvas.visible_dimensions()}
+    assert dimension.constraint_id not in {
+        c.constraint_id for sketch in editor.dimension_sources() for c in sketch.constraints
+    }
+    window.request_undo()
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+    assert dimension.constraint_id in {
+        c.constraint_id for sketch in editor.dimension_sources() for c in sketch.constraints
+    }
+    window.request_redo()
+    loaded = window.loaded_document()
+    assert loaded is not None
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+
+    extra = Sketch(
+        uuid4().hex,
+        WorkPlaneFrame.xy(),
+        (LineEntity(uuid4().hex, (100.0, 0.0), (110.0, 0.0)),),
+    )
+    loaded.bus.execute("sketch.create", extra.to_state_mapping(), confirmed_by="local")
+    editor.finish_button.click()
+    qtbot.waitUntil(lambda: "提交失败" in editor.status_label.text(), timeout=10000)
+    assert not canvas.mixed_move_is_valid
+    assert dimension.constraint_id in {c.constraint_id for c in canvas.visible_dimensions()}
+    assert dimension.constraint_id in {
+        c.constraint_id for sketch in editor.dimension_sources() for c in sketch.constraints
+    }
+
+
+def test_edit_after_mixed_delete_keeps_separate_undo_after_reopen(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    canvas = editor.canvas
+    draft = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    added = LineEntity(uuid4().hex, (30.0, 10.0), (40.0, 10.0))
+    canvas.replace_draft_entities((draft,))
+    canvas.selected_entity_ids = {saved.entity_id, draft.entity_id}
+    assert canvas.delete_selected()
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    canvas.replace_draft_entities((added,))
+    window.act_save.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    previous = window.active_sketch_dialog()
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not previous and not unit.is_busy, timeout=10000
+    )
+    reopened = window.active_sketch_dialog()
+    assert reopened is not None
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    after_first = {e.entity_id for e, _layer in reopened.canvas.background_entities}
+    assert not {added.entity_id, saved.entity_id, draft.entity_id} & after_first
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    after_second = {e.entity_id for e, _layer in reopened.canvas.background_entities}
+    assert {saved.entity_id, draft.entity_id}.issubset(after_second)
+
+
+def test_stale_mixed_delete_cannot_commit_and_can_be_undone(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+
+    window, saved, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    unit = window.execution_unit
+    assert editor is not None and loaded is not None and unit is not None
+    draft = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    canvas = editor.canvas
+    canvas.replace_draft_entities((draft,))
+    canvas.selected_entity_ids = {saved.entity_id, draft.entity_id}
+    assert canvas.delete_selected()
+    qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=10000)
+    extra = Sketch(
+        uuid4().hex,
+        WorkPlaneFrame.xy(),
+        (LineEntity(uuid4().hex, (100.0, 0.0), (110.0, 0.0)),),
+    )
+    loaded.bus.execute("sketch.create", extra.to_state_mapping(), confirmed_by="local")
+    before = loaded.document.commands
+    assert editor.finish_button.isEnabled()
+    editor.finish_button.click()
+    qtbot.waitUntil(lambda: "提交失败" in editor.status_label.text(), timeout=10000)
+    assert window.active_sketch_dialog() is editor
+    assert loaded.document.commands == before and canvas.entities == []
+    window.request_undo()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert canvas.entities == [draft]
+    visible = {entity.entity_id for entity, _layer in canvas.background_entities}
+    assert {saved.entity_id, extra.entities[0].entity_id}.issubset(visible)
 
 
 @pytest.mark.parametrize("keep", [False, True])
@@ -1426,6 +3398,96 @@ def test_move_rejects_ambiguous_identity_across_sketches(
     assert canvas.background_entities == before
 
 
+def test_delete_across_saved_sketches_is_one_undo_step(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, first, other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    second = LineEntity(uuid4().hex, (10.0, 10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((second,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.selected_entity_ids = {first.entity_id, second.entity_id}
+    assert canvas.delete_selected()
+    qtbot.waitUntil(
+        lambda: (
+            not unit.is_busy
+            and {entity.entity_id for entity, _ in canvas.background_entities} == {other.entity_id}
+        ),
+        timeout=10000,
+    )
+    window.request_undo()
+    qtbot.waitUntil(
+        lambda: (
+            not unit.is_busy
+            and {entity.entity_id for entity, _ in canvas.background_entities}
+            == {first.entity_id, second.entity_id, other.entity_id}
+        ),
+        timeout=10000,
+    )
+
+
+def test_delete_rejects_ambiguous_identity_across_sketches(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
+) -> None:
+    window, first, _ = reopened_drawing
+    draft = window.active_sketch_dialog()
+    unit = window.execution_unit
+    loaded = window.loaded_document()
+    assert draft is not None and unit is not None and loaded is not None
+    duplicate = LineEntity(first.entity_id, (10.0, 10.0), (20.0, 10.0))
+    draft.canvas.replace_draft_entities((duplicate,))
+    draft.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not draft and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    before = canvas.background_entities
+    commands = loaded.document.commands
+    canvas.selected_entity_ids = {first.entity_id}
+    assert not canvas.delete_selected()
+    assert "重复" in canvas.message or "不唯一" in canvas.message
+    assert canvas.background_entities == before and loaded.document.commands == commands
+
+
+@pytest.mark.parametrize("operation", ["offset", "linear_array", "circular_array"])
+def test_numeric_copy_rejects_ambiguous_identity_across_sketches(
+    qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity], operation: str
+) -> None:
+    window, first, _other = reopened_drawing
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    loaded = window.loaded_document()
+    assert editor is not None and unit is not None and loaded is not None
+    duplicate = LineEntity(first.entity_id, (10.0, 10.0), (20.0, 10.0))
+    editor.canvas.replace_draft_entities((duplicate,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    before = canvas.background_entities
+    commands = loaded.document.commands
+    editor.tool_buttons["选择元素"].click()
+    canvas.selected_entity_ids = {first.entity_id}
+    canvas.changed.emit()
+    editor.transform_buttons[operation].click()
+    assert "不唯一" in editor.status_label.text()
+    assert not canvas.entities and canvas.background_entities == before
+    assert canvas.selected_entity_ids == {first.entity_id} and loaded.document.commands == commands
+
+
 def test_move_saved_and_draft_together_undoes_atomically(
     qtbot: QtBot, reopened_drawing: tuple[MainWindow, LineEntity, LineEntity]
 ) -> None:
@@ -1849,6 +3911,25 @@ def test_delete_rejects_selected_committed_entity_on_locked_layer(qtbot: QtBot) 
     assert not canvas.delete_selected()
     assert "锁定" in canvas.message
     assert canvas.selected_entity_ids == {line.entity_id}
+
+
+@pytest.mark.parametrize("locked", [False, True])
+@pytest.mark.parametrize("operation", ["offset", "linear_array", "circular_array"])
+def test_copy_operations_reject_hidden_or_locked_saved_geometry(
+    qtbot: QtBot, locked: bool, operation: str
+) -> None:
+    from mycad.core.sketch import Sketch, WorkPlaneFrame
+    from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0), layer_name="restricted")
+    layers = SketchLayerTable().add(SketchLayer("restricted", locked=locked, visible=locked))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (line,), layers=layers),), frame)
+    canvas.selected_entity_ids = {line.entity_id}
+    assert ("锁定" if locked else "隐藏") in canvas.transform_selection_error(operation)
 
 
 def test_copy_uses_current_workplane_coordinates_for_saved_geometry(qtbot: QtBot) -> None:

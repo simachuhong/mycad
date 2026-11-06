@@ -119,6 +119,11 @@ class HistoryEditDialog(QDialog):
         self._candidate_preview = candidate_preview
         self._can_cancel = can_cancel
         self.cancel_requested = False
+        self._dialog_closed = False
+        self._cancel_retry_timer = QTimer(self)
+        self._cancel_retry_timer.setSingleShot(True)
+        self._cancel_retry_timer.timeout.connect(self.reject)
+        self.finished.connect(self._mark_closed)
         self._preview_reason = ""
         self.candidate: object | None = None
         self.repair_mode = False
@@ -187,17 +192,38 @@ class HistoryEditDialog(QDialog):
     def set_cancel_guard(self, guard: Callable[[], bool]) -> None:
         self._can_cancel = guard
 
+    def _execution_ready(self) -> bool:
+        if self._dialog_closed:
+            return False
+        if not self.cancel_requested and (self._can_cancel is None or self._can_cancel()):
+            return True
+        self.impact_label.setText("请等待当前操作完成后再处理历史候选。")
+        return False
+
+    @override
+    def accept(self) -> None:
+        if self._execution_ready():
+            super().accept()
+
+    def _mark_closed(self, _result: int) -> None:
+        self._dialog_closed = True
+        self._cancel_retry_timer.stop()
+
     @override
     def reject(self) -> None:
+        if self._dialog_closed:
+            return
         if self._can_cancel is not None and not self._can_cancel():
             self.cancel_requested = True
             self.impact_label.setText("正在结束候选预览，完成后取消。")
+            self._cancel_retry_timer.start(100)
             return
         self.cancel_requested = False
+        self._cancel_retry_timer.stop()
         super().reject()
 
     def _invalidate_candidate(self) -> None:
-        if not self._candidate_preview or self._preview_params is None:
+        if self._dialog_closed or not self._candidate_preview or self._preview_params is None:
             return
         if self.candidate is not None:
             self.candidate_discard_requested.emit(self.candidate)
@@ -210,6 +236,9 @@ class HistoryEditDialog(QDialog):
 
     def preview_changes(self) -> None:
         """Validate and show the exact normalized delta before confirmation."""
+
+        if not self._execution_ready():
+            return
 
         if self._candidate_preview and self.candidate is not None:
             self.candidate_discard_requested.emit(self.candidate)
@@ -257,6 +286,8 @@ class HistoryEditDialog(QDialog):
         self, candidate: object | None, message: str, *, repairable: bool = False
     ) -> bool:
         """Accept a result only while the exact submitted inputs are still present."""
+        if self._dialog_closed or self.cancel_requested:
+            return False
         try:
             current = self.parameter_form.normalized_params()
         except ValidationError:
@@ -277,6 +308,8 @@ class HistoryEditDialog(QDialog):
 
     def begin_repair(self) -> None:
         """Transfer the failed candidate only after an explicit repair request."""
+        if not self._execution_ready():
+            return
         if self.candidate is None or self._preview_params is None:
             return
         try:
@@ -297,6 +330,9 @@ class HistoryEditDialog(QDialog):
 
     def confirm_changes(self) -> None:
         """Accept only the same non-no-op proposal the user previewed."""
+
+        if not self._execution_ready():
+            return
 
         if self._preview_params is None:
             self.preview_changes()

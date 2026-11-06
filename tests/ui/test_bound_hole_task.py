@@ -53,6 +53,396 @@ def test_bound_hole_upgrade_preview_cancel_preserves_source(qtbot: QtBot) -> Non
     window.close()
 
 
+def test_stale_bound_hole_does_not_start_or_clear_current_preview(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    session = [7]
+    task = BoundHoleTask(
+        services, loaded, viewport, unit, session_identity=7, current_session=lambda: session[0]
+    )
+    qtbot.addWidget(task)
+    finished: list[int] = []
+    task.finished.connect(finished.append)
+    session[0] = 8
+    cleared: list[bool] = []
+    submitted: list[bool] = []
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    def reject_submit(*_args: object, **_kwargs: object) -> bool:
+        submitted.append(True)
+        return False
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    monkeypatch.setattr(unit, "submit", reject_submit)
+    monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+    monkeypatch.setattr(task, "_preview_params", {"diameter": 2.0})
+    task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+    task.start()
+    task.preview()
+    task.commit()
+    task.reject()
+    session[0] = 7
+    task.start()
+    task.preview()
+    task.commit()
+    task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+    task.accept()
+    assert not cleared and not submitted
+    assert len(finished) == 1
+
+
+def test_bound_hole_result_after_session_change_does_not_show_old_scene(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 6})
+    before = loaded.document.commands
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    session = [unit.session_id]
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=session[0],
+        current_session=lambda: session[0],
+    )
+    qtbot.addWidget(task)
+    shown: list[bool] = []
+    delivered: list[bool] = []
+
+    def record_scene(*_args: object, **_kwargs: object) -> None:
+        shown.append(True)
+
+    def change_session(_result: object) -> None:
+        session[0] += 1
+        delivered.append(True)
+
+    monkeypatch.setattr(viewport, "show_interaction_scene", record_scene)
+    unit.result_ready.connect(change_session)
+    task.start()
+    qtbot.waitUntil(lambda: bool(delivered) and not unit.is_busy, timeout=20000)
+    qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=20000)
+    assert not shown and task.scene is None
+    assert loaded.document.commands == before
+
+
+@pytest.mark.parametrize("notification", ["idle", "result"])
+@pytest.mark.parametrize("switch_session", [False, True])
+@pytest.mark.parametrize("has_preview", [False, True])
+def test_bound_hole_waits_during_result_notification(
+    qtbot: QtBot,
+    monkeypatch: pytest.MonkeyPatch,
+    notification: str,
+    switch_session: bool,
+    has_preview: bool,
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    session = [unit.session_id]
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=session[0],
+        current_session=lambda: session[0],
+    )
+    qtbot.addWidget(task)
+    monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+    preview = {"diameter": 2.0} if has_preview else None
+    monkeypatch.setattr(task, "_preview_params", preview)
+    cleared: list[bool] = []
+    observed: list[tuple[int, bool]] = []
+    task.confirm_button.setEnabled(True)
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    def on_result(_result: object) -> None:
+        task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+        task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+        task.start()
+        observed.append((len(cleared), task.confirm_button.isEnabled()))
+        if switch_session:
+            session[0] += 1
+
+    def on_idle(busy: bool) -> None:
+        if not busy:
+            on_result(None)
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    if notification == "idle":
+        unit.busy_changed.connect(on_idle)
+    else:
+        unit.result_ready.connect(on_result)
+    assert unit.submit(lambda: None, operation="test-bound-handover", session_id=unit.session_id)
+    qtbot.waitUntil(lambda: bool(observed) and not unit.is_delivering_result, timeout=10000)
+    assert observed == [(0, False)]
+    if switch_session:
+        qtbot.wait(100)
+        assert not cleared
+    else:
+        qtbot.waitUntil(task.preview_button.isEnabled, timeout=5000)
+        assert len(cleared) == int(has_preview)
+    assert not task.confirm_button.isEnabled()
+    task.reject()
+
+
+def test_bound_hole_new_preview_supersedes_deferred_clear(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 6})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=unit.session_id,
+        current_session=lambda: unit.session_id,
+    )
+    qtbot.addWidget(task)
+    monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+    monkeypatch.setattr(task, "_preview_params", {"diameter": 2.0})
+    cleared: list[bool] = []
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    def on_result(_result: object) -> None:
+        unit.result_ready.disconnect(on_result)
+        task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    unit.result_ready.connect(on_result)
+    assert unit.submit(
+        lambda: None,
+        operation="test-bound-followup",
+        session_id=unit.session_id,
+        on_complete=lambda _result: task.start(),
+    )
+    qtbot.waitUntil(lambda: task.scene is not None and not unit.is_busy, timeout=20000)
+    qtbot.waitUntil(lambda: not unit.is_delivering_result, timeout=10000)
+    qtbot.wait(100)
+    assert cleared == [True]
+    task.reject()
+
+
+def test_bound_hole_deferred_clear_waits_for_followup_work(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from threading import Event
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=unit.session_id,
+        current_session=lambda: unit.session_id,
+    )
+    qtbot.addWidget(task)
+    monkeypatch.setattr(task, "_binding", {"kind": "bound_face"})
+    monkeypatch.setattr(task, "_preview_params", {"diameter": 2.0})
+    cleared: list[bool] = []
+    entered, release = Event(), Event()
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    def change_before_followup(_result: object) -> None:
+        unit.result_ready.disconnect(change_before_followup)
+        task.diameter_field.setValue(task.diameter_field.value() + 1.0)
+
+    def followup() -> None:
+        entered.set()
+        assert release.wait(10)
+
+    def start_followup(_result: object) -> None:
+        assert unit.submit(
+            followup, operation="test-bound-followup-wait", session_id=unit.session_id
+        )
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    unit.result_ready.connect(change_before_followup)
+    assert unit.submit(
+        lambda: None,
+        operation="test-bound-followup-start",
+        session_id=unit.session_id,
+        on_complete=start_followup,
+    )
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=10000)
+        qtbot.wait(250)
+        assert not cleared
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: len(cleared) == 1, timeout=10000)
+    assert not unit.is_busy
+    task.reject()
+
+
+@pytest.mark.parametrize("committing", [False, True])
+def test_bound_hole_cancel_waits_until_result_notification_finishes(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, committing: bool
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=unit.session_id,
+        current_session=lambda: unit.session_id,
+    )
+    qtbot.addWidget(task)
+    monkeypatch.setattr(task, "_committing", committing)
+    finished: list[int] = []
+    observed: list[int] = []
+    task.finished.connect(finished.append)
+
+    def on_result(_result: object) -> None:
+        task.reject()
+        observed.append(len(finished))
+
+    unit.result_ready.connect(on_result)
+    assert unit.submit(lambda: None, operation="test-bound-cancel", session_id=unit.session_id)
+    qtbot.waitUntil(lambda: bool(observed) and not unit.is_delivering_result, timeout=10000)
+    assert observed == [0]
+    if committing:
+        qtbot.wait(100)
+        assert not finished and "提交" in task.status_label.text()
+        monkeypatch.setattr(task, "_committing", False)
+        task.reject()
+    else:
+        qtbot.waitUntil(lambda: bool(finished), timeout=10000)
+    assert len(finished) == 1
+
+
+def test_bound_hole_cancel_finishes_after_unrelated_work(qtbot: QtBot) -> None:
+    from threading import Event
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=unit.session_id,
+        current_session=lambda: unit.session_id,
+    )
+    qtbot.addWidget(task)
+    finished: list[int] = []
+    task.finished.connect(finished.append)
+    entered, release = Event(), Event()
+
+    def work() -> None:
+        entered.set()
+        assert release.wait(10)
+
+    assert unit.submit(work, operation="test-unrelated-work", session_id=unit.session_id)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=5000)
+        task.reject()
+        assert not finished
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: bool(finished), timeout=5000)
+    assert len(finished) == 1
+
+
+def test_bound_hole_cancel_blocks_completion_callback_restart(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    viewport, unit = window.viewport, window.execution_unit
+    assert viewport is not None and unit is not None
+    task = BoundHoleTask(
+        services,
+        loaded,
+        viewport,
+        unit,
+        session_identity=unit.session_id,
+        current_session=lambda: unit.session_id,
+    )
+    qtbot.addWidget(task)
+    cleared: list[bool] = []
+    callback_clears: list[int] = []
+    finished: list[int] = []
+    task.finished.connect(finished.append)
+
+    def record_clear() -> None:
+        cleared.append(True)
+
+    def on_result(_result: object) -> None:
+        task.reject()
+
+    def on_complete(_result: object) -> None:
+        task.start()
+        callback_clears.append(len(cleared))
+
+    monkeypatch.setattr(viewport, "clear_candidate_preview", record_clear)
+    unit.result_ready.connect(on_result)
+    assert unit.submit(
+        lambda: None,
+        operation="test-cancel-restart",
+        session_id=unit.session_id,
+        on_complete=on_complete,
+    )
+    qtbot.waitUntil(lambda: bool(finished), timeout=10000)
+    assert callback_clears == [0] and cleared == [True]
+    assert not unit.is_busy
+
+
 def test_bound_hole_select_preview_and_commit_upgrade(qtbot: QtBot, tmp_path: Path) -> None:
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest

@@ -46,12 +46,16 @@ class WorkplanePositionDialog(QDialog):
         adopt_point: Callable[[Point3D], None],
         is_current: Callable[[], bool],
         parent: QWidget | None = None,
+        *,
+        owns_viewport: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("在平面上定位原点")
         self._adopt_point = adopt_point
         self._viewport = viewport
         self._is_current = is_current
+        self._owns_viewport = owns_viewport or (lambda: True)
+        self._closed = False
         self._locked_plane: WorkPlaneFrame | None = None
         self._numeric_locked = False
         self._pointer_world: Point3D | None = None
@@ -129,18 +133,26 @@ class WorkplanePositionDialog(QDialog):
         field.setRange(-1_000_000, 1_000_000)
         return field
 
+    def _view_is_owned(self) -> bool:
+        return not self._closed and self._owns_viewport()
+
     def _unlock(self) -> None:
         self._locked_plane = None
         self._pointer_world = None
         self.plane_combo.setEnabled(True)
         self.lock_button.setText("锁定平面")
-        self._viewport.set_workplane_grid(None, self.grid_spacing.value())
+        if self._view_is_owned():
+            self._viewport.set_workplane_grid(None, self.grid_spacing.value())
         self.adopt_button.setEnabled(False)
         self.status_label.setText("选择工作平面后锁定。")
 
     def lock_plane(self) -> None:
         plane = self.plane_combo.currentData()
-        if not isinstance(plane, WorkPlaneFrame) or not self._is_current():
+        if (
+            not self._view_is_owned()
+            or not isinstance(plane, WorkPlaneFrame)
+            or not self._is_current()
+        ):
             self._unlock()
             self.status_label.setText("工作平面或候选已失效。")
             return
@@ -165,7 +177,8 @@ class WorkplanePositionDialog(QDialog):
         self._pointer_world = None
         if not self.u_field.hasAcceptableInput() or not self.v_field.hasAcceptableInput():
             self.adopt_button.setEnabled(False)
-            self._viewport.set_position_markers(None)
+            if self._view_is_owned():
+                self._viewport.set_position_markers(None)
             self.status_label.setText("请输入有效的 U/V 数值。")
             return
         self.adopt_button.setEnabled(True)
@@ -184,10 +197,12 @@ class WorkplanePositionDialog(QDialog):
         self.status_label.setText(
             f"已锁定 {self.plane_combo.currentText()} · 世界 XYZ {result.world}"
         )
-        if self._numeric_locked:
+        if self._numeric_locked and self._view_is_owned():
             self._viewport.set_position_markers(result.world)
 
     def _update_grid(self) -> None:
+        if not self._view_is_owned():
+            return
         frame = self._locked_plane if self.grid_visible.isChecked() else None
         self._viewport.set_workplane_grid(frame, self.grid_spacing.value())
 
@@ -200,7 +215,7 @@ class WorkplanePositionDialog(QDialog):
             self.grid_status.setText("栅格吸附：开启（栅格隐藏）")
 
     def _look_at(self) -> None:
-        if self._locked_plane is not None:
+        if self._locked_plane is not None and self._view_is_owned():
             self._viewport.look_at_workplane(self._locked_plane)
 
     def _repick(self) -> None:
@@ -210,7 +225,12 @@ class WorkplanePositionDialog(QDialog):
 
     def _choose_snap(self, index: int) -> None:
         snap = self.snap_choices.itemData(index)
-        if not isinstance(snap, ObjectSnap) or self._locked_plane is None or not self._is_current():
+        if (
+            not self._view_is_owned()
+            or not isinstance(snap, ObjectSnap)
+            or self._locked_plane is None
+            or not self._is_current()
+        ):
             return
         self._numeric_locked = True
         self._pointer_world = snap.world
@@ -226,16 +246,32 @@ class WorkplanePositionDialog(QDialog):
             f"{snap.anchor.kind} · {snap.anchor.key} · UV {snap.uv} · 世界 XYZ {snap.world}"
         )
 
+    @override
+    def accept(self) -> None:
+        if not self._closed:
+            super().accept()
+
+    @override
+    def reject(self) -> None:
+        if not self._closed:
+            super().reject()
+
     def _cleanup(self, _result: int) -> None:
+        if self._closed:
+            return
+        owned = self._owns_viewport()
+        self._closed = True
         self._viewport.removeEventFilter(self)
-        self._viewport.set_workplane_grid(None, self.grid_spacing.value())
-        self._viewport.set_position_markers(None)
         self._viewport.datum_selection_changed.disconnect(self._select_plane)
-        self._viewport.set_datum_pick_filter(self._previous_filter)
+        if owned:
+            self._viewport.set_workplane_grid(None, self.grid_spacing.value())
+            self._viewport.set_position_markers(None)
+            self._viewport.set_datum_pick_filter(self._previous_filter)
 
     def _select_plane(self, reference: object) -> None:
         if (
             self._locked_plane is None
+            and self._view_is_owned()
             and isinstance(reference, SpatialReference)
             and reference in self._plane_indices
         ):
@@ -243,7 +279,12 @@ class WorkplanePositionDialog(QDialog):
 
     def _pointer_position(self, event: QMouseEvent) -> None:
         plane = self._locked_plane
-        if plane is None or self._numeric_locked or not self._is_current():
+        if (
+            plane is None
+            or self._numeric_locked
+            or not self._view_is_owned()
+            or not self._is_current()
+        ):
             return
         x, y = float(event.position().x()), float(event.position().y())
         ray = self._viewport.camera_ray(x, y)
@@ -316,7 +357,7 @@ class WorkplanePositionDialog(QDialog):
 
     @override
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if watched is self._viewport and self._locked_plane is not None:
+        if watched is self._viewport and self._locked_plane is not None and self._view_is_owned():
             if event.type() == QEvent.Type.MouseMove:
                 mouse = cast("QMouseEvent", event)
                 if mouse.buttons() == Qt.MouseButton.NoButton:
@@ -335,7 +376,9 @@ class WorkplanePositionDialog(QDialog):
         return super().eventFilter(watched, event)
 
     def adopt(self) -> None:
-        if self._locked_plane is None or not self._is_current():
+        if self._closed:
+            return
+        if self._locked_plane is None or not self._view_is_owned() or not self._is_current():
             self._unlock()
             self.status_label.setText("候选已失效，请重新预览。")
             return

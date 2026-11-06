@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import override
 
-from PySide6.QtCore import QSignalBlocker
+from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtWidgets import QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from mycad import app
@@ -50,6 +50,16 @@ class BoundHoleTask(QDialog):
         self._cancel_requested = False
         self._committing = False
         self._finished = False
+        self._dialog_completed = False
+        self._cancel_timer = QTimer(self)
+        self._cancel_timer.setSingleShot(True)
+        self._cancel_timer.timeout.connect(self.reject)
+        self._preview_epoch = 0
+        self._preview_clear_pending = False
+        self._clear_preview_epoch = 0
+        self._clear_preview_timer = QTimer(self)
+        self._clear_preview_timer.setSingleShot(True)
+        self._clear_preview_timer.timeout.connect(self._clear_invalidated_preview)
         self.scene: CandidateInteractionScene | None = None
         self.status_label = QLabel(
             "确认后存档将升级至 v5，旧版本可能无法打开；取消不更改文档。"
@@ -105,7 +115,14 @@ class BoundHoleTask(QDialog):
     def _submit(
         self, action: Callable[[], object], done: Callable[[ExecutionResult], None]
     ) -> None:
-        if self._finished or self._unit.is_busy:
+        if self._cancel_requested or self._current_session() != self._session_identity:
+            return
+        if (
+            self._finished
+            or self._unit.is_busy
+            or self._unit.is_notifying_idle
+            or self._unit.is_notifying_result
+        ):
             self.status_label.setText("几何操作正在执行，请稍后重试。")
             return
         self.preview_button.setEnabled(False)
@@ -119,7 +136,7 @@ class BoundHoleTask(QDialog):
 
         def finish(result: ExecutionResult) -> None:
             self._unit.stale_result_discarded.disconnect(stale)
-            if self._cancel_requested:
+            if self._cancel_requested or self._current_session() != self._session_identity:
                 self._finish_cancel()
                 return
             done(result)
@@ -136,9 +153,18 @@ class BoundHoleTask(QDialog):
 
     def start(self) -> None:
         """Preview the uncommitted identity upgrade and enable exact candidate picks."""
-        if self._unit.is_busy:
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+        ):
+            return
+        if self._unit.is_busy or self._unit.is_notifying_idle or self._unit.is_notifying_result:
             self.status_label.setText("几何操作正在执行，请稍后重试。")
             return
+        self._preview_epoch += 1
+        self._preview_clear_pending = False
+        self._clear_preview_timer.stop()
         self._binding = None
         self._frame = None
         self._preview_params = None
@@ -187,7 +213,13 @@ class BoundHoleTask(QDialog):
 
     def _selected_face(self, value: object) -> None:
         scene = self.scene
-        if self._finished or scene is None or not isinstance(value, SelectionState):
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+            or scene is None
+            or not isinstance(value, SelectionState)
+        ):
             return
         if value.kind != "face" or len(value.topology_ids) != 1:
             return
@@ -234,21 +266,68 @@ class BoundHoleTask(QDialog):
         }
 
     def _parameters_changed(self) -> None:
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+        ):
+            return
+        self._preview_epoch += 1
+        epoch = self._preview_epoch
         had_preview = self._preview_params is not None
+        self._preview_clear_pending = self._preview_clear_pending or had_preview
         self._preview_params = None
         self.confirm_button.setEnabled(False)
+        if self._unit.is_busy or self._unit.is_notifying_idle or self._unit.is_notifying_result:
+            self.preview_button.setEnabled(False)
+            if self._preview_clear_pending or self._binding is not None:
+                self._clear_preview_epoch = epoch
+                self._clear_preview_timer.start(0)
+            self.status_label.setText("几何操作正在完成，请稍后重新预览绑定孔。")
+            return
         if self._binding is not None and not self._unit.is_busy:
             self.preview_button.setEnabled(True)
-            if had_preview:
+            if self._preview_clear_pending:
                 self._viewport.clear_candidate_preview()
+                self._preview_clear_pending = False
             self.status_label.setText("参数已变化，请重新预览绑定孔。")
 
+    def _clear_invalidated_preview(self) -> None:
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+            or self._clear_preview_epoch != self._preview_epoch
+        ):
+            return
+        if self._unit.is_busy or self._unit.is_notifying_idle or self._unit.is_notifying_result:
+            self._clear_preview_timer.start(100)
+            return
+        if self._preview_clear_pending:
+            self._viewport.clear_candidate_preview()
+            self._preview_clear_pending = False
+        self.preview_button.setEnabled(
+            self._binding is not None and self._candidate.state != "stale"
+        )
+
     def preview(self) -> None:
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+        ):
+            return
+        if self._unit.is_busy or self._unit.is_notifying_idle or self._unit.is_notifying_result:
+            self.status_label.setText("几何操作正在执行，请稍后重试。")
+            return
         try:
             params = self._parameters()
         except ValueError as exc:
             self.status_label.setText(str(exc))
             return
+        self._preview_epoch += 1
+        self._preview_clear_pending = False
+        self._clear_preview_timer.stop()
         self.scene = None
         self._viewport.clear_candidate_preview()
 
@@ -298,7 +377,13 @@ class BoundHoleTask(QDialog):
         self._submit(work, finished)
 
     def commit(self) -> None:
-        if self._unit.is_busy:
+        if (
+            self._finished
+            or self._cancel_requested
+            or self._current_session() != self._session_identity
+        ):
+            return
+        if self._unit.is_busy or self._unit.is_notifying_idle or self._unit.is_notifying_result:
             self.status_label.setText("几何操作正在执行，请稍后重试。")
             return
         if self._preview_params is None or self._preview_params != self._parameters():
@@ -343,6 +428,8 @@ class BoundHoleTask(QDialog):
     def _cleanup(self) -> None:
         if self._finished:
             return
+        self._cancel_timer.stop()
+        self._clear_preview_timer.stop()
         self._finished = True
         self._viewport.selection_changed.disconnect(self._selected_face)
         self._viewport.escape_pressed.disconnect(self.reject)
@@ -353,18 +440,40 @@ class BoundHoleTask(QDialog):
             self._candidate.cancel()
 
     def _finish_cancel(self) -> None:
+        if self._dialog_completed:
+            return
         self._cleanup()
+        self._dialog_completed = True
         super().reject()
+
+    @override
+    def accept(self) -> None:
+        if not self._dialog_completed:
+            self._dialog_completed = True
+            super().accept()
 
     @override
     def reject(self) -> None:
         if self._finished:
+            return
+        if self._unit.is_notifying_idle or self._unit.is_notifying_result:
+            if self._committing:
+                self.status_label.setText("正在提交，请等待操作完成。")
+                return
+            self._cancel_requested = True
+            self.confirm_button.setEnabled(False)
+            self.preview_button.setEnabled(False)
+            self.status_label.setText("正在完成当前操作，完成后取消。")
+            self._cancel_timer.start(0)
             return
         if self._unit.is_busy:
             if self._committing:
                 self.status_label.setText("正在提交，请等待操作完成。")
                 return
             self._cancel_requested = True
+            self.confirm_button.setEnabled(False)
+            self.preview_button.setEnabled(False)
             self.status_label.setText("正在结束预览，完成后取消。")
+            self._cancel_timer.start(100)
             return
         self._finish_cancel()

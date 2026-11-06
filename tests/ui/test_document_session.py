@@ -61,6 +61,122 @@ def test_workspaces_have_independent_history_and_keep_draft(qtbot: QtBot) -> Non
     assert sketch.document.commands == ()
 
 
+def test_empty_mixed_delete_remains_a_session_draft(qtbot: QtBot) -> None:
+    from mycad.core.sketch import LineEntity
+
+    window = managed_window(qtbot)
+    window.show()
+    entry = window.new_session_document("sketch")
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    saved = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    editor.canvas.replace_draft_entities((saved,))
+    editor.finish_button.click()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    line = LineEntity(uuid4().hex, (0.0, 10.0), (10.0, 10.0))
+    editor.canvas.replace_draft_entities((line,))
+    editor.canvas.selected_entity_ids = {saved.entity_id, line.entity_id}
+    assert editor.canvas.delete_selected()
+    qtbot.waitUntil(
+        lambda: editor.canvas.mixed_move is not None and not unit.is_busy, timeout=10000
+    )
+    assert not editor.canvas.entities
+    assert entry.has_draft and entry.needs_save
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_delete_of_linked_sketch_fails_without_partial_changes(qtbot: QtBot, mixed: bool) -> None:
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+
+    source_services = app.build_app(discoverers=[])
+    source = app.new_workspace_document(source_services, kind="sketch")
+    original = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    source_sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (original,))
+    source.bus.execute("sketch.create", source_sketch.to_state_mapping(), "local")
+    window = managed_window(qtbot)
+    window.show()
+    entry = window.new_session_document("sketch")
+    entry.loaded.bus.execute(
+        "reference.attach",
+        app.reference_parameters(source.document, object_id=source_sketch.sketch_id),
+        "local",
+    )
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    editor.set_context_sketches(entry.services.kernel.sketches)
+    linked = entry.services.kernel.sketches[0].entities[0]
+    draft = LineEntity(uuid4().hex, (20.0, 0.0), (30.0, 0.0))
+    if mixed:
+        editor.canvas.replace_draft_entities((draft,))
+    selection = {linked.entity_id}
+    if mixed:
+        selection.add(draft.entity_id)
+    editor.canvas.selected_entity_ids = selection
+    before = entry.loaded.document.commands
+    assert editor.canvas.delete_selected()
+    qtbot.waitUntil(
+        lambda: "失败" in editor.status_label.text() and not unit.is_busy, timeout=10000
+    )
+    assert editor.canvas.entities == ([draft] if mixed else [])
+    assert editor.canvas.selected_entity_ids == selection
+    assert entry.loaded.document.commands == before
+    assert source_services.kernel.sketches[0] == source_sketch
+
+
+@pytest.mark.parametrize("drag", [False, True])
+def test_trim_of_linked_sketch_preserves_source_and_draft(qtbot: QtBot, drag: bool) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+
+    source_services = app.build_app(discoverers=[])
+    source = app.new_workspace_document(source_services, kind="sketch")
+    original = LineEntity(uuid4().hex, (-30.0, 5.0), (30.0, 5.0))
+    source_sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (original,))
+    source.bus.execute("sketch.create", source_sketch.to_state_mapping(), "local")
+    window = managed_window(qtbot)
+    window.show()
+    entry = window.new_session_document("sketch")
+    entry.loaded.bus.execute(
+        "reference.attach",
+        app.reference_parameters(source.document, object_id=source_sketch.sketch_id),
+        "local",
+    )
+    editor = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert editor is not None and unit is not None
+    editor.set_context_sketches(entry.services.kernel.sketches)
+    linked = entry.services.kernel.sketches[0].entities[0]
+    boundary = LineEntity(uuid4().hex, (20.0, -5.0), (20.0, 10.0))
+    draft_target = LineEntity(uuid4().hex, (-30.0, 0.0), (30.0, 0.0))
+    draft_entities = (boundary, draft_target) if drag else (boundary,)
+    editor.canvas.replace_draft_entities(draft_entities)
+    editor.canvas.set_tool("修剪")
+    before = entry.loaded.document.commands
+    if drag:
+        start = editor.canvas.local_to_screen((25.0, 0.0))
+        end = editor.canvas.local_to_screen((25.0, 8.0))
+        QTest.mousePress(editor.canvas, Qt.MouseButton.LeftButton, pos=start)
+        QTest.mouseMove(editor.canvas, end)
+        QTest.mouseRelease(editor.canvas, Qt.MouseButton.LeftButton, pos=end)
+    else:
+        editor.canvas.add_coordinate_point((25.0, 5.0), exact_point=True)
+    qtbot.waitUntil(
+        lambda: "失败" in editor.status_label.text() and not unit.is_busy, timeout=10000
+    )
+    assert tuple(editor.canvas.entities) == draft_entities
+    assert editor.canvas.background_entities[0][0] == linked
+    assert entry.loaded.document.commands == before
+    assert source_services.kernel.sketches[0] == source_sketch
+
+
 def test_multiple_parts_and_internal_sketch_owner(qtbot: QtBot) -> None:
     window = managed_window(qtbot)
     session = window.document_session

@@ -80,6 +80,7 @@ class DatumTaskDialog(QDialog):
             services, loaded, session_identity=session_identity
         )
         self._finished = False
+        self._viewport_disconnected = False
         self._draft_revision = 0
         self._adopting_position = False
         self._adopted_origin: Point3D | None = None
@@ -192,18 +193,24 @@ class DatumTaskDialog(QDialog):
         self._stop_origin_pick()
         if self.position_dialog is not None:
             self.position_dialog.reject()
-        self._viewport.clear_candidate_preview()
+        if self._current_session() == self._session_identity:
+            self._viewport.clear_candidate_preview()
         self.status_label.setText("模型已改变，请退出并重新创建基准。")
 
     def _disconnect_viewport(self, _result: int) -> None:
+        if self._viewport_disconnected:
+            return
+        self._viewport_disconnected = True
         self._stop_origin_pick()
         self._viewport.removeEventFilter(self)
         self._viewport.datum_selection_changed.disconnect(self._on_datum_selected)
-        self._viewport.set_datum_pick_filter(None)
+        if self._current_session() == self._session_identity:
+            self._viewport.set_datum_pick_filter(None)
 
     def _on_datum_selected(self, reference: object) -> None:
         if (
             self._finished
+            or self._current_session() != self._session_identity
             or self.position_dialog is not None
             or not isinstance(reference, SpatialReference)
         ):
@@ -223,6 +230,8 @@ class DatumTaskDialog(QDialog):
         self._adopted_origin = None
 
     def _kind_changed(self) -> None:
+        if self._finished or self._current_session() != self._session_identity:
+            return
         index = self.kind_combo.currentIndex()
         previous = self.parent_combo.blockSignals(True)
         self.parent_combo.clear()
@@ -251,7 +260,11 @@ class DatumTaskDialog(QDialog):
         self._invalidate()
 
     def _invalidate(self) -> None:
-        if self._finished or self._source_expired:
+        if (
+            self._finished
+            or self._source_expired
+            or self._current_session() != self._session_identity
+        ):
             return
         self._draft_revision += 1
         self._stop_origin_pick()
@@ -302,9 +315,11 @@ class DatumTaskDialog(QDialog):
 
     def preview(self) -> None:
         self._preview_timer.stop()
+        if self._finished or self._current_session() != self._session_identity:
+            return
         self._stop_origin_pick()
         self.confirm_button.setEnabled(False)
-        if self._finished or self._source_expired:
+        if self._source_expired:
             return
         if not self._can_execute():
             self.status_label.setText("几何工作线程忙碌，请稍后重新预览。")
@@ -345,11 +360,17 @@ class DatumTaskDialog(QDialog):
         self._snap_point = None
         self._hotspot = None
         self._hotspot_scene = None
-        self._viewport.set_origin_hotspot(None)
-        self._viewport.set_position_markers(None)
+        if self._current_session() == self._session_identity:
+            self._viewport.set_origin_hotspot(None)
+            self._viewport.set_position_markers(None)
 
     def start_origin_pick(self) -> None:
-        if self.kind_combo.currentIndex() != 0 or self._source_expired or self.position_dialog:
+        if (
+            self._finished
+            or self.kind_combo.currentIndex() != 0
+            or self._source_expired
+            or self.position_dialog
+        ):
             return
         if self._hotspot is None:
             self.preview()
@@ -420,7 +441,12 @@ class DatumTaskDialog(QDialog):
 
     @override
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if watched is not self._viewport or self.position_dialog is not None or self._finished:
+        if (
+            watched is not self._viewport
+            or self.position_dialog is not None
+            or self._finished
+            or self._current_session() != self._session_identity
+        ):
             return super().eventFilter(watched, event)
         if event.type() == QEvent.Type.KeyPress and self._picking_origin:
             from PySide6.QtGui import QKeyEvent
@@ -496,7 +522,11 @@ class DatumTaskDialog(QDialog):
         self.accept()
 
     def open_positioning(self) -> None:
-        if self.kind_combo.currentIndex() != 0:
+        if (
+            self._finished
+            or self._current_session() != self._session_identity
+            or self.kind_combo.currentIndex() != 0
+        ):
             return
         self.preview()
         if not self.confirm_button.isEnabled() or self._candidate.proposal is None:
@@ -525,6 +555,7 @@ class DatumTaskDialog(QDialog):
                 and self._loaded.document.revision == proposal.revision
             ),
             self,
+            owns_viewport=lambda: self._current_session() == self._session_identity,
         )
         self.position_dialog = dialog
         self.confirm_button.setEnabled(False)
@@ -571,12 +602,20 @@ class DatumTaskDialog(QDialog):
             self._adopting_position = False
         self._adopted_origin = local
 
+    @override
+    def accept(self) -> None:
+        if not self._viewport_disconnected:
+            super().accept()
+
+    @override
     def reject(self) -> None:
+        if self._finished:
+            return
         self._preview_timer.stop()
         if self.position_dialog is not None:
             self.position_dialog.reject()
-        if not self._finished:
-            self._candidate.cancel()
+        self._candidate.cancel()
+        if self._current_session() == self._session_identity:
             self._viewport.clear_candidate_preview()
-            self._finished = True
+        self._finished = True
         super().reject()

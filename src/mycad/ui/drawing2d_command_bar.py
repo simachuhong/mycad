@@ -110,6 +110,8 @@ class Drawing2DCommandBar(QWidget):
     }
     _DRAWING_TOOLS = frozenset({"直线", "多段线", "矩形", "多边形", "圆", "圆弧", "样条曲线"})
     _TRANSFORMS = {
+        "E": "erase",
+        "ERASE": "erase",
         "M": "move",
         "MOVE": "move",
         "CO": "copy",

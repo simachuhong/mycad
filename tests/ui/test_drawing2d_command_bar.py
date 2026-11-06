@@ -16,6 +16,67 @@ def test_coordinate_input_supports_absolute_relative_and_polar() -> None:
     assert parse_coordinate("  -2.5 , 4e1 ", None) == (-2.5, 40)
 
 
+@pytest.mark.parametrize("mode", ["preselected", "enter", "right_click"])
+def test_erase_command_deletes_selected_draft_geometry(qtbot: QtBot, mode: str) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True, continuous_lines=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    canvas = editor.canvas
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    canvas.replace_draft_entities((line,))
+    if mode == "preselected":
+        canvas.selected_entity_ids = {line.entity_id}
+    bar = editor.drawing_command_bar
+    bar.input.setText("E")
+    QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    if mode != "preselected":
+        assert canvas.transform_selecting
+        QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((5.0, 0.0)))
+        if mode == "right_click":
+            QTest.mouseClick(canvas, Qt.MouseButton.RightButton)
+        else:
+            QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    assert not canvas.entities
+    assert canvas.active_transform is None
+    canvas.undo_last_operation()
+    assert canvas.entities == [line]
+
+
+def test_erase_command_cancel_and_repeat(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True, continuous_lines=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    canvas = editor.canvas
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    canvas.replace_draft_entities((line,))
+    bar = editor.drawing_command_bar
+    bar.input.setText("ERASE")
+    QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    QTest.keyClick(canvas, Qt.Key.Key_Escape)
+    assert canvas.entities == [line] and canvas.active_transform is None
+    QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    assert canvas.transform_selecting
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((5.0, 0.0)))
+    QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    assert not canvas.entities
+
+
 @pytest.mark.parametrize(
     "text,base",
     [

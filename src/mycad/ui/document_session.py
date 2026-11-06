@@ -58,7 +58,9 @@ class SessionDocument:
     @property
     def has_draft(self) -> bool:
         return self.draft is not None and bool(
-            self.draft.canvas.entities or self.draft.canvas.has_pending_geometry
+            self.draft.canvas.entities
+            or self.draft.canvas.has_pending_geometry
+            or self.draft.canvas.mixed_move is not None
         )
 
     @property

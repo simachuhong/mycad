@@ -58,6 +58,26 @@ def test_document_switch_waits_until_result_callback_finishes(qtbot: QtBot) -> N
     qtbot.waitUntil(lambda: session.active is second, timeout=10000)
 
 
+def test_document_switch_restores_selection_filter_and_menu(qtbot: QtBot) -> None:
+    from mycad.ui.document_session import DocumentSession
+
+    window = MainWindow(services=build_app(discoverers=[]), document_session=DocumentSession())
+    qtbot.addWidget(window)
+    first = window.new_session_document("part")
+    view = window.viewport
+    assert view is not None
+    window.selection_filter_actions["edge"].trigger()
+    second = window.new_session_document("part")
+    window.selection_filter_actions["vertex"].trigger()
+    window.activate_session_document(first.loaded.document.document_id)
+    assert view.selection_filter() == "edge"
+    assert window.selection_filter_actions["edge"].isChecked()
+    window.activate_session_document(second.loaded.document.document_id)
+    assert view.selection_filter() == "vertex"
+    assert window.selection_filter_actions["vertex"].isChecked()
+    assert not first.loaded.document.commands and not second.loaded.document.commands
+
+
 def test_drawing_draft_cannot_finish_during_result_handoff(qtbot: QtBot) -> None:
     from mycad.ui.document_session import DocumentSession
 

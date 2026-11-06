@@ -552,6 +552,7 @@ class GLViewport(GLViewWidget):
     datum_selection_changed = Signal(object)
     # Full transient identity state, shared with status and structure panel.
     selection_changed = Signal(object)
+    selection_filter_changed = Signal()
     current_snapshot_changed = Signal(object)
     camera_changed = Signal()
     body_display_changed = Signal()
@@ -1852,6 +1853,7 @@ class GLViewport(GLViewWidget):
         self._selection_filter = kind
         self._preselection = None
         self.clear_selection()
+        self.selection_filter_changed.emit()
 
     def selection_filter(self) -> SelectionKind:
         """Current view-only selection filter."""
@@ -2238,6 +2240,10 @@ class GLViewport(GLViewWidget):
             self.current_entity_picked.emit(False)
         if was_previewing:
             self.history_preview_changed.emit(False)
+
+    def displays_candidate_preview(self, snapshot: ViewportData) -> bool:
+        """Identify the exact non-interactive candidate currently on this viewport."""
+        return self._candidate_snapshot is snapshot and self._interaction_scene is None
 
     def clear_candidate_preview(self) -> None:
         """Restore the committed model after a temporary candidate preview."""

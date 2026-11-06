@@ -131,6 +131,7 @@ class PartSketchWorkbench(QDialog):
         )
         self._locked = False
         self._finished = False
+        self._closed = False
         self._tool = "select"
         self._points: list[Point2D] = []
         self._last_dynamic_point: Point2D | None = None
@@ -479,6 +480,8 @@ class PartSketchWorkbench(QDialog):
             self.status_label.setText("编辑已有草图；确认前将预演下游模型。")
 
     def _look_at_plane(self) -> None:
+        if not self._is_current():
+            return
         if self._locked:
             self._viewport.look_at_workplane(self.session.sketch.frame)
         else:
@@ -527,11 +530,15 @@ class PartSketchWorkbench(QDialog):
                 return
 
     def _on_document_event(self, _payload: Mapping[str, object]) -> None:
-        if not self._finished:
+        if not self._finished and not self._closed:
             self._source_changed.emit()
 
     def _expire_if_changed(self) -> None:
-        if self._finished or self._loaded.document.revision == self._source_revision:
+        if (
+            self._finished
+            or self._closed
+            or self._loaded.document.revision == self._source_revision
+        ):
             return
         self._preview_generation = None
         self.confirm_button.setEnabled(False)
@@ -551,6 +558,7 @@ class PartSketchWorkbench(QDialog):
     def _is_current(self) -> bool:
         return (
             not self._finished
+            and not self._closed
             and self._current_session() == self._session_identity
             and self._loaded.document.revision == self._source_revision
         )
@@ -1001,10 +1009,14 @@ class PartSketchWorkbench(QDialog):
         return point, None
 
     def _on_dynamic_input_changed(self) -> None:
+        if not self._is_current():
+            return
         if self._last_dynamic_point is not None and self._points:
             self._preview_drawing(self._last_dynamic_point, infer=self._last_dynamic_infer)
 
     def _cancel_dynamic_entity(self) -> None:
+        if not self._is_current():
+            return
         self._clear_temporary_state()
         self._display_sketch(self.session.sketch)
         self.status_label.setText("当前图元已取消。")
@@ -1423,6 +1435,8 @@ class PartSketchWorkbench(QDialog):
         self._display_sketch(self.session.sketch)
 
     def _display_sketch(self, sketch: Sketch) -> None:
+        if self._closed or self._current_session() != self._session_identity:
+            return
         self._displayed_sketch = sketch
         curves: list[tuple[str, tuple[tuple[float, float, float], ...]]] = []
         draft_points: list[tuple[str, Point3D]] = []
@@ -2227,9 +2241,14 @@ class PartSketchWorkbench(QDialog):
 
     @override
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if watched is self._viewport and not self._can_execute():
+        if (
+            watched is self._viewport
+            and not self._closed
+            and self._current_session() == self._session_identity
+            and not self._can_execute()
+        ):
             if event.type() == QEvent.Type.KeyPress:
-                self.status_label.setText("请等待当前操作完成后再编辑草图。")
+                self.status_label.setText("应用忙碌，请等待当前操作完成后再编辑草图。")
                 return True
             if event.type() == QEvent.Type.MouseMove:
                 mouse = cast("QMouseEvent", event)
@@ -2248,7 +2267,7 @@ class PartSketchWorkbench(QDialog):
                         self._drag_start = None
                         self._drag_reference = None
                         self._display_sketch(self.session.sketch)
-                    self.status_label.setText("请等待当前操作完成后再编辑草图。")
+                    self.status_label.setText("应用忙碌，请等待当前操作完成后再编辑草图。")
                     return True
         if (
             watched is self._viewport
@@ -2528,17 +2547,30 @@ class PartSketchWorkbench(QDialog):
                 return cast("QMouseEvent", event).button() == Qt.MouseButton.LeftButton
         return super().eventFilter(watched, event)
 
+    @override
+    def accept(self) -> None:
+        if not self._closed:
+            super().accept()
+
+    @override
+    def reject(self) -> None:
+        if not self._closed:
+            super().reject()
+
     def _cleanup(self, _result: int) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self._close_dimension_editor()
         if self.constraint_dialog is not None:
             self.constraint_dialog.reject()
         self._viewport.removeEventFilter(self)
         self._viewport.datum_selection_changed.disconnect(self._on_datum_selected)
         self._viewport.selection_changed.disconnect(self._on_face_selected)
-        self._viewport.set_selection_filter(self._saved_selection_filter)
         if not self._finished:
             self._candidate.cancel()
         if self._current_session() == self._session_identity:
+            self._viewport.set_selection_filter(self._saved_selection_filter)
             self._viewport.set_draft_sketch_curves(())
             self._viewport.set_draft_sketch_points(())
             self._viewport.set_draft_sketch_control_points(())

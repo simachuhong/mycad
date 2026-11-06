@@ -8,6 +8,7 @@
 - scoped 回归：`tests/ui/test_part_sketch_workbench.py tests/ui/test_part_sketch_dimensions.py tests/ui/test_sketch_dynamic_input.py tests/ui/test_sketch_constraint_dialog.py tests/ui/test_viewport.py tests/test_layering.py tests/geom/test_m2b_associated_constraints.py`：150 passed，1 skipped（offscreen 无 OpenGL framebuffer；执行时为本次测试增强前的版本）。
 - Xvfb + xcb + 200% 缩放：尺寸创建、重叠选择、驱动尺寸编辑与下游保存重开等 8 passed；物理 GPU 未验证。`u06-draft-dimensions-xvfb.png` 为软件环境草稿尺寸截图，并非 ST10 对照或用户验收。
 - 分支变化和冲突反馈的界面分支使用受控求解结果测试；完整实际复杂冲突场景仍需人工与进一步回归。真实 ST10 画布放置、自由度表达和视觉差异待核对。
+- 2026-11-06 零件草图全套在 200% 缩放下首次复验为 114 通过、1 失败：尺寸编辑忙碌提示被通用等待提示覆盖，模型与草稿未发生错误修改。统一提示明确说明应用忙碌后，全套复跑 115 项通过；相关源码 Ruff、格式与严格类型检查通过。
 
 本次记录的源码 SHA-256：
 

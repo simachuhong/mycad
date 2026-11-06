@@ -100,6 +100,26 @@ def test_navigation_and_selection_actions_change_only_view_state(
     assert services.kernel.geometry_revision == geometry_revision
 
 
+def test_selection_filter_menu_tracks_viewport_changes(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    win = MainWindow(services=services)
+    qtbot.addWidget(win)
+    loaded = new_document(services)
+    win.bind_document(loaded)
+    viewport = win.viewport
+    assert viewport is not None
+    saved_view = viewport.capture_view()
+    revision = loaded.document.revision
+    for kind in ("vertex", "edge", "face", "body"):
+        viewport.set_selection_filter(kind)
+        assert win.selection_filter_actions[kind].isChecked()
+        assert sum(action.isChecked() for action in win.selection_filter_actions.values()) == 1
+    viewport.set_selection_filter("edge")
+    viewport.restore_view(saved_view)
+    assert win.selection_filter_actions["body"].isChecked()
+    assert loaded.document.revision == revision
+
+
 def test_status_fields_map_core_signals(qapp: QApplication) -> None:
     win = MainWindow()
     win.handle_core_signal("post_command", {"command_id": "feature.cylinder", "ordinal": 0})
