@@ -82,8 +82,13 @@ def test_grid_renders_dots_instead_of_continuous_lines(qtbot: QtBot) -> None:
     on_dot = canvas.local_to_screen((step, step))
     between_dots = canvas.local_to_screen((step, step * 1.5))
     image = canvas.grab().toImage()
-    assert image.pixelColor(on_dot) != Qt.GlobalColor.white
-    assert image.pixelColor(between_dots) == Qt.GlobalColor.white
+    ratio = image.devicePixelRatio()
+    assert image.pixelColor(round(on_dot.x() * ratio), round(on_dot.y() * ratio)) != (
+        Qt.GlobalColor.white
+    )
+    assert image.pixelColor(round(between_dots.x() * ratio), round(between_dots.y() * ratio)) == (
+        Qt.GlobalColor.white
+    )
 
 
 @pytest.mark.parametrize("floating", [False, True])
@@ -105,8 +110,11 @@ def test_grid_toggle_f7_preserves_snap_and_continuation(qtbot: QtBot, floating: 
     assert not editor.grid_visible_check.isChecked()
     canvas = editor.canvas
     step = canvas.grid_spacing_mm()
-    assert canvas.grab().toImage().pixelColor(canvas.local_to_screen((step, step))) == (
-        Qt.GlobalColor.white
+    image = canvas.grab().toImage()
+    point = canvas.local_to_screen((step, step))
+    ratio = image.devicePixelRatio()
+    assert (
+        image.pixelColor(round(point.x() * ratio), round(point.y() * ratio)) == Qt.GlobalColor.white
     )
     canvas.add_coordinate_point((step + 0.1, step + 0.1))
     canvas.add_coordinate_point((step * 3 + 0.1, step + 0.1))

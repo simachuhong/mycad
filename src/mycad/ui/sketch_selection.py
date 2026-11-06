@@ -9,6 +9,7 @@ from mycad.core.sketch import (
     CircleEntity,
     LineEntity,
     Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     SketchEntity,
@@ -29,6 +30,9 @@ def entity_in_selection_box(
 
     def contains(point: Point2D) -> bool:
         return all(low[axis] - 1e-9 <= point[axis] <= high[axis] + 1e-9 for axis in (0, 1))
+
+    if isinstance(entity, PointEntity):
+        return contains(entity.position_mm)
 
     if isinstance(entity, CircleEntity | ArcEntity):
 

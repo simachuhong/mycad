@@ -96,7 +96,46 @@ def test_executor_discards_completion_from_previous_document_session(qtbot: QtBo
     assert ready == []
     assert discarded == [1]
     assert not unit.is_busy
+    assert not unit.is_delivering_result
     assert unit.shutdown()
+
+
+def test_result_notifications_cannot_start_work_before_completion_callback(qtbot: QtBot) -> None:
+    unit = SerializedExecutionUnit()
+    entered, release = threading.Event(), threading.Event()
+    attempted: list[bool] = []
+    ready_attempted: list[bool] = []
+    followup: list[bool] = []
+
+    def work() -> None:
+        entered.set()
+        assert release.wait(5)
+
+    def busy_changed(busy: bool) -> None:
+        if not busy and not attempted:
+            attempted.append(unit.submit(lambda: None, operation="intruder", session_id=0))
+
+    def complete(_result: ExecutionResult) -> None:
+        followup.append(unit.submit(lambda: None, operation="followup", session_id=0))
+
+    def ready(result: ExecutionResult) -> None:
+        if result.operation == "first":
+            ready_attempted.append(unit.submit(lambda: None, operation="intruder", session_id=0))
+
+    unit.busy_changed.connect(busy_changed)
+    unit.result_ready.connect(ready)
+    assert unit.submit(work, operation="first", session_id=0, on_complete=complete)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=5000)
+        release.set()
+        qtbot.waitUntil(lambda: bool(followup), timeout=10000)
+        assert attempted == [False]
+        assert ready_attempted == [False]
+        assert followup == [True]
+        qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    finally:
+        release.set()
+        assert unit.shutdown(wait_for_running=True)
 
 
 def test_cli_geometry_submission_uses_worker_and_refreshes_bound_viewport(
@@ -205,6 +244,43 @@ def test_close_is_deferred_until_running_geometry_job_finishes(qtbot: QtBot) -> 
         release.set()
         qtbot.waitUntil(lambda: not unit.is_busy)
         unit.shutdown()
+
+
+def test_close_from_idle_signal_waits_for_result_callback(qtbot: QtBot) -> None:
+    window = MainWindow(services=build_app(discoverers=[]))
+    qtbot.addWidget(window)
+    window.show()
+    unit = window.execution_unit
+    assert unit is not None
+    entered, release = threading.Event(), threading.Event()
+    visible_during_callback: list[bool] = []
+
+    def action() -> None:
+        entered.set()
+        assert release.wait(5)
+
+    def busy_changed(busy: bool) -> None:
+        if not busy:
+            window.close()
+
+    def completed(_result: ExecutionResult) -> None:
+        visible_during_callback.append(window.isVisible())
+
+    def result_ready(_result: ExecutionResult) -> None:
+        window.close()
+
+    unit.busy_changed.connect(busy_changed)
+    unit.result_ready.connect(result_ready)
+    assert unit.submit(
+        action, operation="close-on-idle", session_id=unit.session_id, on_complete=completed
+    )
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=5000)
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: bool(visible_during_callback), timeout=10000)
+    assert visible_during_callback == [True]
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=10000)
 
 
 def test_destroyed_window_joins_active_worker_before_releasing_qthread(qtbot: QtBot) -> None:

@@ -24,18 +24,28 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import Any, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, cast, override
 
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QModelIndex,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -58,6 +68,7 @@ from mycad.core.measurements import (
 )
 from mycad.core.persistence import LoadedDocument
 from mycad.core.semantic_refs import SemanticEdgeRef, SemanticFaceRef
+from mycad.core.spatial_references import SpatialReference
 from mycad.core.viewport_protocol import BodyResultReference, ViewportBodyOrigin, ViewportData
 from mycad.ui.cad_icons import (
     STRUCTURE_ICONS,
@@ -73,8 +84,18 @@ from mycad.ui.theme import ThemeName
 from mycad.ui.viewport import SelectionState
 
 
+class _HistoryImpactLabel(QLabel):
+    @override
+    def setText(self, text: str) -> None:  # noqa: N802
+        super().setText(text)
+        self.setToolTip(text)
+
+
 class HistoryEditDialog(QDialog):
     """Typed parameter editor with a normalized delta and replay preview."""
+
+    candidate_preview_requested = Signal(object, str)
+    candidate_discard_requested = Signal(object)
 
     def __init__(
         self,
@@ -85,6 +106,9 @@ class HistoryEditDialog(QDialog):
         ordinal: int,
         downstream: Sequence[ExecutedCommand],
         parent: QWidget | None = None,
+        candidate_preview: bool = False,
+        embedded: bool = False,
+        can_cancel: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑草图" if spec.id == "sketch.create" else "编辑历史特征")
@@ -92,10 +116,16 @@ class HistoryEditDialog(QDialog):
         self._baseline = dict(params)
         self._downstream = tuple(downstream)
         self._preview_params: dict[str, object] | None = None
+        self._candidate_preview = candidate_preview
+        self._can_cancel = can_cancel
+        self.cancel_requested = False
+        self._preview_reason = ""
+        self.candidate: object | None = None
+        self.repair_mode = False
         self.result_params: dict[str, object] = {}
         self.edit_reason = ""
         self.parameter_form = ParameterForm(spec, params, registry, self)
-        self.impact_label = QLabel("修改参数后预览影响，再明确确认重建。", self)
+        self.impact_label = _HistoryImpactLabel("修改参数后预览影响，再明确确认重建。", self)
         self.impact_label.setObjectName("historyEditImpact")
         self.impact_label.setWordWrap(True)
         self.reason_field = QLineEdit(self)
@@ -106,21 +136,86 @@ class HistoryEditDialog(QDialog):
         self.confirm_button = QPushButton("确认并重建", self)
         self.confirm_button.setObjectName("confirmHistoryEdit")
         self.confirm_button.setEnabled(False)
-        cancel_button = QPushButton("取消", self)
+        self.repair_button = QPushButton("重选失效面…", self)
+        self.repair_button.setVisible(False)
+        self.repair_button.setEnabled(False)
+        self.cancel_button = QPushButton("取消", self)
+        self.parameter_button = QPushButton("参数…", self)
+        self.parameter_dialog = QDialog(self)
+        self.parameter_dialog.setWindowTitle("编辑历史参数")
         self.preview_button.clicked.connect(self.preview_changes)
         self.confirm_button.clicked.connect(self.confirm_changes)
-        cancel_button.clicked.connect(self.reject)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.parameter_form)
-        layout.addWidget(self.impact_label)
-        layout.addWidget(QLabel("修改原因", self))
-        layout.addWidget(self.reason_field)
-        layout.addWidget(self.preview_button)
-        layout.addWidget(self.confirm_button)
-        layout.addWidget(cancel_button)
+        self.repair_button.clicked.connect(self.begin_repair)
+        self.cancel_button.clicked.connect(self.reject)
+        self.parameter_form.values_changed.connect(self._invalidate_candidate)
+        self.reason_field.textChanged.connect(self._invalidate_candidate)
+        if embedded:
+            self.reason_field.setMaximumWidth(240)
+            self.impact_label.setMinimumWidth(240)
+            parameter_layout = QVBoxLayout(self.parameter_dialog)
+            scroll = QScrollArea(self.parameter_dialog)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(self.parameter_form)
+            parameter_layout.addWidget(scroll)
+            done = QPushButton("完成", self.parameter_dialog)
+            done.clicked.connect(self.parameter_dialog.accept)
+            parameter_layout.addWidget(done)
+            self.parameter_dialog.resize(480, 320)
+            self.parameter_button.clicked.connect(self.parameter_dialog.exec)
+            layout = QHBoxLayout(self)
+            layout.addWidget(self.parameter_button)
+            layout.addWidget(QLabel("修改原因", self))
+            layout.addWidget(self.reason_field)
+            layout.addWidget(self.impact_label)
+            layout.addWidget(self.preview_button)
+            layout.addWidget(self.repair_button)
+            layout.addWidget(self.confirm_button)
+            layout.addWidget(self.cancel_button)
+            layout.addStretch(1)
+        else:
+            self.parameter_button.hide()
+            layout = QVBoxLayout(self)
+            layout.addWidget(self.parameter_form)
+            layout.addWidget(self.impact_label)
+            layout.addWidget(QLabel("修改原因", self))
+            layout.addWidget(self.reason_field)
+            layout.addWidget(self.preview_button)
+            layout.addWidget(self.confirm_button)
+            layout.addWidget(self.repair_button)
+            layout.addWidget(self.cancel_button)
+
+    def set_cancel_guard(self, guard: Callable[[], bool]) -> None:
+        self._can_cancel = guard
+
+    @override
+    def reject(self) -> None:
+        if self._can_cancel is not None and not self._can_cancel():
+            self.cancel_requested = True
+            self.impact_label.setText("正在结束候选预览，完成后取消。")
+            return
+        self.cancel_requested = False
+        super().reject()
+
+    def _invalidate_candidate(self) -> None:
+        if not self._candidate_preview or self._preview_params is None:
+            return
+        if self.candidate is not None:
+            self.candidate_discard_requested.emit(self.candidate)
+            self.candidate = None
+        self._preview_params = None
+        self.confirm_button.setEnabled(False)
+        self.repair_button.setEnabled(False)
+        self.repair_button.setVisible(False)
+        self.impact_label.setText("参数或原因已变化，请重新预览候选。")
 
     def preview_changes(self) -> None:
         """Validate and show the exact normalized delta before confirmation."""
+
+        if self._candidate_preview and self.candidate is not None:
+            self.candidate_discard_requested.emit(self.candidate)
+            self.candidate = None
+        self.repair_button.setEnabled(False)
+        self.repair_button.setVisible(False)
 
         try:
             normalized = self.parameter_form.normalized_params()
@@ -146,7 +241,59 @@ class HistoryEditDialog(QDialog):
             f"（{downstream_ids}）。规范化参数差异："
             f"{json.dumps(delta, ensure_ascii=False, sort_keys=True)}"
         )
+        if self._candidate_preview:
+            reason = self.reason_field.text().strip()
+            self.confirm_button.setEnabled(False)
+            if not reason:
+                self.impact_label.setText("请填写修改原因，再预览候选。")
+                return
+            self._preview_reason = reason
+            self.impact_label.setText(self.impact_label.text() + " 正在重放候选…")
+            self.candidate_preview_requested.emit(normalized, reason)
+            return
         self.confirm_button.setEnabled(True)
+
+    def candidate_preview_finished(
+        self, candidate: object | None, message: str, *, repairable: bool = False
+    ) -> bool:
+        """Accept a result only while the exact submitted inputs are still present."""
+        try:
+            current = self.parameter_form.normalized_params()
+        except ValidationError:
+            current = None
+        if (
+            current != self._preview_params
+            or self.reason_field.text().strip() != self._preview_reason
+        ):
+            self.confirm_button.setEnabled(False)
+            self.impact_label.setText("参数或原因已变化，请重新预览候选。")
+            return False
+        self.candidate = candidate
+        self.impact_label.setText(self.impact_label.text() + " " + message)
+        self.confirm_button.setEnabled(candidate is not None and not repairable)
+        self.repair_button.setVisible(candidate is not None and repairable)
+        self.repair_button.setEnabled(candidate is not None and repairable)
+        return candidate is not None
+
+    def begin_repair(self) -> None:
+        """Transfer the failed candidate only after an explicit repair request."""
+        if self.candidate is None or self._preview_params is None:
+            return
+        try:
+            current = self.parameter_form.normalized_params()
+        except ValidationError:
+            self._invalidate_candidate()
+            return
+        if (
+            current != self._preview_params
+            or self.reason_field.text().strip() != self._preview_reason
+        ):
+            self._invalidate_candidate()
+            return
+        self.result_params = current
+        self.edit_reason = self._preview_reason
+        self.repair_mode = True
+        self.accept()
 
     def confirm_changes(self) -> None:
         """Accept only the same non-no-op proposal the user previewed."""
@@ -167,6 +314,10 @@ class HistoryEditDialog(QDialog):
         if not reason:
             self.impact_label.setText("请填写修改原因，再确认重建。")
             return
+        if self._candidate_preview and (self.candidate is None or reason != self._preview_reason):
+            self.impact_label.setText("参数或原因已变化，请重新预览候选。")
+            self.confirm_button.setEnabled(False)
+            return
         self.result_params = normalized
         self.edit_reason = reason
         self.accept()
@@ -186,6 +337,7 @@ UNTITLED_DOCUMENT: str = "未命名文档"
 #: 结构叶子的角色槽：UserRole 存 feature_history ordinal。
 ORDINAL_ROLE: int = int(Qt.ItemDataRole.UserRole)
 BODY_ROLE: int = ORDINAL_ROLE + 2
+DATUM_ROLE: int = ORDINAL_ROLE + 3
 
 
 def _properties_of(schema: Mapping[str, object]) -> dict[str, object]:
@@ -241,10 +393,18 @@ class RightPanel(QWidget):
 
     structure_selection_changed = Signal(int)
     body_selection_requested = Signal(object)
+    datum_selection_requested = Signal(object)
+    datum_visibility_requested = Signal(object, bool)
     body_visibility_requested = Signal(object, bool)
     show_all_bodies_requested = Signal()
     options_error = Signal(str)
     history_edit_requested = Signal(int, object, str, str)
+    history_candidate_preview_requested = Signal(object, int, object, str)
+    history_candidate_commit_requested = Signal(object, int)
+    history_candidate_discard_requested = Signal(object)
+    history_candidate_repair_requested = Signal(object, int, object, str)
+    history_candidate_open_requested = Signal(object, int)
+    part_sketch_edit_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -257,6 +417,7 @@ class RightPanel(QWidget):
         self._body_origins: dict[BodyId, ViewportBodyOrigin] = {}
         self._origin_commands: dict[str, ExecutedCommand] = {}
         self._hidden_body_ids: frozenset[BodyId] = frozenset()
+        self._hidden_datums: set[SpatialReference] = set()
         self._body_visibility_editable = True
         self._draft: PlanDraftController | None = None
         self._document_name: str | None = None
@@ -310,6 +471,11 @@ class RightPanel(QWidget):
         self._edit_history_button.setVisible(False)
         self._edit_history_button.clicked.connect(self._on_edit_history_clicked)
         property_layout.addWidget(self._edit_history_button)
+        self._part_sketch_button = QPushButton("原位编辑草图…", self._property_tab)
+        self._part_sketch_button.setObjectName("editPartSketch")
+        self._part_sketch_button.setVisible(False)
+        self._part_sketch_button.clicked.connect(self._on_part_sketch_edit_clicked)
+        property_layout.addWidget(self._part_sketch_button)
         self._options_table = QTableWidget(0, 2)
         self._options_table.setHorizontalHeaderLabels(("参数", "当前值"))
         self._options_table.horizontalHeader().setStretchLastSection(True)
@@ -341,6 +507,13 @@ class RightPanel(QWidget):
     def tabs(self) -> QTabWidget:
         """只读访问五页容器（占位页禁用态的断言由此发出）。"""
         return self._tabs
+
+    def take_structure_tab(self) -> QWidget:
+        """Move the existing structure page into a navigation container."""
+        index = self._tabs.indexOf(self._structure_tab)
+        if index >= 0:
+            self._tabs.removeTab(index)
+        return self._structure_tab
 
     @property
     def structure_tree(self) -> QTreeWidget:
@@ -432,6 +605,19 @@ class RightPanel(QWidget):
                 self._configure_body_visibility(item, identity)
         del blocker
 
+    def set_datum_visibility(self, hidden: Sequence[SpatialReference]) -> None:
+        self._hidden_datums = set(hidden)
+        blocker = QSignalBlocker(self._structure_tree)
+        for item in self._structure_tree.findItems(
+            "", Qt.MatchFlag.MatchContains | Qt.MatchFlag.MatchRecursive
+        ):
+            reference = item.data(0, DATUM_ROLE)
+            if isinstance(reference, SpatialReference):
+                visible = reference not in self._hidden_datums
+                item.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
+                item.setText(1, "显示" if visible else "隐藏")
+        del blocker
+
     def _configure_body_visibility(self, item: QTreeWidgetItem, identity: BodyId) -> None:
         flags = item.flags()
         if self._body_visibility_editable:
@@ -446,6 +632,16 @@ class RightPanel(QWidget):
         item.setText(1, "隐藏" if identity in self._hidden_body_ids else "显示")
 
     def _on_body_visibility_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        datum = item.data(0, DATUM_ROLE)
+        if column == 0 and isinstance(datum, SpatialReference):
+            visible = item.checkState(0) == Qt.CheckState.Checked
+            if visible:
+                self._hidden_datums.discard(datum)
+            else:
+                self._hidden_datums.add(datum)
+            item.setText(1, "显示" if visible else "隐藏")
+            self.datum_visibility_requested.emit(datum, visible)
+            return
         identity = item.data(0, BODY_ROLE)
         if column == 0 and isinstance(identity, BodyId) and self._body_visibility_editable:
             self.body_visibility_requested.emit(
@@ -513,12 +709,14 @@ class RightPanel(QWidget):
         self._registry = registry
         self._loaded = loaded
         self._document = loaded.document
+        self._hidden_datums.clear()
         self._selected_ordinal = None
         self._body_ids = ()
         self._body_origins = {}
         self._origin_commands = {}
         self.set_view_selection(None)
         self._edit_history_button.setVisible(False)
+        self._part_sketch_button.setVisible(False)
         self._document_name = document_stem
         self._measurement_kernel = kernel
         self._measurement_references = ()
@@ -712,7 +910,31 @@ class RightPanel(QWidget):
         for title in STRUCTURE_GROUP_TITLES:
             group = QTreeWidgetItem(root, [title])
             set_tree_icon(group, STRUCTURE_ICONS[title], self._icon_theme)
-            if title == SKETCH_GROUP_TITLE:
+            if title == "基准":
+                for command in self._document.commands:
+                    if command.id not in ("datum.coordinate_system.create", "datum.plane.create"):
+                        continue
+                    if command.instance_id is None:
+                        continue
+                    kind = (
+                        "coordinate_system"
+                        if command.id == "datum.coordinate_system.create"
+                        else "datum_plane"
+                    )
+                    role = "coordinate_system" if kind == "coordinate_system" else "plane"
+                    reference = SpatialReference(kind, command.instance_id, role)
+                    name = str(command.params.get("name", "基准"))
+                    leaf = QTreeWidgetItem(group, [f"{name} · {command.instance_id[:8]}"])
+                    leaf.setData(0, DATUM_ROLE, reference)
+                    leaf.setData(0, ORDINAL_ROLE, int(command.ordinal))
+                    leaf.setFlags(leaf.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    visible = reference not in self._hidden_datums
+                    leaf.setCheckState(
+                        0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+                    )
+                    leaf.setText(1, "显示" if visible else "隐藏")
+                    set_tree_icon(leaf, "datum", self._icon_theme)
+            elif title == SKETCH_GROUP_TITLE:
                 for command in self._document.commands:
                     if command.id == "sketch.create":
                         sketch_id = command.params.get("sketch_id")
@@ -726,13 +948,14 @@ class RightPanel(QWidget):
                     elif command.id.partition(".")[0] == "sketch":
                         sketch_id = command.params.get("sketch_id")
                         parent = sketch_items.get(sketch_id) if isinstance(sketch_id, str) else None
-                        leaf = QTreeWidgetItem(parent or group, [f"约束 #{command.ordinal}"])
+                        label = "草图修订" if command.id == "sketch.revise" else "约束"
+                        leaf = QTreeWidgetItem(parent or group, [f"{label} #{command.ordinal}"])
                         leaf.setData(0, ORDINAL_ROLE, int(command.ordinal))
                         leaf.setToolTip(0, f"草图命令 #{command.ordinal} · {command.id}")
                         set_tree_icon(leaf, "features", self._icon_theme)
             elif title == FEATURE_GROUP_TITLE:
                 for command in self._document.commands:
-                    if command.id.partition(".")[0] == "sketch":
+                    if command.id.partition(".")[0] in ("sketch", "datum"):
                         continue
                     leaf = QTreeWidgetItem(
                         group,
@@ -778,6 +1001,14 @@ class RightPanel(QWidget):
         self._fill_property_table(rows)
 
     def _on_structure_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        datum = item.data(0, DATUM_ROLE)
+        if isinstance(datum, SpatialReference):
+            self.datum_selection_requested.emit(datum)
+            ordinal = item.data(0, ORDINAL_ROLE)
+            if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+                self._selected_ordinal = ordinal
+                self._show_properties_for_ordinal(ordinal)
+            return
         body_id = item.data(0, BODY_ROLE)
         if isinstance(body_id, BodyId):
             self.body_selection_requested.emit(body_id)
@@ -788,6 +1019,20 @@ class RightPanel(QWidget):
         self._selected_ordinal = ordinal
         self.structure_selection_changed.emit(ordinal)
         self._show_properties_for_ordinal(ordinal)
+
+    def select_datum_reference(self, reference: SpatialReference) -> None:
+        """Reflect a viewport datum pick without opening history preview."""
+        for item in self._structure_tree.findItems(
+            "", Qt.MatchFlag.MatchContains | Qt.MatchFlag.MatchRecursive
+        ):
+            if item.data(0, DATUM_ROLE) == reference:
+                self._structure_tree.setCurrentItem(item)
+                self._structure_tree.scrollToItem(item)
+                ordinal = item.data(0, ORDINAL_ROLE)
+                if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+                    self._selected_ordinal = ordinal
+                    self._show_properties_for_ordinal(ordinal)
+                return
 
     def _show_properties_for_ordinal(self, ordinal: int) -> None:
         if self._document is None:
@@ -814,6 +1059,7 @@ class RightPanel(QWidget):
             tree.setCurrentIndex(QModelIndex())
             self._selected_ordinal = None
             self._edit_history_button.setVisible(False)
+            self._part_sketch_button.setVisible(False)
             self._show_document_properties()
             return
         self._selected_ordinal = ordinal
@@ -824,12 +1070,39 @@ class RightPanel(QWidget):
         self._show_properties_for_ordinal(ordinal)
 
     def _update_history_edit_button(self, command: ExecutedCommand) -> None:
-        replayable = command.id.startswith(("feature.", "modify.")) or command.id == "sketch.create"
-        self._edit_history_button.setText(
-            "编辑选中草图…" if command.id == "sketch.create" else "编辑选中特征…"
+        datum_commands = ("datum.coordinate_system.create", "datum.plane.create")
+        replayable = (
+            command.id.startswith(("feature.", "modify."))
+            or command.id == "sketch.create"
+            or command.id in datum_commands
         )
+        label = "编辑选中草图…" if command.id == "sketch.create" else "编辑选中特征…"
+        if command.id in datum_commands:
+            label = "编辑选中基准…"
+        self._edit_history_button.setText(label)
         self._edit_history_button.setVisible(replayable)
         self._edit_history_button.setEnabled(replayable and self._loaded is not None)
+        self._part_sketch_button.setVisible(
+            command.id == "sketch.create"
+            and self._loaded is not None
+            and self._loaded.document.document_type == "part"
+        )
+
+    def _on_part_sketch_edit_clicked(self) -> None:
+        if self._loaded is None or self._selected_ordinal is None:
+            return
+        command = next(
+            (
+                item
+                for item in self._loaded.document.commands
+                if item.ordinal == self._selected_ordinal
+            ),
+            None,
+        )
+        if command is not None and command.id == "sketch.create":
+            sketch_id = command.params.get("sketch_id")
+            if isinstance(sketch_id, str):
+                self.part_sketch_edit_requested.emit(sketch_id)
 
     def _on_edit_history_clicked(self) -> None:
         loaded = self._loaded
@@ -845,7 +1118,11 @@ class RightPanel(QWidget):
         if position is None:
             return
         command = commands[position]
-        if not command.id.startswith(("feature.", "modify.")) and command.id != "sketch.create":
+        if (
+            not command.id.startswith(("feature.", "modify."))
+            and command.id != "sketch.create"
+            and command.id not in ("datum.coordinate_system.create", "datum.plane.create")
+        ):
             return
         spec = registry.get(command.id, command.version)
         dialog = HistoryEditDialog(
@@ -855,14 +1132,35 @@ class RightPanel(QWidget):
             ordinal=ordinal,
             downstream=commands[position + 1 :],
             parent=self,
+            candidate_preview=True,
+            embedded=True,
         )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.history_edit_requested.emit(
-                ordinal,
-                dialog.result_params,
-                "gui-local",
-                dialog.edit_reason,
-            )
+
+        def request_candidate(params: object, reason: str) -> None:
+            self.history_candidate_preview_requested.emit(dialog, ordinal, params, reason)
+
+        dialog.candidate_preview_requested.connect(request_candidate)
+        dialog.candidate_discard_requested.connect(self.history_candidate_discard_requested.emit)
+
+        def finished(result: int) -> None:
+            if result == QDialog.DialogCode.Accepted:
+                if dialog.candidate is not None:
+                    if dialog.repair_mode:
+                        candidate = dialog.candidate
+                        params, reason = dialog.result_params, dialog.edit_reason
+                        QTimer.singleShot(
+                            0,
+                            lambda: self.history_candidate_repair_requested.emit(
+                                candidate, ordinal, params, reason
+                            ),
+                        )
+                    else:
+                        self.history_candidate_commit_requested.emit(dialog.candidate, ordinal)
+            elif dialog.candidate is not None:
+                self.history_candidate_discard_requested.emit(dialog.candidate)
+
+        dialog.finished.connect(finished)
+        self.history_candidate_open_requested.emit(dialog, ordinal)
 
     def _find_ordinal_item(
         self, item: QTreeWidgetItem | None, ordinal: int

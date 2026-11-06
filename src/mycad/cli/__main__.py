@@ -30,7 +30,7 @@ def _force_utf8(stream: TextIO) -> None:
         reconfigure(encoding="utf-8")
 
 
-def _load_gui_entrypoint() -> Callable[[], int]:
+def _load_gui_entrypoint() -> Callable[[Path | None], int]:
     """Load desktop code only when ``mycad gui`` is explicitly requested."""
 
     from mycad.ui.entry import run_gui
@@ -85,8 +85,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         return CliSession(build_app()).list_plugins()
     if sub == "gui":
-        if rest:
-            print("gui takes no arguments", file=sys.stderr)
+        if len(rest) > 1:
+            print("usage: mycad gui [archive]", file=sys.stderr)
             return 2
         try:
             run_gui = _load_gui_entrypoint()
@@ -102,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"failed to load desktop support: {exc}", file=sys.stderr)
             return 1
 
-        return run_gui()
+        return run_gui(Path(rest[0]) if rest else None)
     print(f"unknown subcommand: {sub}", file=sys.stderr)
     return 2
 

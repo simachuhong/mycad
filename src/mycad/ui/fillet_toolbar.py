@@ -34,6 +34,7 @@ class FilletCommandBar(QToolBar):
     commit_requested = Signal()
     cancel_requested = Signal()
     clear_selection_requested = Signal()
+    select_source_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("圆角", parent)
@@ -62,6 +63,8 @@ class FilletCommandBar(QToolBar):
         self.unit_label = QLabel("mm", content)
         self.selection_label = QLabel("选择边", content)
         self.clear_button = QPushButton("清空", content)
+        self.select_source_button = QPushButton("选择源边", content)
+        self.select_source_button.setToolTip("返回源模型后继续选择边，预览将重新生成。")
         self.clear_button.setToolTip("清空本组选边")
         self.commit_button = QPushButton("完成此组", content)
         set_button_icon(self.commit_button, "confirm")
@@ -77,6 +80,7 @@ class FilletCommandBar(QToolBar):
         layout.addSpacing(14)
         layout.addWidget(self.selection_label)
         layout.addWidget(self.clear_button)
+        layout.addWidget(self.select_source_button)
         layout.addStretch(1)
         install_command_strip(self, content, (self.commit_button, self.cancel_button))
 
@@ -84,9 +88,11 @@ class FilletCommandBar(QToolBar):
         self.radius_edit.editingFinished.connect(self._accept_radius)
         self.radius_edit.escape_pressed.connect(self._revert_radius)
         self.clear_button.clicked.connect(self.clear_selection_requested)
+        self.select_source_button.clicked.connect(self.select_source_requested)
         self.commit_button.clicked.connect(self.commit_requested)
         self.cancel_button.clicked.connect(self.cancel_requested)
         self._accepted_text = "1"
+        self._preview_valid = False
         self.set_selection_count(0)
         self.set_busy(False)
 
@@ -114,15 +120,22 @@ class FilletCommandBar(QToolBar):
 
     def set_selection_count(self, count: int) -> None:
         """Update the visible count without a separate floating palette."""
+        if count != self.selection_count():
+            self._preview_valid = False
         self.setProperty("selectionCount", count)
         self.selection_label.setText("选择边" if count == 0 else f"已选 {count} 条边")
-        self.commit_button.setEnabled(count > 0 and not self.commit_button.property("busy"))
+        self._update_commit_enabled()
 
     def set_preview_valid(self, valid: bool) -> None:
         """Enable confirmation only when the latest preview is current."""
-        count = self.selection_count()
+        self._preview_valid = valid
+        self._update_commit_enabled()
+
+    def _update_commit_enabled(self) -> None:
         self.commit_button.setEnabled(
-            valid and count > 0 and not self.commit_button.property("busy")
+            self._preview_valid
+            and self.selection_count() > 0
+            and not self.commit_button.property("busy")
         )
 
     def selection_count(self) -> int:
@@ -134,10 +147,10 @@ class FilletCommandBar(QToolBar):
         """Prevent edits during serialized model mutation."""
         self.radius_edit.setEnabled(not busy)
         self.clear_button.setEnabled(not busy)
+        self.select_source_button.setEnabled(not busy)
         self.cancel_button.setEnabled(not busy)
         self.commit_button.setProperty("busy", busy)
-        if busy:
-            self.commit_button.setEnabled(False)
+        self._update_commit_enabled()
 
     def _accept_radius(self) -> None:
         self._accepted_text = self.radius_edit.text()

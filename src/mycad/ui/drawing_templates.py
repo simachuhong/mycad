@@ -33,6 +33,31 @@ from mycad.formats.drawing_templates import TemplateLibrary, dxf_layouts, import
 from mycad.ui.drawing_canvas import DrawingCanvas
 
 
+class DrawingTemplateChoiceDialog(QDialog):
+    """Choose a built-in sheet template before allocating a document."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("drawingTemplateDialog")
+        self.setWindowTitle("选择工程图模板")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("选择图纸模板；模型来源可稍后选择。"))
+        self.selector = QComboBox()
+        for label, value in (
+            ("GB 国标机械图", "GB"),
+            ("ISO 机械图", "ISO"),
+            ("原有简单图框", "legacy"),
+        ):
+            self.selector.addItem(label, value)
+        layout.addWidget(self.selector)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 def _spin(value: float, minimum: float = 10, maximum: float = 10000) -> QDoubleSpinBox:
     spin = QDoubleSpinBox()
     spin.setRange(minimum, maximum)

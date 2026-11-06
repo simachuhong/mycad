@@ -66,19 +66,23 @@ def test_commands_lists_all_released_builtins(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 32
+    assert len(lines) == 37
     rows = [line.split("\t") for line in lines]
     assert all(len(row) == 3 for row in rows)
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)
-    assert verbs.count("") == 6
+    assert verbs.count("") == 10
     assert [row[1] for row in rows if not row[0]] == [
+        "datum.coordinate_system.create",
+        "datum.plane.create",
         "drawing.layers.set",
+        "drawing.sketch.revise",
         "reference.attach",
         "reference.detach",
         "reference.update",
         "sketch.constraint.add",
         "sketch.constraint.update",
+        "sketch.revise",
     ]
     assert {row[1] for row in rows} == {spec.id for spec in BUILTIN_COMMAND_SPECS}
 
@@ -92,16 +96,20 @@ def test_commands_json_shape(
     payload = json.loads(raw)
     assert set(payload) == {"commands"}
     commands = payload["commands"]
-    assert len(commands) == 32
+    assert len(commands) == 37
     verbs = [entry["verb"] for entry in commands]
     assert verbs == sorted(verbs)
     assert [entry["id"] for entry in commands if not entry["verb"]] == [
+        "datum.coordinate_system.create",
+        "datum.plane.create",
         "drawing.layers.set",
+        "drawing.sketch.revise",
         "reference.attach",
         "reference.detach",
         "reference.update",
         "sketch.constraint.add",
         "sketch.constraint.update",
+        "sketch.revise",
     ]
     for entry in commands:
         assert set(entry) == JSON_KEYS
@@ -125,7 +133,7 @@ def test_commands_lists_plugin_contributions(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
     assert main(["commands"]) == 0
     rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
-    assert len(rows) == 33
+    assert len(rows) == 38
     assert "demo.ping" in {row[1] for row in rows}
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)

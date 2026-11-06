@@ -11,7 +11,25 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
+from mycad.core.command_identity import ExecutionContext
+from mycad.core.identity import TopologyId
 from mycad.core.measurements import MeasurementRequest, MeasurementResult
+
+
+@runtime_checkable
+class ContextualKernel(Protocol):
+    """Optional identity-aware capability; legacy Kernel remains compatible."""
+
+    def apply_with_context(
+        self, command_id: str, params: Mapping[str, object], context: ExecutionContext
+    ) -> None: ...
+
+
+@runtime_checkable
+class BoundFaceKernel(ContextualKernel, Protocol):
+    """Optional design binding capability, beyond carrying command context."""
+
+    def interactive_face_binding(self, identity: TopologyId) -> dict[str, object]: ...
 
 
 @runtime_checkable

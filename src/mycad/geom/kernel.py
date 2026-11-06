@@ -22,14 +22,16 @@ import math
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
-from typing import cast
+from typing import Literal, Protocol, cast
 
 import build123d
-from build123d import CenterOf, Edge, Face, GeomType, Part
+from build123d import CenterOf, Edge, Face, GeomType, Part, PositionMode
 
+from mycad.core.bound_refs import BoundFaceRef, is_bound_hole
+from mycad.core.command_identity import ExecutionContext
 from mycad.core.document_references import DocumentReference
 from mycad.core.drawing import DrawingState
 from mycad.core.drawing_codec import apply_drawing_command
@@ -64,8 +66,10 @@ from mycad.core.semantic_refs import (
     TopologyResolutionEvidence,
 )
 from mycad.core.sketch import (
+    ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -79,18 +83,26 @@ from mycad.core.sketch_constraints import (
     SketchGeometryReference,
 )
 from mycad.core.sketch_layers import SketchLayerTable, merge_layer_tables
+from mycad.core.spatial_frames import RigidFrame
+from mycad.core.spatial_references import SpatialReference
+from mycad.core.topology_evolution import TopologyEvolution
 from mycad.core.viewport_protocol import (
     PlanarFaceFrame,
     ViewportBodyOrigin,
     ViewportBoundaryEdge,
     ViewportData,
+    ViewportDatum,
     ViewportFace,
     ViewportSketchCurve,
     ViewportSketchData,
     ViewportSketchDimension,
+    ViewportSketchPoint,
+    ViewportSketchRegion,
+    ViewportSnapAnchor,
     ViewportVertex,
 )
 from mycad.geom._b123_features import (
+    apply_bound_hole,
     apply_feature,
     apply_sketch_extrusion,
     apply_sketch_hole,
@@ -98,6 +110,7 @@ from mycad.geom._b123_features import (
 )
 from mycad.geom._b123_ops import apply_primitive, checked_mapping
 from mycad.geom.body_provenance import BodyOrigin, operation_origins
+from mycad.geom.design_faces import DesignFaces
 from mycad.geom.drawing_projection import project_shape
 from mycad.geom.io import write_step, write_stl
 from mycad.geom.query import (
@@ -130,6 +143,7 @@ from mycad.geom.selectors import (
 from mycad.geom.selectors import (
     resolve_semantic_face as resolve_semantic_face_ref,
 )
+from mycad.geom.spatial_datums import associated_frame, evaluate_datum
 
 EXPECTED_B123D_VERSION: tuple[int, int, int] = (0, 11, 1)
 EXPECTED_B123D_VERSION_STR = ".".join(str(part) for part in EXPECTED_B123D_VERSION)
@@ -215,6 +229,22 @@ def _axis_literal(vector: tuple[float, float, float]) -> AxisLiteral | None:
     return None
 
 
+class _SphereFace(Protocol):
+    def geom_adaptor(self) -> object: ...
+
+
+def _sphere_value(obj: object, name: str) -> object:
+    return cast("Callable[[], object]", getattr(obj, name))()
+
+
+@dataclass(frozen=True)
+class RecordedOperation:
+    """Successful operation inputs, including stable command context."""
+
+    context: ExecutionContext
+    params: dict[str, object]
+
+
 class BuildKernel:
     """Geometry kernel facade: applies feature commands to an in-memory part.
 
@@ -232,9 +262,13 @@ class BuildKernel:
         self._part: Part | None = None
         self._snapshots: list[tuple[str, int, Part | None]] = []
         self._sketches: dict[str, Sketch] = {}
+        self._spatial_outputs: dict[str, tuple[str, object]] = {}
+        self._spatial_names: dict[str, str] = {}
         self._drawing_layers_override: SketchLayerTable | None = None
         self._dimension_layer = "DIM"
-        self._operations: list[tuple[str, dict[str, object]]] = []
+        self._operations: list[RecordedOperation] = []
+        self._active_execution_context: ExecutionContext | None = None
+        self._design_faces = DesignFaces()
         self._body_origins: tuple[BodyOrigin, ...] = ()
         self._geometry_revision = 0
         self._cache_generation = 0
@@ -259,6 +293,8 @@ class BuildKernel:
         self._face_topology_ids: dict[tuple[int, int, int], TopologyId] = {}
         self._vertex_topology_ids: dict[tuple[int, int, int], TopologyId] = {}
         self._history_body_ids: dict[int, tuple[BodyId, ...]] = {}
+        self._last_topology_evolution: TopologyEvolution | None = None
+        self._pending_topology_evolution: TopologyEvolution | None = None
 
     def reset(self) -> None:
         """Drop the current solid and the snapshot list: empty-geometry state."""
@@ -272,10 +308,16 @@ class BuildKernel:
         self._drawing_revision = 0
         self._snapshots = []
         self._sketches = {}
+        self._spatial_outputs = {}
+        self._spatial_names = {}
         self._drawing_layers_override = None
         self._dimension_layer = "DIM"
         self._operations = []
+        self._active_execution_context = None
+        self._design_faces = DesignFaces()
         self._body_origins = ()
+        self._last_topology_evolution = None
+        self._pending_topology_evolution = None
         self._identity_scope.invalidate_topology()
         self._feature_ids = []
         self._body_ids = ()
@@ -323,11 +365,17 @@ class BuildKernel:
         self._geometry_revision = current_revision
         self._cache_generation += 1
         self._part, self._snapshots, self._sketches = part, snapshots, sketches
+        self._last_topology_evolution = None
+        self._pending_topology_evolution = None
         self._drawing_layers_override = candidate._drawing_layers_override
         self._dimension_layer = candidate._dimension_layer
         self._drawing_state = candidate._drawing_state
         self._drawing_revision = candidate._drawing_revision
         self._operations = deepcopy(candidate._operations)
+        self._spatial_outputs = dict(candidate._spatial_outputs)
+        self._spatial_names = dict(candidate._spatial_names)
+        # Faces belong to candidate._part; copying only them breaks native IsSame.
+        self._design_faces = candidate._design_faces
         self._references = deepcopy(candidate._references)
         self._linked_sketches = dict(candidate._linked_sketches)
         self._body_origins = candidate._body_origins
@@ -340,10 +388,29 @@ class BuildKernel:
 
     def apply(self, command_id: str, params: Mapping[str, object]) -> None:
         """Apply and retain only successful inputs for deterministic regeneration."""
+        self.apply_with_context(command_id, params, ExecutionContext(command_id))
+
+    @property
+    def execution_contexts(self) -> tuple[ExecutionContext, ...]:
+        """Successful operation identities; no backend entities escape this DTO."""
+        return tuple(operation.context for operation in self._operations)
+
+    def apply_with_context(
+        self, command_id: str, params: Mapping[str, object], context: ExecutionContext
+    ) -> None:
+        """Retain identity/version alongside successful operation inputs."""
+        if context.command_id != command_id:
+            raise ValidationError("execution context command mismatch", command_id=command_id)
         checked = checked_mapping(params, command_id)
+        self._pending_topology_evolution = None
         recorded = deepcopy(dict(checked))
-        self._apply_operation(command_id, checked)
-        self._operations.append((command_id, recorded))
+        previous = self._active_execution_context
+        self._active_execution_context = context
+        try:
+            self._apply_operation(command_id, checked)
+        finally:
+            self._active_execution_context = previous
+        self._operations.append(RecordedOperation(context, recorded))
 
     def set_reference_loader(self, loader: Callable[[Mapping[str, object]], BuildKernel]) -> None:
         self._reference_loader = loader
@@ -378,12 +445,13 @@ class BuildKernel:
                 raise ValidationError("reference update identity does not match adopted source")
             candidate = BuildKernel()
             candidate._reference_loader = self._reference_loader
-            for cid, payload in self._operations:
+            for operation in self._operations:
+                cid, payload = operation.context.command_id, operation.params
                 if cid == "reference.attach" and payload.get("reference_id") == identity:
                     payload = reference.to_mapping()
                 if cid == "reference.update" and payload.get("reference_id") == identity:
                     continue
-                candidate.apply(cid, payload)
+                candidate.apply_with_context(cid, payload, operation.context)
             operations = self._operations
             snapshots = self._snapshots.copy()
             feature_ids = list(self._feature_ids)
@@ -408,6 +476,7 @@ class BuildKernel:
             if any(r.kind == "part" for r in self._references.values()):
                 raise ValidationError("engineering drawing already has a source part")
             self._part = deepcopy(source._part)
+            self._design_faces = DesignFaces()
             self._sketches.update(deepcopy(source._sketches))
             self._linked_sketches.update(dict.fromkeys(source._sketches, identity))
             self._body_origins = source._body_origins
@@ -434,6 +503,21 @@ class BuildKernel:
         """
 
         checked = checked_mapping(params, command_id)
+        self._pending_topology_evolution = None
+
+        if command_id in ("datum.coordinate_system.create", "datum.plane.create"):
+            context = self._active_execution_context
+            if context is None or context.instance_id is None:
+                raise ValidationError(
+                    "datum requires a persistent command identity", command_id=command_id
+                )
+            if context.instance_id in self._spatial_outputs:
+                raise ValidationError("duplicate spatial output identity", command_id=command_id)
+            output = evaluate_datum(command_id, checked, self._spatial_outputs)
+            self._spatial_outputs[context.instance_id] = output
+            self._spatial_names[context.instance_id] = cast("str", checked["name"])
+            self._record_sketch_change(command_id)
+            return
 
         if command_id.startswith("reference."):
             self._apply_reference(command_id, checked)
@@ -465,11 +549,35 @@ class BuildKernel:
         if command_id == "sketch.create":
             self._create_sketch(checked)
             return
+        if command_id == "drawing.sketch.revise":
+            revisions = cast("list[Mapping[str, object]]", checked["revisions"])
+            ids = [revision["sketch_id"] for revision in revisions]
+            if len(set(ids)) != len(ids):
+                raise ValidationError("duplicate sketch revision", command_id=command_id)
+            for index, revision in enumerate(revisions):
+                self._apply_sketch_revision(revision, record=index == len(revisions) - 1)
+            return
+        if command_id == "sketch.revise":
+            self._apply_sketch_revision(checked)
+            return
         if command_id in ("sketch.constraint.add", "sketch.constraint.update"):
             self._apply_sketch_constraint(checked, command_id)
             return
         sketch_profile = checked.get("profile")
-        if (
+        context = self._active_execution_context or ExecutionContext(command_id)
+        primitive_sources: list[Part] = []
+        if is_bound_hole(command_id, checked):
+            if context.command_version < 3 or context.instance_id is None:
+                raise ValidationError("bound holes require identity-aware hole@3")
+            reference = BoundFaceRef.from_mapping(checked["target_face"])
+            face, point = self._design_faces.resolve_position(reference, checked["position"])
+            if self._part is None:
+                raise TopologyReferenceError(
+                    "no bound face", reason="deleted", parameter_path="target_face"
+                )
+            candidate, evolution = apply_bound_hole(self._part, face, point, checked)
+            self._capture_topology_evolution(evolution)
+        elif (
             command_id == "feature.extrude"
             and isinstance(sketch_profile, Mapping)
             and cast("Mapping[str, object]", sketch_profile).get("type") == "sketch"
@@ -486,17 +594,44 @@ class BuildKernel:
             and isinstance(sketch_profile, Mapping)
             and cast("Mapping[str, object]", sketch_profile).get("type") == "sketch"
         ):
-            candidate = apply_sketch_hole(self._part, self._sketches, checked)
-        elif command_id in ("feature.box", "feature.cylinder"):
-            candidate = apply_primitive(self._part, command_id, checked)
+            candidate = apply_sketch_hole(
+                self._part,
+                self._sketches,
+                checked,
+                evolution_callback=self._capture_topology_evolution,
+            )
+        elif command_id in ("feature.box", "feature.cylinder", "feature.sphere"):
+            candidate = apply_primitive(
+                self._part,
+                command_id,
+                checked,
+                evolution_callback=self._capture_topology_evolution
+                if context.instance_id
+                else None,
+                primitive_callback=primitive_sources.append if context.instance_id else None,
+            )
         else:
-            candidate = apply_feature(self._part, command_id, checked)
+            candidate = apply_feature(
+                self._part,
+                command_id,
+                checked,
+                evolution_callback=self._capture_topology_evolution,
+            )
         requires_one_solid = (
-            command_id in ("feature.box", "feature.cylinder")
+            command_id in ("feature.box", "feature.cylinder", "feature.sphere")
             and checked.get("mode", "new") == "new"
         )
         check = validate_result(candidate, command_id, require_single_solid=requires_one_solid)
         require_valid_result(check)
+        design_faces = self._design_faces.evolve(
+            self._part,
+            candidate,
+            context,
+            checked,
+            self._pending_topology_evolution,
+            primitive_sources[0] if primitive_sources else None,
+        )
+        self._last_topology_evolution = self._pending_topology_evolution
         origins = operation_origins(
             self._part,
             candidate,
@@ -525,6 +660,7 @@ class BuildKernel:
             )
         )
         self._part = candidate
+        self._design_faces = design_faces
         self._body_origins = origins
         # A successful complete cut is still a history step. Keep its empty
         # snapshot so the viewport never falls back to the previous solid.
@@ -538,7 +674,14 @@ class BuildKernel:
 
     def _create_sketch(self, params: Mapping[str, object]) -> None:
         """Add one validated sketch projection to the Bus-replayed model state."""
-        sketch = Sketch.from_mapping(params)
+        if "support" in params:
+            support = cast("Mapping[str, object]", params["support"])
+            frame = associated_frame(support, self._spatial_outputs)
+            materialized = {key: value for key, value in params.items() if key != "support"}
+            materialized["frame"] = frame.to_mapping()
+            sketch = Sketch.from_mapping(materialized)
+        else:
+            sketch = Sketch.from_mapping(params)
         if sketch.support_face is not None:
             try:
                 face = resolve_face(sketch.support_face.to_mapping(), self._part, "sketch.create")
@@ -655,7 +798,13 @@ class BuildKernel:
         if current is None:
             raise ValidationError("constraint references a missing sketch", command_id=command_id)
         digest = params.get("base_state_sha256")
-        if digest != current.state_digest():
+        context = self._active_execution_context
+        local_digest = context is not None and (
+            (command_id == "sketch.constraint.add" and context.command_version == 4)
+            or (command_id == "sketch.constraint.update" and context.command_version == 2)
+        )
+        expected_digest = current.local_state_digest() if local_digest else current.state_digest()
+        if digest != expected_digest:
             raise ValidationError(
                 "constraint preview is stale; solve it again against the current sketch",
                 command_id=command_id,
@@ -725,12 +874,81 @@ class BuildKernel:
                 rebuild=True,
             )
             self._part = candidate._part
+            self._design_faces = candidate._design_faces
             self._body_origins = origins
             sketches = candidate._sketches
             count = 0 if self._part is None else len(self._part.solids())
             self._body_ids = tuple(self._identity_scope.new_body_id() for _ in range(count))
         self._sketches = sketches
         self._record_sketch_change(command_id)
+
+    def _apply_sketch_revision(self, params: Mapping[str, object], *, record: bool = True) -> None:
+        """Replay a frozen local edit while preserving surviving relation semantics."""
+        from mycad.geom.sketch_constraints import validate_sketch_revision_geometry
+
+        sketch_id = params.get("sketch_id")
+        if isinstance(sketch_id, str) and sketch_id in self._linked_sketches:
+            raise ValidationError("关联草图只读；请先解除关联再修改。", command_id="sketch.revise")
+        current = self._sketches.get(sketch_id) if isinstance(sketch_id, str) else None
+        if current is None:
+            raise ValidationError(
+                "revision references a missing sketch", command_id="sketch.revise"
+            )
+        if params.get("base_state_sha256") != current.local_state_digest():
+            raise ValidationError("sketch revision is stale", command_id="sketch.revise")
+        mapping = current.to_state_mapping()
+        mapping["entities"] = params.get("entities")
+        mapping["constraints"] = params.get("constraints")
+        try:
+            revised = Sketch.from_mapping(mapping)
+            old_entities = {item.entity_id: type(item) for item in current.entities}
+            if any(
+                item.entity_id in old_entities and old_entities[item.entity_id] is not type(item)
+                for item in revised.entities
+            ):
+                raise ValueError("existing geometry identity cannot change kind")
+            old_constraints = {item.constraint_id: item for item in current.constraints}
+            new_entity_ids = {item.entity_id for item in revised.entities} - set(old_entities)
+            if any(
+                old_constraints.get(item.constraint_id) != item
+                and not (
+                    item.constraint_id not in old_constraints
+                    and item.source == "inferred"
+                    and item.driving
+                    and item.kind in ("horizontal", "vertical", "coincident")
+                    and any(ref.entity_id in new_entity_ids for ref in item.references)
+                )
+                for item in revised.constraints
+            ):
+                raise ValueError("new or modified constraints require separate confirmation")
+            entity_ids = {item.entity_id for item in revised.entities}
+            if any(
+                reference.entity_id not in entity_ids
+                for item in revised.constraints
+                for reference in item.references
+            ):
+                raise ValueError("constraint references missing sketch geometry")
+            revised = validate_sketch_revision_geometry(current, revised)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValidationError(str(exc), command_id="sketch.revise") from exc
+        sketches = {**self._sketches, current.sketch_id: revised}
+        candidate = self._regenerate_with_sketches(sketches)
+        self._body_origins = operation_origins(
+            self._part,
+            candidate._part,
+            self._body_origins,
+            f"sketch.revise:{len(self._snapshots)}",
+            "sketch.revise",
+            params,
+            rebuild=True,
+        )
+        self._part = candidate._part
+        self._design_faces = candidate._design_faces
+        self._sketches = candidate._sketches
+        count = 0 if self._part is None else len(self._part.solids())
+        self._body_ids = tuple(self._identity_scope.new_body_id() for _ in range(count))
+        if record:
+            self._record_sketch_change("sketch.revise")
 
     def _regenerate_with_sketches(self, sketches: Mapping[str, Sketch]) -> BuildKernel:
         """Rebuild consumers from frozen solutions without rerunning a solver.
@@ -742,8 +960,14 @@ class BuildKernel:
         """
         candidate = BuildKernel()
         candidate._reference_loader = self._reference_loader
-        for operation_index, (command_id, params) in enumerate(self._operations):
-            if command_id in ("sketch.constraint.add", "sketch.constraint.update"):
+        for operation_index, operation in enumerate(self._operations):
+            command_id, params = operation.context.command_id, operation.params
+            if command_id in (
+                "sketch.constraint.add",
+                "sketch.constraint.update",
+                "sketch.revise",
+                "drawing.sketch.revise",
+            ):
                 continue
             if command_id == "drawing.layers.set":
                 # Final sketch solutions already carry final layer assignments.
@@ -751,7 +975,7 @@ class BuildKernel:
                 candidate._record_sketch_change(command_id)
                 continue
             try:
-                candidate._apply_operation(command_id, params)
+                candidate.apply_with_context(command_id, params, operation.context)
             except TopologyReferenceError as exc:
                 raise TopologyReferenceError(
                     f"草图下游步骤 {operation_index + 1} 重建失败：{exc.message}",
@@ -809,9 +1033,9 @@ class BuildKernel:
     @property
     def drawing_source_fingerprint(self) -> str:
         operations = [
-            (cid, p)
-            for cid, p in self._operations
-            if not cid.startswith(
+            (operation.context.command_id, operation.params)
+            for operation in self._operations
+            if not operation.context.command_id.startswith(
                 ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")
             )
         ]
@@ -931,6 +1155,22 @@ class BuildKernel:
         """Immutable sketch values reconstructed from replayed commands."""
         return tuple(self._sketches.values())
 
+    def sketch_region_data(self, sketch: Sketch) -> tuple[ViewportSketchRegion, ...]:
+        """Tessellate exact sketch regions without modifying the accepted model."""
+        from mycad.geom.sketch_profiles import make_sketch_regions
+
+        result: list[ViewportSketchRegion] = []
+        for region in make_sketch_regions(sketch):
+            vertices, triangles = region.face.tessellate(0.1, math.radians(10.0))
+            mesh = Tessellation(
+                vertices=tuple((float(v.X), float(v.Y), float(v.Z)) for v in vertices),
+                triangle_indices=tuple((int(a), int(b), int(c)) for a, b, c in triangles),
+            )
+            result.append(
+                ViewportSketchRegion(region.boundary_entity_ids, mesh, region.hole_entity_ids)
+            )
+        return tuple(result)
+
     def preview_sketch_constraint(
         self, sketch: Sketch, constraint: SketchConstraint
     ) -> SketchConstraintSolveResult:
@@ -958,6 +1198,145 @@ class BuildKernel:
 
         return solve_sketch_drag(sketch, reference, target_mm)
 
+    def datum_display_data(self) -> tuple[ViewportDatum, ...]:
+        """Expose spatial outputs without requiring a solid or mesh."""
+        result: list[ViewportDatum] = []
+        for identity, (kind, frame) in self._spatial_outputs.items():
+            if kind == "coordinate_system" and isinstance(frame, RigidFrame):
+                reference = SpatialReference("coordinate_system", identity, "coordinate_system")
+            elif kind == "datum_plane" and isinstance(frame, WorkPlaneFrame):
+                reference = SpatialReference("datum_plane", identity, "plane")
+            else:
+                raise ValueError("invalid evaluated spatial output")
+            result.append(ViewportDatum(reference, self._spatial_names[identity], frame))
+        return tuple(result)
+
+    def snap_anchor_data(self) -> tuple[ViewportSnapAnchor, ...]:
+        """Extract exact visible BREP vertices, curve midpoints and circle centers."""
+        anchors: list[ViewportSnapAnchor] = []
+        for sketch in self._sketches.values():
+            for entity in sketch.entities:
+                if not sketch.layers.get(entity.layer_name).displayed:
+                    continue
+                points: list[tuple[str, tuple[float, float]]] = []
+                if isinstance(entity, PointEntity):
+                    points.append(("vertex", entity.position_mm))
+                elif isinstance(entity, LineEntity):
+                    start, end = entity.start_mm, entity.end_mm
+                    points.extend(("vertex", point) for point in (start, end))
+                    points.append(("midpoint", ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)))
+                elif isinstance(entity, CircleEntity):
+                    points.append(("center", entity.center_mm))
+                elif isinstance(entity, ArcEntity):
+                    points.append(("center", entity.center_mm))
+                    for kind, angle in (
+                        ("vertex", entity.start_angle_deg),
+                        ("midpoint", entity.start_angle_deg + entity.sweep_angle_deg / 2),
+                        ("vertex", entity.start_angle_deg + entity.sweep_angle_deg),
+                    ):
+                        radians = math.radians(angle)
+                        points.append(
+                            (
+                                kind,
+                                (
+                                    entity.center_mm[0] + entity.radius_mm * math.cos(radians),
+                                    entity.center_mm[1] + entity.radius_mm * math.sin(radians),
+                                ),
+                            )
+                        )
+                elif isinstance(entity, SplineEntity):
+                    points.extend(
+                        ("vertex", point) for point in (entity.point_at(0), entity.point_at(1))
+                    )
+                else:
+                    if isinstance(entity, PolylineEntity):
+                        anchors_vertices = entity.points_mm
+                        vertices = entity.points_mm + (
+                            (entity.points_mm[0],) if entity.closed else ()
+                        )
+                    else:
+                        x1, y1 = entity.first_corner_mm
+                        x2, y2 = entity.opposite_corner_mm
+                        vertices = ((x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1))
+                        anchors_vertices = vertices[:-1]
+                    points.extend(("vertex", point) for point in anchors_vertices)
+                    for start, end in zip(vertices, vertices[1:], strict=False):
+                        points.append(
+                            ("midpoint", ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2))
+                        )
+                for index, (kind, point) in enumerate(points):
+                    anchors.append(
+                        ViewportSnapAnchor(
+                            cast("Literal['vertex', 'midpoint', 'center']", kind),
+                            sketch.frame.local_to_world(point),
+                            None,
+                            None,
+                            f"{sketch.sketch_id}:{entity.entity_id}:{index}",
+                        )
+                    )
+        snapshots = self.viewport_data()
+        if not snapshots or self._part is None:
+            return tuple(anchors)
+        snapshot = snapshots[-1]
+        anchors.extend(
+            ViewportSnapAnchor("vertex", vertex.point, vertex.body_id, vertex.topology_id)
+            for vertex in snapshot.vertices
+        )
+        visible_edges = {edge.topology_id for edge in snapshot.boundary_edges}
+        for body_index, (body_id, solid) in enumerate(
+            zip(self._body_ids, self._part.solids(), strict=True)
+        ):
+            faces = solid.faces()
+            if len(faces) == 1 and faces[0].geom_type == GeomType.SPHERE:
+                surface = cast("_SphereFace", faces[0]).geom_adaptor()
+                sphere = _sphere_value(surface, "Sphere")
+                radius = cast("float", _sphere_value(sphere, "Radius"))
+                if math.isclose(faces[0].area, 4 * math.pi * radius**2, rel_tol=1e-9):
+                    center = _sphere_value(sphere, "Location")
+                    anchors.append(
+                        ViewportSnapAnchor(
+                            "center",
+                            (
+                                float(cast("float", _sphere_value(center, "X"))),
+                                float(cast("float", _sphere_value(center, "Y"))),
+                                float(cast("float", _sphere_value(center, "Z"))),
+                            ),
+                            body_id,
+                            self._face_topology_id(snapshot.geometry_revision, body_index, 0),
+                        )
+                    )
+            for edge_index, edge in enumerate(solid.edges()):
+                identity = self._boundary_topology_id(
+                    snapshot.geometry_revision, body_index, edge_index
+                )
+                if identity not in visible_edges:
+                    continue
+                if edge.geom_type == GeomType.CIRCLE:
+                    center = edge.arc_center
+                    anchors.append(
+                        ViewportSnapAnchor(
+                            "center",
+                            (float(center.X), float(center.Y), float(center.Z)),
+                            body_id,
+                            identity,
+                        )
+                    )
+                if edge.is_closed or not math.isfinite(edge.length) or edge.length <= 0:
+                    continue
+                try:
+                    point = edge.position_at(float(edge.length) / 2.0, PositionMode.LENGTH)
+                except (ValueError, RuntimeError):
+                    continue
+                anchors.append(
+                    ViewportSnapAnchor(
+                        "midpoint",
+                        (float(point.X), float(point.Y), float(point.Z)),
+                        body_id,
+                        identity,
+                    )
+                )
+        return tuple(anchors)
+
     def sketch_display_data(self) -> tuple[ViewportSketchData, ...]:
         """Return backend-neutral world-space polylines for visible sketches."""
         from mycad.geom.sketch_constraints import sketch_dimension_anchor
@@ -966,9 +1345,20 @@ class BuildKernel:
         for sketch in self._sketches.values():
             curves: list[ViewportSketchCurve] = []
             dimensions: list[ViewportSketchDimension] = []
+            sketch_points: list[ViewportSketchPoint] = []
             for entity in sketch.entities:
                 layer = sketch.layers.get(entity.layer_name)
                 if layer.frozen:
+                    continue
+                if isinstance(entity, PointEntity):
+                    if layer.visible:
+                        sketch_points.append(
+                            ViewportSketchPoint(
+                                entity.entity_id,
+                                sketch.frame.local_to_world(entity.position_mm),
+                                layer,
+                            )
+                        )
                     continue
                 if isinstance(entity, LineEntity):
                     local_points = (entity.start_mm, entity.end_mm)
@@ -1056,7 +1446,11 @@ class BuildKernel:
                         constraint.scale,
                     )
                 )
-            result.append(ViewportSketchData(sketch.sketch_id, tuple(curves), tuple(dimensions)))
+            result.append(
+                ViewportSketchData(
+                    sketch.sketch_id, tuple(curves), tuple(dimensions), tuple(sketch_points)
+                )
+            )
         return tuple(result)
 
     @property
@@ -1157,6 +1551,15 @@ class BuildKernel:
         """Identity of the latest feature result, or ``None`` for empty history."""
 
         return self._feature_ids[-1] if self._feature_ids else None
+
+    @property
+    def last_topology_evolution(self) -> TopologyEvolution | None:
+        """Operation-local evolution from the most recent successful Boolean cut."""
+
+        return self._last_topology_evolution
+
+    def _capture_topology_evolution(self, evolution: TopologyEvolution) -> None:
+        self._pending_topology_evolution = evolution
 
     def bind_semantic_face(
         self,
@@ -1650,6 +2053,26 @@ class BuildKernel:
         if len(candidates) > 1:
             descriptor["rank"] = rank
         return descriptor
+
+    def interactive_face_binding(self, identity: TopologyId) -> dict[str, object]:
+        """Mint a design reference from an exact current, locally owned face pick."""
+        self._identity_scope.require_current_topology(identity, "feature.hole", "target_face")
+        key = next((k for k, value in self._face_topology_ids.items() if value == identity), None)
+        if key is None or key[0] != self._geometry_revision or self._part is None:
+            raise TopologyReferenceError(
+                "face pick is no longer current",
+                command_id="feature.hole",
+                reason="drift",
+                parameter_path="target_face",
+            )
+        _revision, body_index, face_index = key
+        face = self._part.solids()[body_index].faces()[face_index]
+        return self._design_faces.reference_for(face).to_mapping()
+
+    def interactive_bound_face_frame(self, identity: TopologyId) -> WorkPlaneFrame:
+        """Return the design-local frame of a uniquely bound current face."""
+        binding = BoundFaceRef.from_mapping(self.interactive_face_binding(identity))
+        return self._design_faces.frame_for(binding)
 
     def interactive_face_frame(self, identity: TopologyId) -> PlanarFaceFrame:
         """Expose exact planar geometry without leaking a backend shape to the UI."""

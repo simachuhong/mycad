@@ -12,6 +12,7 @@ from mycad.core.sketch import (
     CircleEntity,
     LineEntity,
     Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -42,6 +43,8 @@ def _geometry(sketch: Sketch) -> tuple[dict[_PointKey, Point2D], list[_Segment]]
                 ((identity, "vertex", index), point)
                 for index, point in enumerate(entity.control_points_mm)
             )
+        elif isinstance(entity, PointEntity):
+            points[(identity, "vertex", 0)] = entity.position_mm
         elif isinstance(entity, CircleEntity | ArcEntity):
             points[(identity, "center", 0)] = entity.center_mm
             if isinstance(entity, ArcEntity):

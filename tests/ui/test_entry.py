@@ -1,15 +1,10 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Real ``mycad gui`` entry path: services + document must reach the window.
-
-todo 17 regression: ``run_gui`` built the window without services and threw
-the fresh document away, so the shipped shell rendered an empty client area
-while every test (which constructs ``MainWindow(services=...)`` directly)
-stayed green. This module exercises the entry point itself.
-"""
+"""The GUI entry creates an empty session and displays the start page."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -65,7 +60,7 @@ def no_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(QApplication, "exec", _fake_exec)
 
 
-def test_run_gui_wires_services_and_a_fresh_document(
+def test_run_gui_wires_services_without_creating_a_document(
     monkeypatch: pytest.MonkeyPatch,
     services: AppServices,
     spy_window: type[_SpyWindow],
@@ -81,16 +76,12 @@ def test_run_gui_wires_services_and_a_fresh_document(
     qtbot.addWidget(window)
 
     assert window.received_services is services
-    # Initial binding registers the document, then the session binds its entry.
-    assert window.bound_documents
-    assert all(loaded is window.bound_documents[0] for loaded in window.bound_documents)
-    assert window.loaded_document() is window.bound_documents[0]
-    assert window.bound_documents[0].document.commands == ()
+    assert not window.bound_documents
+    assert window.loaded_document() is None
     assert window.document_session is not None
-    assert len(window.document_session.documents) == 1
-    assert window.document_session.active is not None
-    assert window.document_session.active.loaded is window.loaded_document()
-    assert window.bound_documents[0].document.archive_version == 4
+    assert not window.document_session.documents
+    assert window.document_session.active is None
+    assert window.start_page.isVisible()
 
 
 def test_run_gui_builds_the_five_zones(
@@ -118,3 +109,28 @@ def test_run_gui_builds_the_five_zones(
     assert window.cli_tab is not None
     assert window.plan_cards is not None
     assert window.status_command.text() == "空闲"
+
+
+def test_run_gui_with_archive_opens_real_document(
+    monkeypatch: pytest.MonkeyPatch,
+    services: AppServices,
+    spy_window: type[_SpyWindow],
+    no_event_loop: None,
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    from mycad.app import new_workspace_document
+    from mycad.core.persistence import save_document
+
+    source = new_workspace_document(services, kind="part")
+    target = tmp_path / "part.my3d"
+    save_document(source.document, target)
+    monkeypatch.setattr(entry, "build_app", lambda: services)
+    entry.run_gui(target)
+    window = spy_window.instances[0]
+    qtbot.addWidget(window)
+    qtbot.waitUntil(lambda: window.loaded_document() is not None, timeout=15000)
+    assert window.document_session is not None and window.document_session.active is not None
+    assert window.document_session.active.kind == "part"
+    assert window.document_session.active.path == target
+    assert not window.start_page.isVisible()

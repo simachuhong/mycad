@@ -43,3 +43,19 @@ def test_gui_reports_install_command_when_qt_is_missing(
 
     assert main(["gui"]) == 1
     assert "uv sync --extra desktop" in capsys.readouterr().err
+
+
+def test_gui_forwards_optional_archive_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
+    received: list[Path] = []
+
+    def run_gui(path: Path | None = None) -> int:
+        if path is not None:
+            received.append(path)
+        return 0
+
+    monkeypatch.setattr(cli_main, "_load_gui_entrypoint", lambda: run_gui)
+    assert main(["gui", "example.my3d"]) == 0
+    assert received == [Path("example.my3d")]
+    assert main(["gui", "one.my3d", "two.my3d"]) == 2

@@ -86,10 +86,12 @@ _SCHEMA_BRANCH_LABELS = {
     "InteractiveFaceSelector": "视口锚定面",
     "SketchHole": "草图孔",
     "SketchProfileReference": "引用草图",
+    "SketchRegionProfileReference": "引用草图区域",
 }
 _SCHEMA_CONST_LABELS = {
     "arc": "圆弧",
     "blind": "盲孔",
+    "bound_face": "绑定面孔",
     "center": "面心",
     "circle": "圆",
     "face": "选定面",
@@ -140,6 +142,10 @@ def _branch_label(schema: object, fallback: int, defs: Mapping[str, object]) -> 
         const = _schema_object(value).get("const")
         if isinstance(const, str):
             return _SCHEMA_CONST_LABELS.get(const, const)
+        nested = _schema_object(_schema_object(value).get("properties"))
+        kind = _schema_object(nested.get("kind")).get("const")
+        if isinstance(kind, str) and kind in _SCHEMA_CONST_LABELS:
+            return _SCHEMA_CONST_LABELS[kind]
     return f"选项 {fallback + 1}"
 
 
@@ -664,6 +670,29 @@ class _OneOfEditor(QWidget):
         index = _branch_for_value(self._branches, value, self._defs)
         if index is None:
             raise ValueError(f"{self._path} value does not match a oneOf branch")
+        self._adopt_branch(index, value)
+
+    def set_selector(self, path: str, value: object) -> None:
+        """Use a supplied selector to open an unfinished object branch."""
+        if not isinstance(self._value, Mapping):
+            raise ValueError("selector requires staged object fields")
+        staged = dict(cast("Mapping[str, object]", self._value))
+        staged[path] = value
+        for index, branch in enumerate(self._branches):
+            schema = _resolve_schema(_schema_object(branch), self._defs)
+            properties = _schema_object(schema.get("properties"))
+            if (
+                path in properties
+                and set(staged).issubset(properties)
+                and schema_matches(_schema_object(properties[path]), value, self._defs)
+            ):
+                # Shared selectors prefer schema declaration order for an empty
+                # form. Other unfinished/invalid fields remain for later editing.
+                self._adopt_branch(index, staged)
+                return
+        raise ValueError(f"{path} selector does not match a oneOf branch")
+
+    def _adopt_branch(self, index: int, value: object) -> None:
         self._value = value
         combo_index = index + 1
         self.selector.blockSignals(True)
@@ -834,6 +863,15 @@ class ParameterForm(QWidget):
     def set_selector(self, path: str, value: object) -> None:
         """Selector-fill seam for face/edge pickers and coordinate capture."""
 
+        root = self._root.control
+        if (
+            path not in self._editors
+            and "." not in path
+            and isinstance(root, _OneOfEditor)
+            and root.branch is None
+        ):
+            root.set_selector(path, value)
+            return
         self.set_value(path, value)
 
     def set_path_visible(self, path: str, visible: bool) -> None:

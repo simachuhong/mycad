@@ -26,6 +26,10 @@ The current writer serializes a same-directory temporary file, flushes it, and r
 - A platform crash/power cut can still lose the most recent save even when ordinary write failures preserve the previous file.
 - P2-24 closes the format and recovery decisions; implementation of sketch persistence, stable IDs, provenance fields, BREP checkpoints, and recovery journals remains explicitly gated by their owning feature/version decision.
 
+## Runtime operation history addendum (2026-11-05, implementation in progress)
+
+The GUI may undo and redo an entire committed history revision or composite repair through the Bus runtime operation history described in ADR-001. This history is bounded, is not serialized, and is not an immutable audit log. Undo restores the earlier command parameters and amendment list; redo restores the same recorded values and audit fields without creating a new timestamp. Saving does not clear this session history, while reopening starts a new session without revision undo history. Archive and command identity upgrades remain monotonic.
+
 ## References
 
 - [ADR-001](ADR-001-command-bus-and-history-replay.md) — command history and replay.

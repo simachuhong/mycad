@@ -341,10 +341,14 @@ def test_ui_layout_acceptance(
     assert window.toolBarArea(toolbar) == Qt.ToolBarArea.RightToolBarArea
     toolbar.show()
 
-    # §11.3 right pane: structure/properties/options present (+ placeholders).
+    # The model tree now lives in the left navigator; properties remain on the right.
     tabs = panel.tabs
     titles = [tabs.tabText(i) for i in range(tabs.count())]
-    for title in RIGHT_TAB_TITLES:
+    assert window.left_tabs is not None
+    assert window.left_tabs.tabText(0) == "模型"
+    model_tab = window.left_tabs.widget(0)
+    assert model_tab is not None and model_tab.isAncestorOf(panel.structure_tree)
+    for title in RIGHT_TAB_TITLES[1:]:
         assert title in titles
 
     # §11.5 left palette: all registered builtins are discoverable, searchable.

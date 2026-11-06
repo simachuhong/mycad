@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-29",
+  "head": "ba2f53920e78a1f349196e23d3c09e2978389d32",
+  "method": "Initial plan/source audit followed by P2-19 scenario implementation, N1/N2 operation-local topology prototype, N6 local-dimension and STEP assertions; scoped local verification only, no live remote CI query",
+  "main_tasks": {
+    "total": 35,
+    "checked": 31,
+    "open": [
+      "P2-12",
+      "P2-19",
+      "P2-26",
+      "P2-44"
+    ]
+  },
+  "final_checks": {
+    "total": 4,
+    "checked": 0,
+    "open": [
+      "P2-F1",
+      "P2-F2",
+      "P2-F3",
+      "P2-F4"
+    ]
+  },
+  "representative_parts": {
+    "supported": 18,
+    "expected_rejection": 6,
+    "extension_candidate": 6
+  },
+  "perturbations": {
+    "executable": 108,
+    "gated": 0
+  },
+  "gated_records_with_null_params": 0,
+  "gated_target_id_mismatches_if_zero_based": 0,
+  "latest_increment_evidence": ".omo/evidence/document-save-ownership/acceptance.md",
+  "latest_full_run_record": {
+    "passed": 2189,
+    "failed": 17,
+    "context": "Initial full run before final review fixes; recorded follow-up scoped checks addressed failures; not final full-suite green"
+  },
+  "prior_full_green_record": {
+    "passed": 2101,
+    "context": "Earlier mechanical-three-views revision; not evidence for current v4 aggregate"
+  },
+  "conclusion": "N1 reference contract matrix and N2 operation-local cut/hole topology prototype are implemented; N6 local cylinder dimensions, undo-prefix behavior and supported-part STEP geometry assertions are strengthened. P2-12/P2-19 remain partial pending durable cross-replay references, broader operation lineage, local hole-position/count coverage and refusal-export policy; Gate C/R remain open.",
+  "initial_p2_19_gap": {
+    "executable": 30,
+    "gated": 78,
+    "null_param_records": 78,
+    "target_id_mismatches_if_zero_based": 72
+  },
+  "p2_19_verification": {
+    "scenarios_and_geom_features_and_layering_passed": 216,
+    "supported_part_lifecycle_cases": 18,
+    "evidence": ".omo/evidence/task-P2-19-scenarios-2026-10-29.md",
+    "formal_status": "partial: local cylinder diameters, undo prefix comparison and STEP validity/bounds/diameters are implemented; durable reference identity, all local hole positions/counts and refusal-sample exchange policy remain; linked to P2-12"
+  },
+  "n1_n2_n6_increment": {
+    "reference_contract": "query references re-resolve by predicate; runtime binding requires owner feature and topology generation; ambiguity/staleness fail explicitly; rank is not identity",
+    "topology_evolution": "core DTO plus geom OCCT adapter; operation-local face/edge mapping; integrated for feature.hole and modify.boolean_cut; direct fuse prototype verified",
+    "supported_part_step_checks": "18 lifecycle cases check BREP validity, solid count, volume, bounding-box size/center and expected cylindrical diameters",
+    "scoped_test_command_passed": 216,
+    "type_check": "basedpyright changed Python paths: 0 errors, 0 warnings, 0 notes",
+    "evidence": ".omo/evidence/task-N1-N2-N6-topology-2026-10-29.md"
+  },
+  "next_development": [
+    "N1 reference and scenario acceptance matrix",
+    "N2 operation topology evolution prototype",
+    "N3 replayable design references",
+    "N4 persistence and transactional replay",
+    "N5 GUI reference repair",
+    "N6 stronger P2-19 intent and exchange assertions"
+  ]
+}

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from PySide6.QtCore import Qt
+from pytestqt.qtbot import QtBot
 
 from mycad.app import build_app
 from mycad.commands.spec import CliSyntax, CommandSpec
@@ -29,7 +30,10 @@ if TYPE_CHECKING:
 
 RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
+        "datum.coordinate_system.create",
+        "datum.plane.create",
         "drawing.layers.set",
+        "drawing.sketch.revise",
         "drawing.sheet.create",
         "drawing.sheet.update",
         "drawing.sheet.delete",
@@ -47,6 +51,7 @@ RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
         "reference.detach",
         "feature.box",
         "feature.cylinder",
+        "feature.sphere",
         "feature.extrude",
         "feature.revolve",
         "feature.hole",
@@ -59,6 +64,7 @@ RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
         "modify.body_pattern",
         "modify.chamfer",
         "sketch.create",
+        "sketch.revise",
         "sketch.constraint.add",
         "sketch.constraint.update",
     }
@@ -100,8 +106,8 @@ def _group_titles(palette: CommandPalette) -> set[str]:
 
 
 def test_all_released_builtins_appear_grouped(palette: CommandPalette) -> None:
-    assert palette.tree.topLevelItemCount() == 5
-    assert _group_titles(palette) == {"图纸", "创建特征", "修改", "草图", "来源关联"}
+    assert palette.tree.topLevelItemCount() == 6
+    assert _group_titles(palette) == {"基准", "图纸", "创建特征", "修改", "草图", "来源关联"}
     ids = _all_leaf_ids(palette)
     assert len(ids) == len(RELEASED_BUILTIN_IDS)
     assert set(ids) == RELEASED_BUILTIN_IDS
@@ -247,7 +253,15 @@ def test_plugin_command_appears_via_discovery(qapp: object) -> None:
     services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
     palette = CommandPalette(services.registry)
     assert "demo.widget" in _all_leaf_ids(palette)
-    assert _group_titles(palette) == {"demo", "图纸", "创建特征", "修改", "草图", "来源关联"}
+    assert _group_titles(palette) == {
+        "demo",
+        "基准",
+        "图纸",
+        "创建特征",
+        "修改",
+        "草图",
+        "来源关联",
+    }
 
 
 def test_refresh_pickups_later_registration(
@@ -278,9 +292,11 @@ def test_refresh_pickups_later_registration(
 def test_main_window_binds_palette_and_draft(qapp: object) -> None:
     services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
     window = MainWindow(services=services)
-    assert window.left_dock.widget() is window.command_palette
+    assert window.left_tabs is not None
+    assert window.left_dock.widget() is window.left_tabs
     assert window.plan_draft is not None
     assert window.command_palette is not None
+    assert window.left_tabs.indexOf(window.command_palette) >= 0
 
     window.command_palette.command_activated.emit("feature.box")
     controller = window.plan_draft
@@ -290,3 +306,43 @@ def test_main_window_binds_palette_and_draft(qapp: object) -> None:
 
     window.command_palette.command_activated.emit("demo.widget")
     assert "cannot be planned" in window.status_command.text()
+
+
+def test_plugin_action_is_catalogued_with_explained_unavailable_status(qtbot: QtBot) -> None:
+    services = build_app(discoverers=(_PluginOnlyDiscoverer(),))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    action = window.action_catalog.get("demo.widget")
+    assert not action.isEnabled()
+    assert "不支持" in action.toolTip()
+    palette = window.command_palette
+    assert palette is not None
+    found = palette.tree.findItems("插件控件", Qt.MatchFlag.MatchRecursive, 0)
+    assert len(found) == 1
+    assert found[0].text(1) == "不可用"
+    assert "不支持" in found[0].toolTip(0)
+    window.action_catalog.unregister("demo.widget")
+    qtbot.waitUntil(lambda: "未加载" in found[0].toolTip(0))
+    assert found[0].isDisabled()
+
+
+def test_palette_reflects_action_state_without_losing_tree_selection(qtbot: QtBot) -> None:
+    from mycad.app import new_document
+
+    services = build_app(discoverers=[])
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    palette = window.command_palette
+    assert palette is not None
+    items = palette.tree.findItems("长方体", Qt.MatchFlag.MatchRecursive, 0)
+    assert len(items) == 1
+    item = items[0]
+    palette.tree.setCurrentItem(item)
+    action = window.action_catalog.get("feature.box")
+    action.setEnabled(False)
+    qtbot.waitUntil(lambda: item.text(1) == "不可用")
+    assert palette.tree.currentItem() is item
+    window.bind_document(new_document(services))
+    action.setEnabled(True)
+    qtbot.waitUntil(lambda: item.text(1) == "可用")
+    assert palette.tree.currentItem() is item

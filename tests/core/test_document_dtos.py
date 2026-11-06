@@ -21,6 +21,7 @@ from mycad.core.exceptions import UnknownCommandError
 EXPECTED_AFFECTED: tuple[str, ...] = (
     "box_body",
     "cylinder_body",
+    "sphere_body",
     "extruded_body",
     "revolved_body",
     "hole",
@@ -42,6 +43,7 @@ EXPECTED_AFFECTED: tuple[str, ...] = (
 EXPECTED_B2: dict[str, str] = {
     "feature.box": "box_body",
     "feature.cylinder": "cylinder_body",
+    "feature.sphere": "sphere_body",
     "feature.extrude": "extruded_body",
     "feature.revolve": "revolved_body",
     "feature.hole": "hole",
@@ -101,7 +103,7 @@ def test_affected_object_literal_locked_to_released_values() -> None:
 
 def test_affected_objects_table_locked_to_b2() -> None:
     assert dict(AFFECTED_OBJECTS) == EXPECTED_B2
-    assert len(set(AFFECTED_OBJECTS.values())) == 18
+    assert len(set(AFFECTED_OBJECTS.values())) == 19
 
 
 def test_planned_command_unknown_id_raises_unknown_command_error() -> None:
@@ -136,7 +138,7 @@ def test_executed_command_amendments_default_empty_tuple() -> None:
 def test_executed_command_audit_field_layout() -> None:
     audit_names = ["id", "version", "params", "ordinal", "timestamp_utc", "confirmed_by"]
     fields = dataclasses.fields(ExecutedCommand)
-    assert [f.name for f in fields] == [*audit_names, "amendments"]
+    assert [f.name for f in fields] == [*audit_names, "amendments", "instance_id"]
     required = [f.name for f in fields if f.default is dataclasses.MISSING]
     assert required == audit_names
 

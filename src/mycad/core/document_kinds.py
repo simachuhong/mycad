@@ -24,6 +24,8 @@ DRAWING2D_COMMAND_IDS = frozenset(
     {
         "drawing.layers.set",
         "sketch.create",
+        "sketch.revise",
+        "drawing.sketch.revise",
         "sketch.constraint.add",
         "sketch.constraint.update",
         "drawing.sheet.create",

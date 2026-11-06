@@ -8,62 +8,37 @@ import math
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtTest import QTest
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFileDialog, QPushButton
 from pytestqt.qtbot import QtBot
 
-from mycad.app import build_app
+from mycad.app import ReplayCandidateSession, build_app
 from mycad.core.exceptions import ValidationError
 from mycad.core.sketch import CircleEntity
 from mycad.ui.main_window import MainWindow
-from mycad.ui.sketch_editor import SketchEditorDialog
+from mycad.ui.part_sketch_workbench import PartSketchWorkbench
 from tests.helpers.step_roundtrip import read_step
 
 pytestmark = pytest.mark.usefixtures("choose_new_part")
 
 
-def _point(dialog: SketchEditorDialog, point: tuple[float, float], *, mouse: bool = False) -> None:
-    if mouse:
-        QTest.mouseClick(
-            dialog.canvas, Qt.MouseButton.LeftButton, pos=dialog.canvas.local_to_screen(point)
-        )
-    else:
-        dialog.u_field.setValue(point[0])
-        dialog.v_field.setValue(point[1])
-        dialog.coordinate_add_button.click()
-
-
-def _curve(
-    dialog: SketchEditorDialog, tool: str, *points: tuple[float, float], mouse: bool = False
-) -> None:
-    dialog.tool_combo.setCurrentText(tool)
+def _curve(task: PartSketchWorkbench, tool: str, *points: tuple[float, float]) -> None:
+    task.select_tool(tool)
     for point in points:
-        _point(dialog, point, mouse=mouse)
+        task.place_uv(point)
 
 
-def _flange(dialog: SketchEditorDialog) -> float:
-    _curve(dialog, "圆", (0.0, 0.0), (40.0, 0.0), mouse=True)
-    _curve(dialog, "圆", (0.0, 0.0), (10.0, 0.0))
-    _curve(dialog, "圆", (25.0, 0.0), (28.0, 0.0))
-    dialog.tool_combo.setCurrentText("选择元素")
-    _point(dialog, (28.0, 0.0), mouse=True)
-    assert len(dialog.canvas.selected_entity_ids) == 1
-    dialog.center_u_field.setValue(0.0)
-    dialog.center_v_field.setValue(0.0)
-    dialog.pattern_angle_field.setValue(360.0)
-    dialog.count_field.setValue(4)
-    dialog.transform_buttons["circular_array"].click()
-    assert len(dialog.canvas.entities) == 6, dialog.canvas.message
+def _flange(task: PartSketchWorkbench) -> float:
+    _curve(task, "circle", (0.0, 0.0), (40.0, 0.0))
+    _curve(task, "circle", (0.0, 0.0), (10.0, 0.0))
+    for x, y in ((25.0, 0.0), (0.0, 25.0), (-25.0, 0.0), (0.0, -25.0)):
+        _curve(task, "circle", (x, y), (x + 3.0, y))
+    assert len(task.session.sketch.entities) == 6
     return math.pi * (40**2 - 10**2 - 4 * 3**2) * 8
 
 
-def _shaft(dialog: SketchEditorDialog) -> float:
-    dialog.plane_combo.setCurrentText("XZ")
-    dialog.closed_check.setChecked(True)
-    _curve(
-        dialog,
-        "多段线",
+def _shaft(task: PartSketchWorkbench) -> float:
+    vertices = (
         (0.0, 0.0),
         (10.0, 0.0),
         (10.0, -20.0),
@@ -71,21 +46,22 @@ def _shaft(dialog: SketchEditorDialog) -> float:
         (6.0, -50.0),
         (0.0, -50.0),
     )
-    dialog.finish_polyline_button.click()
-    assert len(dialog.canvas.entities) == 1
+    for start, end in zip(vertices, (*vertices[1:], vertices[0]), strict=True):
+        _curve(task, "line", start, end)
+    assert len(task.session.sketch.entities) == 6
     return math.pi * (10**2 * 20 + 6**2 * 30)
 
 
-def _slot_plate(dialog: SketchEditorDialog) -> float:
+def _slot_plate(task: PartSketchWorkbench) -> float:
     for half_span, radius in ((25.0, 25.0), (15.0, 5.0)):
-        _curve(dialog, "直线", (-half_span, -radius), (half_span, -radius))
-        _curve(dialog, "圆弧", (half_span, 0.0), (half_span, -radius), (half_span, radius))
-        _curve(dialog, "直线", (half_span, radius), (-half_span, radius))
-        _curve(dialog, "圆弧", (-half_span, 0.0), (-half_span, radius), (-half_span, -radius))
+        _curve(task, "line", (-half_span, -radius), (half_span, -radius))
+        _curve(task, "arc", (half_span, 0.0), (half_span, -radius), (half_span, radius))
+        _curve(task, "line", (half_span, radius), (-half_span, radius))
+        _curve(task, "arc", (-half_span, 0.0), (-half_span, radius), (-half_span, -radius))
     for x in (-25.0, 25.0):
         for y in (-15.0, 15.0):
-            _curve(dialog, "圆", (x, y), (x + 3.0, y))
-    assert len(dialog.canvas.entities) == 12
+            _curve(task, "circle", (x, y), (x + 3.0, y))
+    assert len(task.session.sketch.entities) == 12
     return (2500 + 625 * math.pi - 300 - 25 * math.pi - 36 * math.pi) * 6
 
 
@@ -100,28 +76,33 @@ def test_failed_sketch_submission_restores_editable_draft_for_retry(
     loaded = window.loaded_document()
     assert loaded is not None
     window.act_sketch.trigger()
-    dialog = window.findChild(SketchEditorDialog)
-    assert dialog is not None
-    _curve(dialog, "圆", (0.0, 0.0), (10.0, 0.0))
-    original = tuple(dialog.canvas.entities)
-    execute = loaded.bus.execute
+    task = window.part_sketch_task
+    assert task is not None
+    task.lock_plane()
+    task.circle_button.click()
+    task.place_uv((0.0, 0.0))
+    task.place_uv((10.0, 0.0))
+    original = task.session.sketch.entities
+    commit = ReplayCandidateSession.commit
 
     def reject_once(*_args: object, **_kwargs: object) -> object:
         raise ValidationError("simulated sketch validation failure")
 
-    monkeypatch.setattr(loaded.bus, "execute", reject_once)
-    dialog.finish_button.click()
-    qtbot.waitUntil(lambda: "提交失败" in window.status_command.text(), timeout=10000)
-    assert dialog.isVisible()
-    assert dialog.result_sketch is None
-    assert tuple(dialog.canvas.entities) == original
+    monkeypatch.setattr(ReplayCandidateSession, "commit", reject_once)
+    task.preview_button.click()
+    assert task.confirm_button.isEnabled()
+    task.confirm_button.click()
+    assert window.part_sketch_task is task
+    assert task.session.sketch.entities == original
     assert not loaded.document.commands
-    assert "simulated" in dialog.status_label.text()
-    monkeypatch.setattr(loaded.bus, "execute", execute)
-    dialog.finish_button.click()
+    assert "simulated" in task.status_label.text()
+    monkeypatch.setattr(ReplayCandidateSession, "commit", commit)
+    task.preview_button.click()
+    assert task.confirm_button.isEnabled()
+    task.confirm_button.click()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 1, timeout=10000)
     assert services.kernel.sketches[0].entities == original
-    assert not dialog.isVisible()
+    assert window.part_sketch_task is None
 
 
 @pytest.mark.parametrize("part", ["flange", "shaft", "slot_plate"])
@@ -137,13 +118,16 @@ def test_part_from_gui_sketch_to_solid_undo_archive_and_step(
     loaded = window.loaded_document()
     assert loaded is not None and not loaded.document.commands
     window.act_sketch.trigger()
-    dialog = window.findChild(SketchEditorDialog)
-    assert dialog is not None
-    dialog.canvas.setFixedSize(800, 600)
-    qtbot.waitExposed(dialog)
-    expected_volume = {"flange": _flange, "shaft": _shaft, "slot_plate": _slot_plate}[part](dialog)
-    entities = tuple(dialog.canvas.entities)
-    dialog.finish_button.click()
+    task = window.part_sketch_task
+    assert task is not None
+    if part == "shaft":
+        task.plane_combo.setCurrentText("世界 XZ")
+    task.lock_plane()
+    expected_volume = {"flange": _flange, "shaft": _shaft, "slot_plate": _slot_plate}[part](task)
+    entities = task.session.sketch.entities
+    task.preview_button.click()
+    assert task.confirm_button.isEnabled(), task.status_label.text()
+    task.confirm_button.click()
     unit = window.execution_unit
     assert unit is not None
     qtbot.waitUntil(

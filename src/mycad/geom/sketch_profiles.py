@@ -18,6 +18,7 @@ from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -48,6 +49,15 @@ class _Contour:
     wire: Wire
     points: tuple[Point2D, ...]
     entity_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SketchRegion:
+    """Exact face and stable authored identities of its boundary contours."""
+
+    face: Face
+    boundary_entity_ids: tuple[str, ...]
+    hole_entity_ids: tuple[tuple[str, ...], ...]
 
 
 def _distance(first: Point2D, second: Point2D) -> float:
@@ -144,7 +154,7 @@ def _entities_to_curves(sketch: Sketch) -> tuple[list[_Curve], list[_Contour]]:
     curves: list[_Curve] = []
     contours: list[_Contour] = []
     for entity in sketch.entities:
-        if entity.construction:
+        if entity.construction or isinstance(entity, PointEntity):
             continue
         if isinstance(entity, CircleEntity):
             center = _world(sketch, entity.center_mm)
@@ -229,7 +239,9 @@ def _curve_contours(curves: list[_Curve], tolerance: float) -> list[_Contour]:
     for node, edges in adjacency.items():
         if len(edges) != 2:
             raise _located_error(
-                "闭合轮廓必须在每个端点恰好连接两条边；请检查此端点。",
+                "闭合轮廓存在开口；请检查此端点。"
+                if len(edges) == 1
+                else "草图轮廓在此端点存在多条分支；请检查连接。",
                 tuple(curves[index].entity_id for index in edges),
                 (nodes[node],),
             )
@@ -364,8 +376,8 @@ def _reverse(wire: Wire) -> Wire:
     return reversed_wires[0]
 
 
-def make_sketch_faces(sketch: Sketch) -> tuple[Face, ...]:
-    """Create valid planar regions from every even-depth contour and its holes."""
+def make_sketch_regions(sketch: Sketch) -> tuple[SketchRegion, ...]:
+    """Create valid planar regions with their authored boundary identities."""
     curves, circles = _entities_to_curves(sketch)
     points = [point for curve in curves for point in curve.points]
     points.extend(point for contour in circles for point in contour.points)
@@ -414,7 +426,7 @@ def make_sketch_faces(sketch: Sketch) -> tuple[Face, ...]:
     }
     positive = [face.normal_at().dot(Vector(sketch.frame.normal)) > 0 for face in contour_faces]
 
-    faces: list[Face] = []
+    regions: list[SketchRegion] = []
     for outer_index, depth in enumerate(depths):
         if depth % 2:
             continue
@@ -440,10 +452,36 @@ def make_sketch_faces(sketch: Sketch) -> tuple[Face, ...]:
             raise GeometryBuildError(
                 "草图轮廓无效，请检查开口、自交或相交内环。", command_id="feature.extrude"
             )
-        faces.append(face)
-    if not faces:
+        regions.append(
+            SketchRegion(
+                face,
+                tuple(sorted(outer.entity_ids)),
+                tuple(sorted(tuple(sorted(contours[index].entity_ids)) for index in hole_indices)),
+            )
+        )
+    if not regions:
         raise GeometryBuildError("草图没有有效的实体区域。", command_id="feature.extrude")
-    return tuple(faces)
+    return tuple(regions)
+
+
+def make_sketch_faces(sketch: Sketch) -> tuple[Face, ...]:
+    """Create valid planar regions from every even-depth contour and its holes."""
+    return tuple(region.face for region in make_sketch_regions(sketch))
+
+
+def select_sketch_region(
+    sketch: Sketch, boundary_entity_ids: tuple[str, ...], *, command_id: str = "feature.extrude"
+) -> SketchRegion:
+    """Resolve an authored contour without guessing when a region has changed."""
+    identity = tuple(sorted(boundary_entity_ids))
+    matches = [
+        region for region in make_sketch_regions(sketch) if region.boundary_entity_ids == identity
+    ]
+    if not identity or len(set(identity)) != len(identity) or len(matches) != 1:
+        raise GeometryBuildError(
+            "草图区域引用已失效或存在歧义，请重新选择区域。", command_id=command_id
+        )
+    return matches[0]
 
 
 def make_sketch_face(sketch: Sketch) -> Face:

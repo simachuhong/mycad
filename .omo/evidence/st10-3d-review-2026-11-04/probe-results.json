@@ -1,0 +1,38 @@
+{
+  "preview_vs_inferred_commit": {
+    "preview_world_end": [
+      10.0,
+      0.05,
+      0.0
+    ],
+    "accepted_entity": "LineEntity(entity_id='9668d51a11f94db7979c81831c39e114', start_mm=(0.0, 0.0), end_mm=(10.0, 0.0), construction=False, layer_name='0')",
+    "accepted_relations": [
+      "horizontal"
+    ],
+    "accepted_world_end": [
+      10.0,
+      0.0,
+      0.0
+    ]
+  },
+  "finish_with_pending_geometry": {
+    "pending_point_count_before_preview": 1,
+    "confirmation_enabled": true,
+    "committed_command_count": 1,
+    "committed_entity_count": 1,
+    "task_finished": true
+  },
+  "undo_during_pending_geometry": {
+    "accepted_entity_count": 0,
+    "pending_point_count": 0,
+    "temporary_curve_point_count": 5,
+    "displayed_curve_count": 1
+  },
+  "source_sha256": {
+    "src/mycad/ui/part_sketch_workbench.py": "d727d11ee36e2408882415a6bb36721a35aa3c0e21e1983f4b889427572ed96f",
+    "src/mycad/ui/main_window.py": "50f2b3fc6737aabf5ccef21ffe09a32e60902b48733d98df0b1f5d8324e90182",
+    "src/mycad/ui/viewport.py": "7620e87285365f364a9b1e2c54a6139bd989516094adfc93e5a0ef3040e0b480",
+    "src/mycad/builtin_commands/specs.py": "d5cfa3f3bd1f3f4bf7034a28b5a406ac0e06b06e4c924eb655ed88bfa8daf0e1",
+    "src/mycad/builtin_commands/datum_specs.py": "3b5057d380c414600d913fa970a84fba47c570bfab45704a9d3df2262cb5c2d2"
+  }
+}

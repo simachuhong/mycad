@@ -170,7 +170,7 @@
       "feature.cylinder",
       "feature.hole"
     ],
-    "acceptance": "横向平面上的单孔可表达；实际选择需由语义引用覆盖验收。",
+    "acceptance": "圆柱侧面语义选择和径向孔定位形成真实横向贯穿销孔。",
     "perturbation_ids": [
       "perturb-shaft-cross-hole-01",
       "perturb-shaft-cross-hole-02",
@@ -342,9 +342,10 @@
     "commands": [
       "feature.cylinder",
       "feature.cylinder",
+      "feature.hole",
       "feature.hole_pattern"
     ],
-    "acceptance": "同轴圆柱组合形成盖体与外缘，螺栓孔可极阵列表达。",
+    "acceptance": "基盘、加料凸缘、盲孔挖出环形截面，再在基盘顶面创建孔阵列。",
     "perturbation_ids": [
       "perturb-cover-raised-rim-01",
       "perturb-cover-raised-rim-02",

@@ -28,6 +28,8 @@ from mycad.app import AppServices, build_app
 from mycad.core.sketch import CircleEntity, LineEntity, RectangleEntity, Sketch, WorkPlaneFrame
 from mycad.ui.main_window import MainWindow
 from mycad.ui.right_panel import HistoryEditDialog
+from mycad.ui.viewport import ViewOrientation
+from mycad.ui.workplane_position import WorkplanePositionDialog
 
 
 def _body_centers(services: AppServices) -> tuple[tuple[float, float, float], ...]:
@@ -90,7 +92,10 @@ def test_each_builtin_modeling_command_starts_in_the_shared_bar(
     assert not window.findChildren(QDialog)
 
 
-def test_box_uses_external_bar_auto_previews_and_commits_explicitly(qtbot: QtBot) -> None:
+@pytest.mark.parametrize("command_id", ["feature.box", "feature.cylinder"])
+def test_box_uses_external_bar_auto_previews_and_commits_explicitly(
+    qtbot: QtBot, command_id: str
+) -> None:
     services: AppServices = build_app(discoverers=[])
     loaded = mycad_app.new_document(services)
     window = MainWindow(services=services)
@@ -99,7 +104,7 @@ def test_box_uses_external_bar_auto_previews_and_commits_explicitly(qtbot: QtBot
     window.show()
 
     assert window.command_palette is not None
-    window.command_palette.command_activated.emit("feature.box")
+    window.command_palette.command_activated.emit(command_id)
     qtbot.wait(50)
 
     bar = window.modeling_command_bar
@@ -122,6 +127,14 @@ def test_box_uses_external_bar_auto_previews_and_commits_explicitly(qtbot: QtBot
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 1 and not unit.is_busy, timeout=30000)
     assert "已完成建模操作" in window.status_command.text()
     assert len(loaded.document.commands) == 1
+    assert loaded.document.commands[0].id == command_id
+    assert services.kernel.body_ids
+    loaded.bus.undo()
+    assert not loaded.document.commands
+    assert not services.kernel.body_ids
+    loaded.bus.redo()
+    assert len(loaded.document.commands) == 1
+    assert services.kernel.body_ids
 
 
 def test_boolean_intersect_previews_then_commits_explicitly(qtbot: QtBot) -> None:
@@ -479,7 +492,7 @@ def test_selected_body_circular_pattern_previews_and_commits_full_set(qtbot: QtB
     assert services.kernel.mass_properties().volume == pytest.approx(4000.0, abs=1e-6)
 
 
-def test_face_can_be_picked_from_committed_model_during_candidate_preview(
+def test_face_selection_returns_to_source_before_picking(
     qtbot: QtBot,
 ) -> None:
     services: AppServices = build_app(discoverers=[])
@@ -509,11 +522,73 @@ def test_face_can_be_picked_from_committed_model_during_candidate_preview(
     viewport.show_candidate_preview(snapshot, preserve_view=True)
     target = viewport.selection_target_at(viewport.width() / 2.0, viewport.height() / 2.0, "face")
 
+    assert target is None
+    bar = window.modeling_command_bar
+    assert bar is not None
+    source_button = bar.findChild(QPushButton, "modelingSelectSource")
+    assert source_button is not None
+    source_button.click()
+    target = viewport.selection_target_at(viewport.width() / 2.0, viewport.height() / 2.0, "face")
     assert target is not None and target.kind == "face"
     assert viewport.pick_at(viewport.width() / 2.0, viewport.height() / 2.0)
     assert viewport.selection() is not None
     assert window.plan_draft is not None
     assert "target_face" in window.plan_draft.plan().steps[0].params
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+@pytest.mark.parametrize(("orientation", "expected"), [("top", (0, 0, 5)), ("right", (10, 0, 0))])
+def test_hole_click_near_world_origin_snaps_axis_through_origin(
+    qtbot: QtBot, bypass: bool, orientation: ViewOrientation, expected: tuple[int, int, int]
+) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 10})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    viewport = window.viewport
+    assert viewport is not None and window.command_palette is not None
+    viewport.set_orientation(orientation)
+    viewport.fit_view()
+    window.command_palette.command_activated.emit("feature.hole")
+    origin = viewport.project_world_point((0, 0, 0))
+    assert origin is not None
+    QTest.mouseClick(
+        viewport,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ShiftModifier if bypass else Qt.KeyboardModifier.NoModifier,
+        QPoint(round(origin[0] + 5), round(origin[1])),
+    )
+    assert window.plan_draft is not None
+    position = window.plan_draft.plan().steps[0].params["position"]
+    assert isinstance(position, dict)
+    position = cast("dict[str, object]", position)
+    assert position["kind"] == "point"
+    point = position["point"]
+    assert isinstance(point, list)
+    if bypass:
+        assert point != pytest.approx(expected)
+    else:
+        assert point == pytest.approx(expected)
+        bar = window.modeling_command_bar
+        assert bar is not None
+        status = bar.findChild(QLabel, "modelingSelectionStatus")
+        assert status is not None and "世界原点" in status.text()
+    assert len(loaded.document.commands) == 1
+    if not bypass:
+        bar = window.modeling_command_bar
+        unit = window.execution_unit
+        assert bar is not None and unit is not None
+        commit = bar.findChild(QPushButton, "modelingCommitButton")
+        assert commit is not None
+        qtbot.waitUntil(commit.isEnabled, timeout=30000)
+        commit.click()
+        qtbot.waitUntil(
+            lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000
+        )
+        assert loaded.document.commands[-1].params["position"] == position
 
 
 def test_cancel_discards_placed_preview_without_writing_history(qtbot: QtBot) -> None:
@@ -539,6 +614,30 @@ def test_cancel_discards_placed_preview_without_writing_history(qtbot: QtBot) ->
     assert loaded.document.commands == ()
     assert bar.isHidden()
     assert viewport.displayed_snapshot_id() is None
+
+
+def test_cancel_restores_filter_and_preserves_view(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 10})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.viewport is not None and window.command_palette is not None
+    viewport = window.viewport
+    viewport.set_selection_filter("body")
+    viewport.set_orientation("top")
+    before = viewport.capture_view()
+    window.command_palette.command_activated.emit("feature.extrude")
+    assert viewport.selection_filter() == "face"
+    assert window.modeling_command_bar is not None
+    cancel = window.modeling_command_bar.findChild(QPushButton, "modelingCancelButton")
+    assert cancel is not None
+    cancel.click()
+    assert viewport.selection_filter() == "body"
+    assert viewport.capture_view() == before
+    assert len(loaded.document.commands) == 1
 
 
 def test_extrude_requires_face_and_previews_the_whole_face(qtbot: QtBot) -> None:
@@ -605,7 +704,7 @@ def test_extrude_xy_creation_requires_explicit_source_switch(qtbot: QtBot) -> No
     assert loaded.document.commands == ()
 
 
-def test_sketch_extrude_previews_then_commits_version_four(qtbot: QtBot) -> None:
+def test_sketch_extrude_previews_then_commits_current_version(qtbot: QtBot) -> None:
     services = build_app(discoverers=[])
     loaded = mycad_app.new_document(services)
     sketch_id = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
@@ -639,7 +738,7 @@ def test_sketch_extrude_previews_then_commits_version_four(qtbot: QtBot) -> None
     commit.click()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000)
 
-    assert loaded.document.commands[-1].version == 4
+    assert loaded.document.commands[-1].version == 5
     assert loaded.document.commands[-1].params["profile"] == {
         "type": "sketch",
         "sketch_id": sketch_id,
@@ -696,7 +795,7 @@ def test_symmetric_sketch_extrude_previews_without_writing_then_commits_centered
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000)
 
     props = services.kernel.mass_properties()
-    assert loaded.document.commands[-1].version == 4
+    assert loaded.document.commands[-1].version == 5
     assert loaded.document.commands[-1].params["extent_mode"] == "symmetric"
     assert props.volume == pytest.approx(math.pi * 5.0**2 * 10.0)
     assert props.center_of_mass[2] == pytest.approx(0.0, abs=1e-6)
@@ -753,7 +852,7 @@ def test_sketch_revolve_previews_then_commits_about_a_construction_axis(qtbot: Q
     commit.click()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000)
 
-    assert loaded.document.commands[-1].version == 3
+    assert loaded.document.commands[-1].version == 4
     assert loaded.document.commands[-1].params["profile"] == {
         "type": "sketch",
         "sketch_id": sketch_id,
@@ -815,7 +914,7 @@ def test_sketch_hole_previews_and_commits_against_selected_planar_face(qtbot: Qt
     commit.click()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 3 and not unit.is_busy, timeout=30000)
 
-    assert loaded.document.commands[-1].version == 2
+    assert loaded.document.commands[-1].version == 3
     assert loaded.document.commands[-1].params["profile"] == {
         "type": "sketch",
         "sketch_id": sketch_id,
@@ -906,7 +1005,10 @@ def test_extrude_zero_input_cannot_confirm_old_preview_and_escape_restores(qtbot
     assert commit is not None and field is not None
     qtbot.waitUntil(commit.isEnabled, timeout=30000)
     before = loaded.document.commands
+    window.activateWindow()
+    qtbot.waitUntil(window.isActiveWindow, timeout=5000)
     field.setFocus()
+    qtbot.waitUntil(field.hasFocus, timeout=5000)
     field.selectAll()
     QTest.keyClicks(field, "0")
     assert not commit.isEnabled()
@@ -1049,6 +1151,7 @@ def test_annular_face_hole_pattern_can_use_face_centroid(qtbot: QtBot) -> None:
             hole_count.setValue(6)
             dialog.reason_field.setText("法兰改为六个直径 8 mm 安装孔")
             dialog.preview_changes()
+            qtbot.waitUntil(dialog.confirm_button.isEnabled, timeout=30000)
             dialog.confirm_changes()
         except BaseException:
             dialog.reject()
@@ -1056,7 +1159,9 @@ def test_annular_face_hole_pattern_can_use_face_centroid(qtbot: QtBot) -> None:
 
     QTimer.singleShot(0, change_holes)
     edit.click()
-    qtbot.waitUntil(lambda: not unit.is_busy, timeout=30000)
+    qtbot.waitUntil(
+        lambda: bool(loaded.document.commands[-1].amendments) and not unit.is_busy, timeout=30000
+    )
     assert len(loaded.document.commands) == 3
     assert loaded.document.commands[-1].timestamp_utc == original_timestamp
     assert len(loaded.document.commands[-1].amendments) == 1
@@ -1183,3 +1288,177 @@ def test_commit_checks_document_revision_before_queued_events_are_delivered(qtbo
     assert not unit.is_busy
     assert not commit.isEnabled()
     assert loaded.document.commands == ()
+
+
+def test_sphere_numeric_preview_and_commit(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit("feature.sphere")
+    bar = window.modeling_command_bar
+    assert bar is not None and bar.isVisible()
+    center_z = bar.findChild(QDoubleSpinBox, "center_z")
+    assert center_z is not None
+    center_z.setValue(12)
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    assert not loaded.document.commands
+    commit.click()
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) == 1 and not unit.is_busy,
+        timeout=30000,
+    )
+    assert services.kernel.mass_properties().center_of_mass == pytest.approx((0, 0, 12))
+    loaded.bus.undo()
+    assert not loaded.document.commands and not services.kernel.body_ids
+    loaded.bus.redo()
+    assert services.kernel.mass_properties().center_of_mass == pytest.approx((0, 0, 12))
+
+
+def test_sphere_positioning_adopts_world_xz_and_cancel_preserves_document(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit("feature.sphere")
+    bar = window.modeling_command_bar
+    assert bar is not None
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    bar.position_requested.emit()
+    dialog = window.findChild(WorkplanePositionDialog)
+    assert dialog is not None
+    dialog.plane_combo.setCurrentIndex(1)
+    dialog.lock_plane()
+    dialog.u_field.setValue(4)
+    dialog.v_field.setValue(7)
+    dialog.adopt()
+    assert bar.values()["center"] == pytest.approx([4, 0, -7])
+    bar.cancel_requested.emit()
+    assert loaded.document.commands == ()
+    assert services.kernel.mass_properties().solid_count == 0
+
+
+def test_sphere_positioning_blocks_commit_and_closes_on_cancel(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit("feature.sphere")
+    bar = window.modeling_command_bar
+    assert bar is not None
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    bar.position_requested.emit()
+    dialog = window.findChild(WorkplanePositionDialog)
+    assert dialog is not None and dialog.isVisible()
+    assert not commit.isEnabled()
+    bar.cancel_requested.emit()
+    assert not dialog.isVisible()
+    assert not loaded.document.commands
+
+
+def test_sphere_positioning_uses_visible_source_anchors(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 10, "size_y": 10, "size_z": 10})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None and window.viewport is not None
+    window.command_palette.command_activated.emit("feature.sphere")
+    bar = window.modeling_command_bar
+    assert bar is not None
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    bar.position_requested.emit()
+    assert window.findChild(WorkplanePositionDialog) is not None
+    snapshots = window.viewport.snapshots()
+    snapshot = snapshots[-1] if snapshots else None
+    assert snapshot is not None
+    assert window.viewport.displayed_snapshot_id() == snapshot.state_id
+    assert max(vertex.point[0] for vertex in snapshot.vertices) == pytest.approx(5)
+    assert any(
+        anchor.point == pytest.approx((5, 5, 5))
+        for anchor in window.viewport.interaction_snap_anchors()
+    )
+
+
+def test_sphere_positioning_cannot_commit_after_parameter_change(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit("feature.sphere")
+    bar = window.modeling_command_bar
+    assert bar is not None
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    radius = bar.findChild(QDoubleSpinBox, "radius")
+    assert commit is not None and radius is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    bar.position_requested.emit()
+    dialog = window.findChild(WorkplanePositionDialog)
+    assert dialog is not None
+    radius.setValue(7)
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=30000)
+    qtbot.wait(500)
+    assert not commit.isEnabled()
+    assert not loaded.document.commands
+
+
+@pytest.mark.parametrize("command_id", ["feature.box", "feature.cylinder", "feature.sphere"])
+def test_new_primitive_defaults_to_preserving_existing_solid(qtbot: QtBot, command_id: str) -> None:
+    services = build_app(discoverers=[])
+    loaded = mycad_app.new_document(services)
+    loaded.bus.execute("feature.sphere", {"radius": 5}, "test")
+    original_volume = services.kernel.mass_properties().volume
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit(command_id)
+    bar, viewport = window.modeling_command_bar, window.viewport
+    assert bar is not None and viewport is not None
+    mode = bar.findChild(QComboBox, "mode")
+    assert mode is not None and mode.currentData() == "add"
+    assert services.kernel.mass_properties().volume == pytest.approx(original_volume)
+    if command_id == "feature.sphere":
+        x = bar.findChild(QDoubleSpinBox, "center_x")
+        assert x is not None
+        x.setValue(50)
+    else:
+        viewport.workplane_point_picked.emit((50.0, 0.0, 0.0), QPoint())
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    assert services.kernel.mass_properties().volume == pytest.approx(original_volume)
+    commit.click()
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000)
+    assert loaded.document.commands[-1].params["mode"] == "add"
+    assert services.kernel.mass_properties().solid_count == 2
+    assert services.kernel.mass_properties().volume > original_volume

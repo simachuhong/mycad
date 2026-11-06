@@ -15,6 +15,7 @@ from mycad.core.sketch import (
     CircleEntity,
     LineEntity,
     Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     SketchEntity,
@@ -86,6 +87,8 @@ def _preserve_entity_metadata[EntityT: SketchEntity](
 
 def _copy_identity(entity: SketchEntity) -> SketchEntity:
     identity = uuid4().hex
+    if isinstance(entity, PointEntity):
+        return replace(entity, entity_id=identity)
     if isinstance(entity, SplineEntity):
         return replace(entity, entity_id=identity)
     if isinstance(entity, LineEntity):
@@ -119,6 +122,8 @@ def _transformed_entity(
     angle_delta_deg: float = 0.0,
     reflected_axis_angle_deg: float | None = None,
 ) -> SketchEntity:
+    if isinstance(entity, PointEntity):
+        return replace(entity, position_mm=transform_point(entity.position_mm))
     if isinstance(entity, SplineEntity):
         return replace(
             entity,
@@ -252,6 +257,14 @@ def move_sketch_handle(
     if entity_index is None:
         raise ValueError(f"sketch handle references missing entity {reference.entity_id!r}")
     entity = result[entity_index]
+    if isinstance(entity, PointEntity):
+        if reference.kind != "vertex" or reference.index != 0:
+            raise ValueError("point handle must reference vertex 0")
+        return (
+            *result[:entity_index],
+            replace(entity, position_mm=point),
+            *result[entity_index + 1 :],
+        )
     if isinstance(entity, SplineEntity):
         if (
             reference.kind != "vertex"
@@ -590,6 +603,8 @@ def _offset_polyline(entity: PolylineEntity, distance_mm: float, identity: str) 
 
 
 def _offset_entity(entity: SketchEntity, distance_mm: float) -> SketchEntity:
+    if isinstance(entity, PointEntity):
+        raise ValueError("点不支持偏移；草稿未修改。")
     if isinstance(entity, SplineEntity):
         raise ValueError("样条曲线暂不支持偏移；草稿未修改。")
     identity = uuid4().hex

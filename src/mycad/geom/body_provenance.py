@@ -65,6 +65,7 @@ def operation_origins(
     replacement = params.get("mode", "new") == "new" and command_id in (
         "feature.box",
         "feature.cylinder",
+        "feature.sphere",
         "feature.extrude",
         "feature.revolve",
     )

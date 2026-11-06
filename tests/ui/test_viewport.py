@@ -19,7 +19,7 @@ from typing import Protocol, cast
 
 import numpy as np
 import pytest
-from pyqtgraph.opengl import GLLinePlotItem, GLTextItem
+from pyqtgraph.opengl import GLLinePlotItem, GLScatterPlotItem, GLTextItem
 from pyqtgraph.opengl.shaders import ShaderProgram
 from PySide6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
@@ -27,10 +27,20 @@ from pytestqt.qtbot import QtBot
 from mycad import app as mycad_app
 from mycad.app import AppServices, build_app
 from mycad.core.persistence import LoadedDocument
-from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+from mycad.core.sketch import (
+    CircleEntity,
+    LineEntity,
+    PointEntity,
+    Sketch,
+    SketchEntity,
+    WorkPlaneFrame,
+)
 from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
 from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+from mycad.core.viewport_protocol import ViewportSketchData, ViewportSketchPoint
 from mycad.ui.main_window import MainWindow
+from mycad.ui.sketch_editor import SketchCanvas
+from mycad.ui.sketch_selection import entity_in_selection_box
 from mycad.ui.viewport import (
     EDGE_COLOR,
     HIGHLIGHT_COLOR,
@@ -45,11 +55,136 @@ from mycad.ui.viewport import (
 )
 
 
+class _PointViewportProbe(GLViewport):
+    @property
+    def draft_point_item(self) -> GLScatterPlotItem | None:
+        return self._draft_point_item
+
+    @property
+    def sketch_point_items(self) -> list[GLScatterPlotItem]:
+        return self._sketch_point_items
+
+    def sync_sketch_items(self, sketches: tuple[ViewportSketchData, ...]) -> None:
+        self._sync_sketch_items(sketches)
+
+
 def test_workbench_shader_does_not_share_compiled_state_between_contexts() -> None:
     first = build_workbench_shader()
     second = build_workbench_shader()
     assert first is not second
     assert all(a is not b for a, b in zip(first.shaders, second.shaders, strict=True))
+
+
+def test_draft_region_display_and_pick_use_same_mesh_with_holes(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    outer = CircleEntity("a1" * 16, (0, 0), 10)
+    hole = CircleEntity("b2" * 16, (0, 0), 3)
+    island = CircleEntity("c3" * 16, (30, 0), 4)
+    sketch = Sketch("e5" * 16, WorkPlaneFrame.xy(), (outer, hole, island))
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.set_orientation("top")
+    view.fit_world_points(((-12, -12, 0), (35, 12, 0)))
+    regions = services.kernel.sketch_region_data(sketch)
+    view.set_draft_sketch_regions(regions)
+    for point, expected in (((5, 0, 0), (outer.entity_id,)), ((30, 0, 0), (island.entity_id,))):
+        screen = view.project_world_point(point)
+        assert screen is not None
+        assert view.draft_sketch_region_at(*screen) == expected
+    screen = view.project_world_point((0, 0, 0))
+    assert screen is not None and view.draft_sketch_region_at(*screen) is None
+    view.set_draft_sketch_regions(())
+    assert view.draft_sketch_region_at(*screen) is None
+
+
+def test_draft_region_pick_respects_visible_model_occlusion(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    loaded = mycad_app.new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 10})
+    circle = CircleEntity("a1" * 16, (0, 0), 5)
+    sketch = Sketch("e5" * 16, WorkPlaneFrame.xy(), (circle,))
+    view = GLViewport(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.bind_document(loaded)
+    view.set_orientation("top")
+    view.fit_world_points(((-12, -12, 0), (12, 12, 10)))
+    view.set_draft_sketch_regions(services.kernel.sketch_region_data(sketch))
+    screen = view.project_world_point((0, 0, 0))
+    assert screen is not None
+    assert view.draft_sketch_region_at(*screen) is None
+    body = view.visible_body_ids()[0]
+    assert view.set_body_visible(body, False)
+    assert view.draft_sketch_region_at(*screen) == (circle.entity_id,)
+
+
+def test_draft_point_overlay_uses_constant_screen_pick_radius(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    view = _PointViewportProbe(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.set_orientation("top")
+    view.fit_world_points(((-10, -10, 0), (10, 10, 0)))
+    view.set_draft_sketch_points((("p", (2, 3, 0)),))
+    screen = view.project_world_point((2, 3, 0))
+    assert screen is not None
+    assert view.draft_sketch_point_at(screen[0] + 4, screen[1]) == "p"
+    assert view.draft_sketch_point_at(screen[0] + 20, screen[1]) is None
+    item = view.draft_point_item
+    view.set_draft_sketch_points((("p", (3, 3, 0)),))
+    assert view.draft_point_item is item
+    view.set_draft_sketch_points(())
+    assert view.draft_sketch_point_at(*screen) is None
+
+
+def test_committed_sketch_point_overlay_clears_on_refresh(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    view = _PointViewportProbe(viewport_port=services.kernel)
+    qtbot.addWidget(view)
+    view.sync_sketch_items(
+        (ViewportSketchData("sketch", (), points=(ViewportSketchPoint("p", (1, 2, 0)),)),)
+    )
+    assert len(view.sketch_point_items) == 1
+    view.sync_sketch_items(())
+    assert not view.sketch_point_items
+
+
+def test_point_has_stable_canvas_handle_and_box_selection() -> None:
+    point = PointEntity("a1" * 16, (2, 3))
+    entity = cast("SketchEntity", point)
+    handles = SketchCanvas.entity_point_references(entity)
+    assert len(handles) == 1
+    assert handles[0][0] == SketchGeometryReference(point.entity_id, "vertex", 0)
+    assert handles[0][1] == point.position_mm
+    assert entity_in_selection_box(entity, (0, 0), (4, 4), crossing=False)
+    assert not entity_in_selection_box(entity, (4, 4), (6, 6), crossing=True)
+
+
+def test_point_sprite_shaders_are_independent_across_viewports(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    first = _PointViewportProbe(viewport_port=services.kernel)
+    qtbot.addWidget(first)
+    first.resize(300, 300)
+    first.set_draft_sketch_points((("p", (0, 0, 0)),))
+    first.show()
+    qtbot.waitExposed(first)
+    if not first.isValid():
+        pytest.skip("requires a working OpenGL framebuffer")
+    assert not first.grabFramebuffer().isNull()
+    first_item = first.draft_point_item
+    assert first_item is not None
+    first.close()
+    second = _PointViewportProbe(viewport_port=services.kernel)
+    qtbot.addWidget(second)
+    second.resize(300, 300)
+    second.set_draft_sketch_points((("p", (0, 0, 0)),))
+    second.show()
+    qtbot.waitExposed(second)
+    assert not second.grabFramebuffer().isNull()
+    second_item = second.draft_point_item
+    assert second_item is not None
+    assert first_item.shader is not second_item.shader
 
 
 def test_preview_material_is_distinct_and_cancel_restores_it(
@@ -269,7 +404,8 @@ def test_camera_rays_follow_gl_camera_in_both_projections(
     assert center_ray is not None
     assert offset_ray is not None
     expected_forward = camera_basis(float(view.opts["elevation"]), float(view.opts["azimuth"]))[3]
-    assert center_ray[1] == pytest.approx(expected_forward)
+    # Rays follow Qt's float32 view matrix, including its cardinal-angle rounding.
+    assert center_ray[1] == pytest.approx(expected_forward, abs=1e-6)
     assert sum(component**2 for component in center_ray[1]) == pytest.approx(1.0)
     if projection == "orthographic":
         assert offset_ray[1] == pytest.approx(center_ray[1])
@@ -531,6 +667,22 @@ def test_xy_grid_uses_points_and_hides_without_scene_changes(viewport: GLViewpor
     viewport.set_xy_grid_visible(True)
     added = [item for item in viewport.items if item not in original]
     assert len(added) == 1
-    assert type(added[0]).__name__ == "GLScatterPlotItem"
+    assert isinstance(added[0], GLScatterPlotItem)
     viewport.set_xy_grid_visible(False)
     assert tuple(viewport.items) == original
+
+
+def test_switch_from_cylinder_to_sphere_removes_old_boundary_lines(
+    viewport: GLViewport, loaded: LoadedDocument
+) -> None:
+    loaded.bus.execute("feature.cylinder", {"radius": 5, "height": 10}, "test")
+    viewport.bind_document(loaded)
+    assert viewport.snapshots()[-1].boundary_edges
+    assert viewport.boundary_lines_visible()
+    loaded.bus.execute("feature.sphere", {"radius": 10, "mode": "new"}, "test")
+    viewport.refresh()
+    assert not viewport.snapshots()[-1].boundary_edges
+    assert not viewport.boundary_lines_visible()
+    loaded.bus.undo()
+    viewport.refresh()
+    assert viewport.boundary_lines_visible()

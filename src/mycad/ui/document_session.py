@@ -68,6 +68,7 @@ class SessionDocument:
             bench.notes.pending
             or bench.annotations.pending
             or (bench.placement is not None and bench.placement.pending)
+            or bench.has_pending_view_edit
         )
         return bool(
             self.loaded.document.is_dirty
@@ -81,7 +82,7 @@ class DocumentSession:
     def __init__(self) -> None:
         self._documents: dict[str, SessionDocument] = {}
         self.active: SessionDocument | None = None
-        self._last_kind: dict[DocumentKind, str] = {}
+        self._kind_history: dict[DocumentKind, list[str]] = {}
 
     @property
     def documents(self) -> tuple[SessionDocument, ...]:
@@ -89,6 +90,9 @@ class DocumentSession:
 
     def add(self, document: SessionDocument) -> None:
         identity = document.loaded.document.document_id
+        existing = self._documents.get(identity)
+        if existing is not None and existing is not document:
+            raise ValidationError("This document identity is already open.")
         if document.path is not None:
             self.check_path(document, document.path)
         if any(
@@ -99,16 +103,22 @@ class DocumentSession:
                 "This file identity is already open; activate the existing document."
             )
         self._documents[identity] = document
+        history = self._kind_history.setdefault(document.kind, [])
+        if identity not in history:
+            history.insert(0, identity)
 
     def activate(self, identity: str) -> SessionDocument:
         document = self._documents[identity]
         self.active = document
-        self._last_kind[document.kind] = identity
+        history = self._kind_history.setdefault(document.kind, [])
+        if identity in history:
+            history.remove(identity)
+        history.append(identity)
         return document
 
     def latest(self, kind: DocumentKind) -> SessionDocument | None:
-        identity = self._last_kind.get(kind)
-        return self._documents.get(identity) if identity is not None else None
+        history = self._kind_history.get(kind)
+        return self._documents.get(history[-1]) if history else None
 
     def find(self, identity: str) -> SessionDocument | None:
         return self._documents.get(identity)
@@ -117,17 +127,18 @@ class DocumentSession:
         document = self._documents.pop(identity)
         if self.active is document:
             self.active = None
-        if self._last_kind.get(document.kind) == identity:
-            self._last_kind.pop(document.kind, None)
+        history = self._kind_history.get(document.kind)
+        if history is not None and identity in history:
+            history.remove(identity)
+            if not history:
+                self._kind_history.pop(document.kind)
 
     def check_path(self, document: SessionDocument, path: Path) -> None:
-        import os
+        from mycad.ui.path_identity import path_identity
 
-        normalized = os.path.normcase(str(path.resolve()))
+        normalized = path_identity(path)
         if any(
-            d is not document
-            and d.path is not None
-            and os.path.normcase(str(d.path.resolve())) == normalized
+            d is not document and d.path is not None and path_identity(d.path) == normalized
             for d in self.documents
         ):
             raise ValidationError("目标文件已由另一个打开的文档使用，请选择不同的路径。")

@@ -45,11 +45,13 @@ class ExecutedCommand:
     timestamp_utc: str
     confirmed_by: str | None
     amendments: tuple[CommandAmendment, ...] = ()
+    instance_id: str | None = None
 
 
 AffectedObject = Literal[
     "box_body",
     "cylinder_body",
+    "sphere_body",
     "extruded_body",
     "revolved_body",
     "hole",
@@ -72,6 +74,7 @@ AffectedObject = Literal[
 AFFECTED_OBJECTS: Mapping[str, str] = {
     "feature.box": "box_body",
     "feature.cylinder": "cylinder_body",
+    "feature.sphere": "sphere_body",
     "feature.extrude": "extruded_body",
     "feature.revolve": "revolved_body",
     "feature.hole": "hole",
@@ -210,6 +213,12 @@ class Document:
         self._commands: list[ExecutedCommand] = (
             deepcopy(list(commands)) if commands is not None else []
         )
+        if self._archive_version >= 5:
+            from mycad.core.command_identity import require_instance_id
+
+            identities = [require_instance_id(c.instance_id) for c in self._commands]
+            if len(set(identities)) != len(identities):
+                raise ValidationError("duplicate command instance_id")
         if self._document_type == "drawing2d":
             for command in self._commands:
                 if command.id not in DRAWING2D_COMMAND_IDS:
@@ -440,6 +449,14 @@ class Document:
     def _append_command(self, command: ExecutedCommand) -> None:
         """Bus-side append (T6c): the single write path into the history list."""
         spec = self._registry.get(command.id, command.version)
+        if self._archive_version >= 5:
+            from mycad.core.command_identity import require_instance_id
+
+            require_instance_id(command.instance_id)
+            if any(c.instance_id == command.instance_id for c in self._commands):
+                from mycad.core.exceptions import ValidationError
+
+                raise ValidationError("duplicate command instance_id")
         self._commands.append(deepcopy(command))
         self._archive_version = max(self._archive_version, spec.min_archive_version)
         self._dirty = True
@@ -456,4 +473,31 @@ class Document:
     def _restore_commands(self, snapshot: list[ExecutedCommand]) -> None:
         """Bus-side restore: replace the whole history (T6c batch rollback)."""
         self._commands = deepcopy(snapshot)
+        self._dirty = True
+
+    def _adopt_archive_version(self, version: int) -> None:
+        """Bus-only upgrade after a validated candidate is confirmed."""
+        from mycad.core.exceptions import ValidationError
+
+        if type(version) is not int or version != 6 or self._archive_version < 5:
+            raise ValidationError("invalid archive upgrade")
+        self._archive_version = version
+        self._dirty = True
+
+    def _adopt_command_identities(self, identities: tuple[str, ...]) -> None:
+        """Bus-only identity upgrade; audit entries are preserved verbatim."""
+        from dataclasses import replace
+
+        from mycad.core.command_identity import require_instance_id
+        from mycad.core.exceptions import ValidationError
+
+        if len(identities) != len(self._commands) or len(set(identities)) != len(identities):
+            raise ValidationError("command identity count/uniqueness mismatch")
+        for identity in identities:
+            require_instance_id(identity)
+        self._commands = [
+            replace(command, instance_id=identity)
+            for command, identity in zip(self._commands, identities, strict=True)
+        ]
+        self._archive_version = 5
         self._dirty = True

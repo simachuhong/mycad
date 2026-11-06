@@ -15,6 +15,7 @@ from mycad.core.document_dependencies import save_order
 from mycad.core.exceptions import MycadError, ValidationError
 from mycad.core.persistence import save_document
 from mycad.ui.document_session import DocumentSession, SessionDocument
+from mycad.ui.path_identity import path_identity
 
 SaveStatus = Literal["saved", "cancelled", "failed", "pending"]
 
@@ -56,6 +57,8 @@ class DocumentSaveController:
         on_complete: Callable[[bool], None] | None = None,
     ) -> None:
         if self.running:
+            if on_complete is not None:
+                on_complete(False)
             return
         self.running = True
         by_id = {e.loaded.document.file_id: e for e in entries}
@@ -96,7 +99,7 @@ class DocumentSaveController:
                         e.loaded.document.document_id,
                         e.label,
                         "failed",
-                        "当前草稿尚未完成或提交失败，内容已保留。",
+                        "当前文档暂时无法保存，请等待操作完成或处理未完成的草稿。",
                     )
                 )
                 finish(False)
@@ -116,7 +119,7 @@ class DocumentSaveController:
                     return
                 try:
                     self.session.check_path(e, path)
-                    key = os.path.normcase(str(path.resolve()))
+                    key = path_identity(path)
                     if key in seen:
                         raise ValidationError("多个文档不能保存到同一个目标文件。")
                     seen.add(key)
@@ -134,10 +137,11 @@ class DocumentSaveController:
                     if (
                         save_as
                         and e.path is not None
-                        and os.path.normcase(str(e.path.resolve()))
-                        != os.path.normcase(str(path.resolve()))
+                        and path_identity(e.path) != path_identity(path)
                     ):
-                        services, loaded = app.copy_app_document(e.services, e.loaded.document)
+                        services, loaded = app.copy_app_document(
+                            e.services, e.loaded.document, source_bus=e.loaded.bus
+                        )
                     locations = dict(e.reference_locations)
                     for reference in services.kernel.document_references:
                         location = locations.get(reference.file_id, reference.path)

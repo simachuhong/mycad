@@ -22,6 +22,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from mycad.core.archive_validation import validate_versioned_archive
+from mycad.core.bound_refs import is_bound_hole, validate_hole_binding
 from mycad.core.bus import CommandBus
 from mycad.core.document import CommandAmendment, Document, ExecutedCommand
 from mycad.core.document_kinds import DocumentKind, DocumentType, native_suffix
@@ -37,7 +39,9 @@ from mycad.core.schema_v1 import (
 )
 from mycad.core.schema_v2 import ARCHIVE_VERSION_V2, validate_archive_v2
 from mycad.core.schema_v3 import ARCHIVE_VERSION_V3, validate_archive_v3
-from mycad.core.schema_v4 import ARCHIVE_VERSION_V4, validate_archive_v4
+from mycad.core.schema_v4 import ARCHIVE_VERSION_V4
+from mycad.core.schema_v5 import ARCHIVE_VERSION_V5
+from mycad.core.schema_v6 import ARCHIVE_VERSION_V6
 from mycad.core.selectors import EdgeSelector, FaceSelector
 
 if TYPE_CHECKING:
@@ -92,6 +96,8 @@ def _archive_payload_v1(document: Document) -> dict[str, object]:
             "timestamp_utc": cmd.timestamp_utc,
             "confirmed_by": cmd.confirmed_by,
         }
+        if document.archive_version >= 5:
+            entry["instance_id"] = cmd.instance_id
         if cmd.amendments:
             entry["amendments"] = [
                 {
@@ -210,27 +216,44 @@ def document_payload(
             plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
         )
         payload = _migrate_v1_to_v2(payload, provenance)
-    elif document.archive_version in (ARCHIVE_VERSION_V3, ARCHIVE_VERSION_V4):
+    elif document.archive_version in (
+        ARCHIVE_VERSION_V3,
+        ARCHIVE_VERSION_V4,
+        ARCHIVE_VERSION_V5,
+        ARCHIVE_VERSION_V6,
+    ):
         provenance = _capture_provenance(
             plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
         )
-        payload = _migrate_v1_to_v2(payload, provenance)
+        identity_commands = payload["commands"]
+        legacy = {
+            **payload,
+            "commands": [
+                {k: v for k, v in c.items() if k != "instance_id"}
+                for c in cast("list[dict[str, object]]", identity_commands)
+            ],
+        }
+        payload = _migrate_v1_to_v2(legacy, provenance)
+        if document.archive_version >= 5:
+            payload["commands"] = identity_commands
         if document.archive_version == ARCHIVE_VERSION_V3:
             payload = _migrate_v2_to_v3(payload, document.document_type)
         else:
             payload.update(
-                version=4, file_id=document.file_id, document_kind=document.document_kind
+                version=document.archive_version,
+                file_id=document.file_id,
+                document_kind=document.document_kind,
             )
             payload["document_type"] = document.document_type
             if document.migration_origin is not None:
                 payload["migration_origin"] = document.migration_origin
             payload["reference_locations"] = document.reference_locations
-            validate_archive_v4(payload)
+            validate_versioned_archive(payload)
     else:
         raise ArchiveVersionError(
             f"document archive version {document.archive_version} is not supported",
             found=str(document.archive_version),
-            supported=ARCHIVE_VERSION_V4,
+            supported=ARCHIVE_VERSION_V6,
         )
     return payload
 
@@ -252,7 +275,7 @@ def save_document(
     payload = document_payload(document, plugin_identities=plugin_identities)
     if document.archive_version >= 4 and reference_locations is not None:
         payload["reference_locations"] = dict(reference_locations)
-        validate_archive_v4(payload)
+        validate_versioned_archive(payload)
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     document.events.emit("document_saving", {"path": str(path)})
     tmp_path: Path | None = None
@@ -277,19 +300,37 @@ def _require_command(
     entry: Mapping[str, object],
     registry: CommandRegistry,
     handlers: Mapping[str, CommandHandler] | Mapping[tuple[str, int], CommandHandler],
+    archive_version: int,
 ) -> None:
     """Pre-flight one archive command against the registry and handlers."""
     command_id = entry["id"]
     version = entry["version"]
     ordinal = entry["ordinal"]
     try:
-        registry.get(cast("str", command_id), cast("int", version))
+        spec = registry.get(cast("str", command_id), cast("int", version))
     except UnknownCommandError:
         raise UnknownCommandError(
             f"archive command at ordinal {ordinal} has unknown id {command_id!r} "
             f"(version {version})",
             identifier=cast("str", command_id),
         ) from None
+    if spec.min_archive_version > archive_version:
+        raise ValidationError("command requires a newer archive version", command_id=spec.id)
+    if (
+        is_bound_hole(spec.id, cast("Mapping[str, object]", entry["params"]))
+        and archive_version < 5
+    ):
+        raise ValidationError("bound face holes require archive v5", command_id=spec.id)
+    if is_bound_hole(spec.id, cast("Mapping[str, object]", entry["params"])):
+        validate_hole_binding(
+            cast("Mapping[str, object]", entry["params"]), ordinal=cast("int", ordinal)
+        )
+    if spec.id in ("reference.attach", "reference.update"):
+        from mycad.core.document_references import DocumentReference
+
+        reference = DocumentReference.from_mapping(cast("Mapping[str, object]", entry["params"]))
+        for child in cast("list[dict[str, object]]", reference.archive["commands"]):
+            _require_command(child, registry, handlers, cast("int", reference.archive["version"]))
     if (
         resolve_handler(
             handlers,
@@ -326,6 +367,7 @@ def _command_from_json(entry: Mapping[str, object]) -> ExecutedCommand:
         timestamp_utc=cast("str", entry["timestamp_utc"]),
         confirmed_by=cast("str | None", entry["confirmed_by"]),
         amendments=tuple(amendments),
+        instance_id=cast("str | None", entry.get("instance_id")),
     )
 
 
@@ -427,12 +469,14 @@ def load_document_payload(
             ARCHIVE_VERSION_V2,
             ARCHIVE_VERSION_V3,
             ARCHIVE_VERSION_V4,
+            ARCHIVE_VERSION_V5,
+            ARCHIVE_VERSION_V6,
         )
     ):
         raise ArchiveVersionError(
-            f"archive version {version!r} is not supported (supported: 1, 2, 3, {ARCHIVE_VERSION_V4})",
+            f"archive version {version!r} is not supported (supported: 1, 2, 3, 4, 5, 6)",
             found=str(version),
-            supported=ARCHIVE_VERSION_V4,
+            supported=ARCHIVE_VERSION_V6,
         )
     archive_version = cast("int", version)
     document_type: DocumentType = "part"
@@ -444,8 +488,8 @@ def load_document_payload(
         replay_data = {key: value for key, value in root.items() if key != "provenance"}
         replay_data["version"] = ARCHIVE_VERSION
     else:
-        if archive_version == ARCHIVE_VERSION_V4:
-            validate_archive_v4(root)
+        if archive_version >= ARCHIVE_VERSION_V4:
+            validate_versioned_archive(root)
         else:
             validate_archive_v3(root)
         document_type = cast("DocumentType", root["document_type"])
@@ -464,7 +508,7 @@ def load_document_payload(
         }
         replay_data["version"] = ARCHIVE_VERSION
     for entry in cast("list[object]", replay_data["commands"]):
-        _require_command(cast("Mapping[str, object]", entry), registry, handlers)
+        _require_command(cast("Mapping[str, object]", entry), registry, handlers, archive_version)
     document = _build_document(
         replay_data,
         registry,

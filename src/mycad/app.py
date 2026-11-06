@@ -11,7 +11,7 @@ document owns its kernel; immutable registrations are shared.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -29,8 +29,23 @@ from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
 from mycad.core.identity import BodyId, TopologyId
 from mycad.core.persistence import LoadedDocument, document_payload, load_document_payload
 from mycad.core.persistence import open_document as _open_document
-from mycad.core.sketch import new_sketch_identity
-from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
+from mycad.core.replay_proposal import (
+    ReplayAppend,
+    ReplayCandidateProposal,
+    ReplayCandidateState,
+    ReplayChangeSet,
+    ReplayCommitGrant,
+    ReplayFailure,
+)
+from mycad.core.sketch import PointEntity, Sketch, WorkPlaneFrame, new_sketch_identity
+from mycad.core.viewport_protocol import (
+    CandidateInteractionScene,
+    PlanarFaceFrame,
+    ViewportData,
+    ViewportDatum,
+    ViewportSketchData,
+    ViewportSnapAnchor,
+)
 from mycad.formats.providers import DXF_PROVIDER, STEP_PROVIDER, STL_PROVIDER
 from mycad.formats.registry import FormatProviderRegistry
 from mycad.geom.drawing_worker import DrawingProjectionWorker
@@ -49,6 +64,11 @@ __all__ = [
     "new_workspace_document",
     "open_session_documents",
     "open_session_bundle",
+    "create_replay_candidate",
+    "stage_mixed_drawing_move",
+    "stage_mixed_drawing_timeline",
+    "ReplayCandidateSession",
+    "ReplayCandidatePreview",
     "reference_parameters",
     "archive_plugin_identities",
     "preview_command",
@@ -72,6 +92,594 @@ class AppServices:
     kernel: BuildKernel
     formats: FormatProviderRegistry
     plugins: PluginManager
+
+
+@dataclass(frozen=True)
+class ReplayCandidatePreview:
+    """Neutral display result from one isolated candidate generation."""
+
+    state: ReplayCandidateState
+    proposal: ReplayCandidateProposal
+    viewport: ViewportData | None
+    sketches: tuple[ViewportSketchData, ...]
+    failure: ReplayFailure | None
+    datums: tuple[ViewportDatum, ...] = ()
+    snap_anchors: tuple[ViewportSnapAnchor, ...] = ()
+    scene: CandidateInteractionScene | None = None
+    failure_scene: CandidateInteractionScene | None = None
+
+
+class ReplayCandidateSession:
+    """Own one staged history proposal and its isolated replay resources."""
+
+    def __init__(
+        self,
+        services: AppServices,
+        loaded: LoadedDocument,
+        *,
+        session_identity: int,
+    ) -> None:
+        if type(session_identity) is not int or session_identity < 0:
+            raise ValidationError("session_identity must be a non-negative integer")
+        self._services = services
+        self._loaded = loaded
+        self._session_identity = session_identity
+        self._source_document_id = loaded.document.document_id
+        self._source_file_id = loaded.document.file_id
+        self._source_revision = loaded.document.revision
+        self._candidate_id = uuid4().hex
+        self._generation = 0
+        self._state: ReplayCandidateState = "ready"
+        self._changes: ReplayChangeSet | None = None
+        self._proposal: ReplayCandidateProposal | None = None
+        self._latest_preview: ReplayCandidatePreview | None = None
+        self._candidate_kernel: BuildKernel | None = None
+        self._candidate_bus: CommandBus | None = None
+
+    @property
+    def state(self) -> ReplayCandidateState:
+        """Current lifecycle state for the staged candidate."""
+        return self._state
+
+    @property
+    def proposal(self) -> ReplayCandidateProposal | None:
+        """Current frozen proposal, if one has been staged."""
+        return self._proposal
+
+    @property
+    def latest_preview(self) -> ReplayCandidatePreview | None:
+        """Latest completed candidate result, including an isolated failure prefix."""
+        return self._latest_preview
+
+    def _check_session(self, current_session_identity: int) -> None:
+        if (
+            type(current_session_identity) is not int
+            or current_session_identity != self._session_identity
+        ):
+            raise ValidationError("candidate belongs to another application session")
+
+    def _source_is_current(self) -> bool:
+        document = self._loaded.document
+        return (
+            document.document_id == self._source_document_id
+            and document.file_id == self._source_file_id
+            and document.revision == self._source_revision
+        )
+
+    def is_scene_current(
+        self, scene: CandidateInteractionScene, *, current_session_identity: int
+    ) -> bool:
+        """Reject a scene after stage, session change, cancellation or source edit."""
+        preview = self._latest_preview
+        return (
+            current_session_identity == self._session_identity
+            and self._state == "succeeded"
+            and self._source_is_current()
+            and preview is not None
+            and preview.scene is scene
+            and preview.proposal == self._proposal
+        )
+
+    def is_failure_scene_current(
+        self, scene: CandidateInteractionScene, *, current_session_identity: int
+    ) -> bool:
+        """Keep a failed replay's isolated prefix separate from a successful scene."""
+        preview = self._latest_preview
+        return (
+            current_session_identity == self._session_identity
+            and self._state == "failed"
+            and self._source_is_current()
+            and preview is not None
+            and preview.failure_scene is scene
+            and preview.proposal == self._proposal
+        )
+
+    def _release_candidate(self) -> None:
+        self._candidate_kernel = None
+        self._candidate_bus = None
+        self._latest_preview = None
+
+    def stage(
+        self,
+        changes: ReplayChangeSet,
+        *,
+        current_session_identity: int,
+    ) -> None:
+        """Freeze a complete change set and invalidate prior result/pick state."""
+        self._check_session(current_session_identity)
+        if self._state in ("cancelled", "committed"):
+            raise ValidationError(f"cannot stage a {self._state} candidate")
+        if not self._source_is_current():
+            self._state = "stale"
+            self._proposal = None
+            self._changes = None
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            raise ValidationError("candidate source document changed")
+        next_generation = self._generation + 1
+        proposal = self._loaded.bus.prepare_replay_proposal(
+            changes,
+            session_identity=self._session_identity,
+            candidate_id=self._candidate_id,
+            generation=next_generation,
+        )
+        self._release_candidate()
+        self._generation = next_generation
+        self._changes = changes
+        self._proposal = proposal
+        self._state = "ready"
+
+    def _candidate_runtime(
+        self,
+        proposal: ReplayCandidateProposal,
+        commands: tuple[ExecutedCommand, ...],
+    ) -> tuple[BuildKernel, CommandBus]:
+        registry = CommandRegistry(schema_defs=COMMAND_SCHEMA_DEFS)
+        for spec in BUILTIN_COMMAND_SPECS:
+            registry.register(spec)
+        kernel = BuildKernel()
+        _configure_reference_loader(kernel, registry, PluginManager(()))
+        source = self._loaded.document
+        document = Document(
+            registry,
+            metadata=source.metadata_snapshot(),
+            commands=commands,
+            named_groups=source.named_groups,
+            archive_version=proposal.archive_version,
+            document_type=source.document_type,
+            document_kind=source.document_kind,
+            file_id=source.file_id,
+            migration_origin=source.migration_origin,
+            reference_locations=source.reference_locations,
+        )
+        handlers = {
+            (spec.id, spec.version): BuiltinModelingHandler(spec.id, spec.version)
+            for spec in BUILTIN_COMMAND_SPECS
+        }
+        bus = CommandBus(document, registry, kernel, handlers)
+        return kernel, bus
+
+    @staticmethod
+    def _first_unsupported_command(
+        proposal: ReplayCandidateProposal,
+    ) -> ReplayFailure | None:
+        supported = frozenset((spec.id, spec.version) for spec in BUILTIN_COMMAND_SPECS)
+        last_successful: int | None = None
+        for command in proposal.commands:
+            if (command.id, command.version) not in supported:
+                return ReplayFailure(
+                    command_id=command.id,
+                    command_version=command.version,
+                    instance_id=command.instance_id,
+                    ordinal=command.ordinal,
+                    parameter_path=None,
+                    reason="unsupported-command",
+                    last_successful_ordinal=last_successful,
+                )
+            last_successful = command.ordinal
+        return None
+
+    def _prefix_result(
+        self,
+        proposal: ReplayCandidateProposal,
+        failure: ReplayFailure,
+    ) -> tuple[
+        BuildKernel,
+        ViewportData | None,
+        tuple[ViewportSketchData, ...],
+        ReplayFailure,
+    ]:
+        current_failure = failure
+        current_commands = proposal.commands
+        while True:
+            failed_position = next(
+                (
+                    index
+                    for index, command in enumerate(current_commands)
+                    if command.ordinal == current_failure.ordinal
+                ),
+                None,
+            )
+            if failed_position is None:
+                kernel, _bus = self._candidate_runtime(proposal, ())
+                return kernel, None, (), current_failure
+            prefix = current_commands[:failed_position]
+            kernel, bus = self._candidate_runtime(proposal, prefix)
+            prefix_failure = bus.replay_for_candidate()
+            if prefix_failure is not None:
+                current_failure = prefix_failure
+                current_commands = prefix
+                continue
+            snapshots = kernel.viewport_data()
+            viewport = snapshots[-1] if snapshots else None
+            return kernel, viewport, kernel.sketch_display_data(), current_failure
+
+    def preview(self, *, current_session_identity: int) -> ReplayCandidatePreview:
+        """Replay the complete frozen candidate off-model and return neutral output."""
+        self._check_session(current_session_identity)
+        if self._state in ("cancelled", "committed"):
+            raise ValidationError(f"cannot preview a {self._state} candidate")
+        proposal = self._proposal
+        if proposal is None:
+            raise ValidationError("stage candidate changes before preview")
+        if not self._source_is_current():
+            self._state = "stale"
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            result = ReplayCandidatePreview("stale", proposal, None, (), None)
+            self._latest_preview = result
+            return result
+
+        self._generation += 1
+        proposal = replace(proposal, generation=self._generation)
+        self._proposal = proposal
+        self._state = "previewing"
+        self._release_candidate()
+        self._loaded.bus.record_replay_candidate_preview(proposal, succeeded=False)
+
+        failure = self._first_unsupported_command(proposal)
+        kernel: BuildKernel | None = None
+        bus: CommandBus | None = None
+        viewport: ViewportData | None = None
+        sketches: tuple[ViewportSketchData, ...] = ()
+        if failure is None:
+            kernel, bus = self._candidate_runtime(proposal, proposal.commands)
+            failure = bus.replay_for_candidate()
+            if failure is None:
+                snapshots = kernel.viewport_data()
+                viewport = snapshots[-1] if snapshots else None
+                sketches = kernel.sketch_display_data()
+        if failure is not None:
+            kernel, viewport, sketches, failure = self._prefix_result(proposal, failure)
+
+        if proposal.generation != self._generation:
+            return ReplayCandidatePreview("stale", proposal, None, (), failure)
+        if not self._source_is_current():
+            self._state = "stale"
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            return ReplayCandidatePreview("stale", proposal, None, (), failure)
+
+        state: ReplayCandidateState = "failed" if failure is not None else "succeeded"
+        self._loaded.bus.record_replay_candidate_preview(proposal, succeeded=state == "succeeded")
+        self._state = state
+        self._candidate_kernel = kernel
+        self._candidate_bus = bus if failure is None else None
+        datums = kernel.datum_display_data() if failure is None and kernel is not None else ()
+        anchors = kernel.snap_anchor_data() if failure is None and kernel is not None else ()
+        scene = (
+            CandidateInteractionScene(
+                proposal.document_id,
+                proposal.file_id,
+                proposal.revision,
+                proposal.session_identity,
+                proposal.candidate_id,
+                proposal.generation,
+                viewport,
+                sketches,
+                datums,
+                anchors,
+            )
+            if state == "succeeded"
+            else None
+        )
+        failure_scene = (
+            CandidateInteractionScene(
+                proposal.document_id,
+                proposal.file_id,
+                proposal.revision,
+                proposal.session_identity,
+                proposal.candidate_id,
+                proposal.generation,
+                viewport,
+                sketches,
+                kernel.datum_display_data(),
+                kernel.snap_anchor_data(),
+            )
+            if state == "failed" and kernel is not None and viewport is not None
+            else None
+        )
+        result = ReplayCandidatePreview(
+            state, proposal, viewport, sketches, failure, datums, anchors, scene, failure_scene
+        )
+        self._latest_preview = result
+        return result
+
+    def interactive_face_binding(
+        self,
+        identity: TopologyId,
+        *,
+        generation: int,
+        current_session_identity: int,
+    ) -> Mapping[str, object]:
+        """Mint a persistent face binding from this generation's candidate kernel."""
+        self._check_session(current_session_identity)
+        if generation != self._generation or self._proposal is None:
+            raise ValidationError("candidate pick belongs to an expired generation")
+        if self._state != "succeeded" or self._candidate_kernel is None:
+            raise ValidationError("candidate face picking requires a successful preview")
+        if not self._source_is_current():
+            self._state = "stale"
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            raise ValidationError("candidate source document changed")
+        return self._candidate_kernel.interactive_face_binding(identity)
+
+    def interactive_bound_face_frame(
+        self,
+        identity: TopologyId,
+        *,
+        generation: int,
+        current_session_identity: int,
+    ) -> WorkPlaneFrame:
+        """Return the design-local frame only for a live candidate face pick."""
+        self.interactive_face_binding(
+            identity, generation=generation, current_session_identity=current_session_identity
+        )
+        kernel = self._candidate_kernel
+        if kernel is None:
+            raise ValidationError("candidate face picking requires a successful preview")
+        return kernel.interactive_bound_face_frame(identity)
+
+    def interactive_failure_face_binding(
+        self,
+        identity: TopologyId,
+        *,
+        generation: int,
+        current_session_identity: int,
+    ) -> Mapping[str, object]:
+        """Bind an exact face in the current failure prefix without authorizing it."""
+        self._check_session(current_session_identity)
+        preview = self._latest_preview
+        scene = preview.failure_scene if preview is not None else None
+        if (
+            scene is None
+            or generation != self._generation
+            or not self.is_failure_scene_current(
+                scene, current_session_identity=current_session_identity
+            )
+            or self._candidate_kernel is None
+        ):
+            raise ValidationError("failure prefix face pick is no longer current")
+        return self._candidate_kernel.interactive_face_binding(identity)
+
+    def interactive_failure_bound_face_frame(
+        self,
+        identity: TopologyId,
+        *,
+        generation: int,
+        current_session_identity: int,
+    ) -> WorkPlaneFrame:
+        """Return a failure prefix face frame only while its scene is current."""
+        self.interactive_failure_face_binding(
+            identity, generation=generation, current_session_identity=current_session_identity
+        )
+        kernel = self._candidate_kernel
+        if kernel is None:
+            raise ValidationError("failure prefix face pick is no longer current")
+        return kernel.interactive_bound_face_frame(identity)
+
+    def authorize_commit(self, *, current_session_identity: int) -> ReplayCommitGrant:
+        """Authorize only the latest successful preview in this live session."""
+        self._check_session(current_session_identity)
+        proposal = self._proposal
+        preview = self._latest_preview
+        if (
+            self._state != "succeeded"
+            or proposal is None
+            or preview is None
+            or preview.state != "succeeded"
+            or preview.proposal != proposal
+        ):
+            raise ValidationError("commit authorization requires the latest successful preview")
+        if not self._source_is_current():
+            self._state = "stale"
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            raise ValidationError("candidate source document changed")
+        return self._loaded.bus.authorize_replay_candidate(proposal)
+
+    def commit(self, grant: ReplayCommitGrant, *, current_session_identity: int) -> None:
+        """Commit this latest preview through its source Bus exactly once."""
+        self._check_session(current_session_identity)
+        proposal = self._proposal
+        preview = self._latest_preview
+        if (
+            self._state != "succeeded"
+            or proposal is None
+            or preview is None
+            or preview.state != "succeeded"
+            or preview.proposal != proposal
+        ):
+            raise ValidationError("commit requires the latest successful preview")
+        if not self._source_is_current():
+            self._state = "stale"
+            self._loaded.bus.discard_replay_candidate(self._candidate_id)
+            self._release_candidate()
+            raise ValidationError("candidate source document changed")
+        self._loaded.bus.commit_replay_candidate(proposal, grant)
+        self._state = "committed"
+        self._release_candidate()
+
+    def cancel(self) -> None:
+        """Invalidate the candidate and release its native replay resources."""
+        if self._state == "committed":
+            raise ValidationError("cannot cancel a committed candidate")
+        self._generation += 1
+        self._loaded.bus.discard_replay_candidate(self._candidate_id)
+        self._release_candidate()
+        self._proposal = None
+        self._changes = None
+        self._state = "cancelled"
+
+
+def create_replay_candidate(
+    services: AppServices,
+    loaded: LoadedDocument,
+    *,
+    session_identity: int,
+) -> ReplayCandidateSession:
+    """Create a session-bound isolated replay proposal lifecycle."""
+    return ReplayCandidateSession(services, loaded, session_identity=session_identity)
+
+
+def commit_new_sketch(
+    services: AppServices,
+    loaded: LoadedDocument,
+    sketch: Sketch,
+    *,
+    session_identity: int,
+    confirmed_by: str = "local",
+) -> object:
+    """Commit a sketch, replaying an archive upgrade only when points require it."""
+    if not any(isinstance(entity, PointEntity) for entity in sketch.entities):
+        return loaded.bus.execute("sketch.create", sketch.to_state_mapping(), confirmed_by)
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            (ReplayAppend("sketch.create", 5, sketch.to_state_mapping(), confirmed_by),),
+            False,
+            target_archive_version=6 if loaded.document.archive_version < 6 else None,
+        ),
+        current_session_identity=session_identity,
+    )
+    preview = candidate.preview(current_session_identity=session_identity)
+    if preview.state != "succeeded":
+        raise ValidationError(preview.failure.reason if preview.failure else "草图预览失败。")
+    grant = candidate.authorize_commit(current_session_identity=session_identity)
+    return candidate.commit(grant, current_session_identity=session_identity)
+
+
+def stage_mixed_drawing_move(
+    services: AppServices,
+    loaded: LoadedDocument,
+    original_draft: Sketch,
+    revisions: Sequence[Mapping[str, object]],
+    *,
+    session_identity: int,
+    followup_steps: Sequence[Sequence[Mapping[str, object]]] = (),
+) -> ReplayCandidateSession:
+    """Stage draft creation followed by an atomic multi-sketch revision."""
+    if loaded.document.document_type != "drawing2d":
+        raise ValidationError("混合变换仅支持独立二维文档。")
+    if (
+        not revisions
+        or sum(revision.get("sketch_id") == original_draft.sketch_id for revision in revisions) > 1
+    ):
+        raise ValidationError("混合变换必须包含修订，且草稿修订不能重复。")
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            (
+                ReplayAppend(
+                    "sketch.create",
+                    5
+                    if any(isinstance(entity, PointEntity) for entity in original_draft.entities)
+                    else 3,
+                    original_draft.to_state_mapping(),
+                    "local",
+                ),
+                ReplayAppend("drawing.sketch.revise", 1, {"revisions": list(revisions)}, "local"),
+                *(
+                    ReplayAppend("drawing.sketch.revise", 1, {"revisions": list(step)}, "local")
+                    for step in followup_steps
+                ),
+            ),
+            False,
+            target_archive_version=6 if loaded.document.archive_version < 6 else None,
+            undo_appends_separately=True,
+        ),
+        current_session_identity=session_identity,
+    )
+    return candidate
+
+
+def stage_mixed_drawing_timeline(
+    services: AppServices,
+    loaded: LoadedDocument,
+    original_draft: Sketch,
+    original_saved: Sequence[Sketch],
+    steps: Sequence[tuple[Sequence[Sketch], Sketch]],
+    *,
+    session_identity: int,
+) -> ReplayCandidateSession:
+    """Stage each retained draft edit as its own replayable history step."""
+    current_saved = {sketch.sketch_id: sketch for sketch in services.kernel.sketches}
+    prior = {sketch.sketch_id: sketch for sketch in original_saved}
+    if (
+        not prior
+        or len(prior) != len(original_saved)
+        or any(current_saved.get(identity) != sketch for identity, sketch in prior.items())
+    ):
+        raise ValidationError("已提交草图已变化，请重新开始混合变换。")
+    if original_draft.sketch_id in prior or not steps:
+        raise ValidationError("混合变换缺少有效的草稿或操作。")
+    prior[original_draft.sketch_id] = original_draft
+    batches: list[list[dict[str, object]]] = []
+    for saved, draft in steps:
+        after = {sketch.sketch_id: sketch for sketch in saved}
+        if len(after) != len(saved) or set(after) != set(prior) - {original_draft.sketch_id}:
+            raise ValidationError("混合变换的已提交草图集合发生变化。")
+        if draft.sketch_id != original_draft.sketch_id:
+            raise ValidationError("混合变换的草稿身份发生变化。")
+        after[draft.sketch_id] = draft
+        revisions: list[dict[str, object]] = []
+        for identity, revised in after.items():
+            before = prior[identity]
+            if (before.frame, before.layers, before.support_face) != (
+                revised.frame,
+                revised.layers,
+                revised.support_face,
+            ):
+                raise ValidationError("混合变换暂存期间不能改变草图坐标系或图层表。")
+            if before == revised:
+                continue
+            data = revised.to_state_mapping()
+            revisions.append(
+                {
+                    "sketch_id": identity,
+                    "base_state_sha256": before.local_state_digest(),
+                    "entities": data["entities"],
+                    "constraints": data["constraints"],
+                }
+            )
+        if revisions:
+            batches.append(revisions)
+        prior = after
+    if not batches:
+        raise ValidationError("混合变换没有产生修改。")
+    if not any(item["sketch_id"] != original_draft.sketch_id for item in batches[0]):
+        raise ValidationError("混合变换必须包含已提交图元。")
+    return stage_mixed_drawing_move(
+        services,
+        loaded,
+        original_draft,
+        batches[0],
+        session_identity=session_identity,
+        followup_steps=batches[1:],
+    )
 
 
 def build_app(discoverers: Sequence[PluginDiscoverer] | None = None) -> AppServices:
@@ -229,7 +837,7 @@ def reference_parameters(
 
 
 def copy_app_document(
-    services: AppServices, source: Document
+    services: AppServices, source: Document, *, source_bus: CommandBus | None = None
 ) -> tuple[AppServices, LoadedDocument]:
     """Prepare an identity-only replacement for the owning session entry.
 
@@ -241,16 +849,19 @@ def copy_app_document(
         metadata=source.metadata_snapshot(),
         commands=source.commands,
         named_groups=source.named_groups,
-        archive_version=4,
+        archive_version=max(4, source.archive_version),
         document_type=source.document_type,
         document_kind=source.document_kind,
         file_id=uuid4().hex,
         migration_origin=source.migration_origin,
         reference_locations=source.reference_locations,
     )
-    return services, LoadedDocument(
-        document, CommandBus(document, services.registry, services.kernel, handlers_for(services))
+    bus = (
+        source_bus.copy_for_document(document)
+        if source_bus is not None
+        else CommandBus(document, services.registry, services.kernel, handlers_for(services))
     )
+    return services, LoadedDocument(document, bus)
 
 
 @dataclass(frozen=True)
@@ -310,7 +921,7 @@ def separate_internal_sketch(
     isolated = fork_app_services(services)
     loaded = new_workspace_document(isolated, kind="sketch")
     detached = replace(sketch, sketch_id=new_sketch_identity(), support_face=None)
-    loaded.bus.execute("sketch.create", detached.to_mapping(version=3), "local")
+    commit_new_sketch(isolated, loaded, detached, session_identity=0)
     return isolated, loaded
 
 
@@ -439,9 +1050,13 @@ def preview_command(
     commands: Sequence[ExecutedCommand],
     command_id: str,
     params: Mapping[str, object],
+    *,
+    source_archive_version: int | None = None,
 ) -> ViewportData:
     """Return the solid snapshot of an isolated candidate command."""
-    return preview_command_with_sketches(services, commands, command_id, params)[0]
+    return preview_command_with_sketches(
+        services, commands, command_id, params, source_archive_version=source_archive_version
+    )[0]
 
 
 def preview_command_with_sketches(
@@ -449,6 +1064,8 @@ def preview_command_with_sketches(
     commands: Sequence[ExecutedCommand],
     command_id: str,
     params: Mapping[str, object],
+    *,
+    source_archive_version: int | None = None,
 ) -> tuple[ViewportData, tuple[ViewportSketchData, ...]]:
     """Replay a candidate command on an isolated document and kernel.
 
@@ -460,7 +1077,23 @@ def preview_command_with_sketches(
     """
     scratch_kernel = BuildKernel()
     _configure_reference_loader(scratch_kernel, services.registry, PluginManager(()))
-    scratch_document = Document(services.registry)
+    archive_version = max(
+        5 if any(c.instance_id is not None for c in commands) else 1,
+        max(
+            (services.registry.get(c.id, c.version).min_archive_version for c in commands),
+            default=1,
+        ),
+    )
+    if source_archive_version is not None:
+        if (
+            type(source_archive_version) is not int
+            or not archive_version <= source_archive_version <= 6
+        ):
+            raise ValidationError("preview source archive version is inconsistent")
+        archive_version = source_archive_version
+    scratch_document = Document(
+        services.registry, commands=commands, archive_version=archive_version
+    )
     builtin_handlers = {
         (spec.id, spec.version): BuiltinModelingHandler(spec.id, spec.version)
         for spec in BUILTIN_COMMAND_SPECS
@@ -476,12 +1109,8 @@ def preview_command_with_sketches(
             raise ValueError(
                 f"临时预览暂不支持重放非内置命令 {command.id!r}（历史序号 {command.ordinal}）"
             )
-        scratch_bus.execute(
-            command.id,
-            command.params,
-            command.confirmed_by,
-            version=command.version,
-        )
+    rebuild = cast("Callable[[], None]", getattr(scratch_bus, "_rebuild"))  # noqa: B009
+    rebuild()
     scratch_bus.execute(command_id, params, confirmed_by="preview")
     snapshots = scratch_kernel.viewport_data()
     if not snapshots:

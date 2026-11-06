@@ -190,13 +190,16 @@ OUT_OF_SCOPE_IDENTIFIERS: tuple[str, ...] = (
 STEP_READ_WHITELIST = "tests/helpers/step_roundtrip.py"
 STEP_READ_APIS: tuple[str, ...] = ("import" + "_step",)
 
-# These command IDs are explicitly released under ADR-003 §9. Other sketch,
-# view, and datum namespaces remain reserved until their task releases them.
+# These command IDs are explicitly released under ADR-003 §9 or ADR-016.
+# Other sketch, view, and datum namespaces remain reserved until released.
 RELEASED_COMMAND_IDS: frozenset[str] = frozenset(
     {
         "sketch.create",
+        "datum.coordinate_system.create",
+        "datum.plane.create",
         "sketch.constraint.add",
         "sketch.constraint.update",
+        "sketch.revise",
         "modify.chamfer",
         "modify.boolean_intersect",
         "modify.boolean_bodies",

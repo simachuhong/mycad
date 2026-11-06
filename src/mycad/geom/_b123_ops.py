@@ -21,13 +21,14 @@ in tests/geom/test_kernel_primitives.py.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from build123d import Box, Compound, Cylinder, Part, Pos, Wire
+from build123d import Box, Compound, Cylinder, Part, Pos, Sphere, Wire
 
 from mycad.core.exceptions import GeometryBuildError, MycadError, ValidationError
+from mycad.core.topology_evolution import TopologyEvolution
 
 _MODES = frozenset({"new", "add", "cut"})
 
@@ -41,6 +42,7 @@ def checked_mapping(value: object, command_id: str) -> Mapping[str, object]:
 
 _BOX_KEYS = frozenset({"size_x", "size_y", "size_z", "center", "mode"})
 _CYLINDER_KEYS = frozenset({"radius", "height", "center", "mode"})
+_SPHERE_KEYS = frozenset({"radius", "center", "mode"})
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,14 @@ class _CylinderParams:
     mode: str
 
 
-_PrimitiveParams = _BoxParams | _CylinderParams
+@dataclass(frozen=True)
+class _SphereParams:
+    radius: float
+    center: tuple[float, float, float]
+    mode: str
+
+
+_PrimitiveParams = _BoxParams | _CylinderParams | _SphereParams
 
 
 def reject_unknown_keys(
@@ -142,7 +151,9 @@ def _placed_primitive(spec: _PrimitiveParams) -> Part:
     location = Pos(spec.center[0], spec.center[1], spec.center[2])
     if isinstance(spec, _BoxParams):
         return location * Box(spec.size_x, spec.size_y, spec.size_z)
-    return location * Cylinder(radius=spec.radius, height=spec.height)
+    if isinstance(spec, _CylinderParams):
+        return location * Cylinder(radius=spec.radius, height=spec.height)
+    return location * Sphere(radius=spec.radius)
 
 
 def normalize_result(result: Part | Compound | Wire) -> Part | None:
@@ -159,7 +170,12 @@ def normalize_result(result: Part | Compound | Wire) -> Part | None:
 
 
 def apply_primitive(
-    existing: Part | None, command_id: str, params: Mapping[str, object]
+    existing: Part | None,
+    command_id: str,
+    params: Mapping[str, object],
+    *,
+    evolution_callback: Callable[[TopologyEvolution], None] | None = None,
+    primitive_callback: Callable[[Part], None] | None = None,
 ) -> Part | None:
     """Apply one feature command to ``existing``; return the new solid state.
 
@@ -172,6 +188,13 @@ def apply_primitive(
         spec = _parse_box(command_id, checked)
     elif command_id == "feature.cylinder":
         spec = _parse_cylinder(command_id, checked)
+    elif command_id == "feature.sphere":
+        reject_unknown_keys(checked, _SPHERE_KEYS, command_id)
+        spec = _SphereParams(
+            parse_positive(checked, "radius", command_id),
+            parse_center(checked, command_id),
+            parse_mode(checked, command_id),
+        )
     else:
         msg = f"{command_id}: command is not implemented in the geometry kernel"
         raise ValidationError(message=msg, command_id=command_id)
@@ -179,7 +202,17 @@ def apply_primitive(
         msg = f"{command_id}: mode 'cut' requires an existing solid; kernel is empty"
         raise GeometryBuildError(message=msg, command_id=command_id)
     primitive = _placed_primitive(spec)
+    if primitive_callback is not None:
+        primitive_callback(primitive)
     try:
+        if evolution_callback is not None and existing is not None and spec.mode in ("cut", "add"):
+            from mycad.geom.topology_evolution import boolean_with_evolution
+
+            result, evolution = boolean_with_evolution(
+                "cut" if spec.mode == "cut" else "fuse", [existing], [primitive]
+            )
+            evolution_callback(evolution)
+            return result
         if spec.mode == "cut":
             assert existing is not None  # narrowed by the guard above
             result = existing - primitive

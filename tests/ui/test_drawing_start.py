@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from pytestqt.qtbot import QtBot
 
-from mycad.app import build_app, new_document
+from mycad.app import build_app, new_document, new_workspace_document
 from mycad.ui.main_window import MainWindow
 
 
@@ -51,8 +51,9 @@ def test_empty_model_explains_source_and_can_navigate_to_sketch(qtbot: QtBot) ->
     assert not services.kernel.drawing_state.sheets
     assert bench.placement is None
     QTest.mouseClick(bench.sketch_button, Qt.MouseButton.LeftButton)
-    assert window.active_workspace == "sketch"
-    assert window.active_sketch_dialog() is not None
+    assert window.active_workspace == "model"
+    assert window.part_sketch_task is not None
+    window.part_sketch_task.reject()
     window.workspace_tabs.activate("drawing")
     QTest.mouseClick(bench.model_button, Qt.MouseButton.LeftButton)
     assert window.active_workspace == "model"
@@ -70,3 +71,12 @@ def test_drawing2d_explains_model_requirement_in_visible_page(qtbot: QtBot) -> N
     assert "独立二维图" in bench.start_description.text()
     assert not bench.generate_button.isEnabled()
     assert bench.open_button.isEnabled()
+
+
+def test_source_selection_is_disabled_without_document_session(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(new_workspace_document(services, kind="drawing"))
+    assert not window.drawing_workbench.choose_source_button.isEnabled()
+    assert "不支持" in window.drawing_workbench.choose_source_button.toolTip()

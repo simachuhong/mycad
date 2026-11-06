@@ -16,7 +16,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast, runtime_checkable
 
-from mycad.core.kernel_protocol import Kernel
+from mycad.core.bound_refs import is_bound_hole
+from mycad.core.command_identity import ExecutionContext
+from mycad.core.exceptions import TopologyReferenceError
+from mycad.core.kernel_protocol import BoundFaceKernel, ContextualKernel, Kernel
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class HandlerContext:
     kernel: Kernel
     command_id: str
     command_version: int = 1
+    instance_id: str | None = None
 
 
 @runtime_checkable
@@ -78,7 +82,23 @@ class BuiltinModelingHandler:
                 f"ctx.command_version {ctx.command_version!r} does not match "
                 f"handler command_version {self.command_version!r}"
             )
-        ctx.kernel.apply(self.command_id, params)
+        if is_bound_hole(self.command_id, params) and (
+            ctx.instance_id is None or not isinstance(ctx.kernel, BoundFaceKernel)
+        ):
+            raise TopologyReferenceError(
+                "kernel does not support identity-bound faces",
+                command_id=self.command_id,
+                reason="unsupported-kernel",
+                parameter_path="target_face",
+            )
+        if isinstance(ctx.kernel, ContextualKernel):
+            ctx.kernel.apply_with_context(
+                self.command_id,
+                params,
+                ExecutionContext(self.command_id, self.command_version, ctx.instance_id),
+            )
+        else:
+            ctx.kernel.apply(self.command_id, params)
 
 
 def resolve_handler(

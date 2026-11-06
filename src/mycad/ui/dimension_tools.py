@@ -28,6 +28,7 @@ from mycad.core.sketch import (
     CircleEntity,
     LineEntity,
     Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -69,6 +70,8 @@ def _point_segment_distance(p: Point2D, a: Point2D, b: Point2D) -> float:
 
 def _point_references(entity: SketchEntity) -> tuple[SketchGeometryReference, ...]:
     identity = entity.entity_id
+    if isinstance(entity, PointEntity):
+        return (SketchGeometryReference(identity, "vertex", 0),)
     if isinstance(entity, CircleEntity):
         return (SketchGeometryReference(identity, "center"),)
     if isinstance(entity, ArcEntity):

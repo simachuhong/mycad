@@ -32,6 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 EXPECTED_IDS: tuple[str, ...] = (
     "feature.box",
     "feature.cylinder",
+    "feature.sphere",
     "feature.extrude",
     "feature.revolve",
     "feature.hole",
@@ -45,7 +46,11 @@ EXPECTED_IDS: tuple[str, ...] = (
     "modify.chamfer",
     "sketch.create",
     "sketch.constraint.add",
+    "datum.coordinate_system.create",
+    "datum.plane.create",
     "sketch.constraint.update",
+    "sketch.revise",
+    "drawing.sketch.revise",
     "drawing.layers.set",
     "drawing.sheet.create",
     "drawing.sheet.update",
@@ -269,8 +274,8 @@ def test_sketch_extrude_v2_is_additive_and_keeps_the_cli_entry() -> None:
         "default": "one_sided",
         "description": "symmetric uses distance as total depth, split equally across the sketch plane",
     }
-    assert registry.versions("feature.extrude") == (1, 2, 3, 4)
-    assert registry.resolve_verb("extrude") == _spec("feature.extrude", 4)
+    assert registry.versions("feature.extrude") == (1, 2, 3, 4, 5)
+    assert registry.resolve_verb("extrude") == _spec("feature.extrude", 5)
 
 
 def test_sketch_extrude_v3_adds_symmetric_extent_without_changing_v2() -> None:
@@ -366,9 +371,9 @@ def test_sketch_revolve_v2_is_additive_and_keeps_the_cli_entry() -> None:
     assert v2.cli.verb_aliases == ("revolve",)
     properties = cast("dict[str, object]", v2.params_schema["properties"])
     assert properties["profile"] == {"$ref": "#/$defs/SketchRevolveProfile"}
-    assert registry.versions("feature.revolve") == (1, 2, 3)
+    assert registry.versions("feature.revolve") == (1, 2, 3, 4)
     resolved = registry.resolve_verb("revolve")
-    assert resolved is not None and resolved.version == 3
+    assert resolved is not None and resolved.version == 4
 
 
 def test_sketch_revolve_v3_adds_a_stable_construction_line_axis_reference() -> None:
@@ -425,8 +430,8 @@ def test_sketch_revolve_v3_adds_a_stable_construction_line_axis_reference() -> N
         validate_params(v3, {**params, "axis": "Z"}, defs=registry.schema_defs)
     with pytest.raises(ValidationError):
         validate_params(v2, params, defs=registry.schema_defs)
-    assert registry.versions("feature.revolve") == (1, 2, 3)
-    assert registry.resolve_verb("revolve") == v3
+    assert registry.versions("feature.revolve") == (1, 2, 3, 4)
+    assert registry.resolve_verb("revolve") == _spec("feature.revolve", 4)
 
 
 def test_sketch_hole_v2_is_additive_and_keeps_the_cli_entry() -> None:
@@ -443,8 +448,8 @@ def test_sketch_hole_v2_is_additive_and_keeps_the_cli_entry() -> None:
             {"$ref": "#/$defs/SketchHole"},
         ]
     }
-    assert registry.versions("feature.hole") == (1, 2)
-    assert registry.resolve_verb("hole") == v2
+    assert registry.versions("feature.hole") == (1, 2, 3)
+    assert registry.resolve_verb("hole") == _spec("feature.hole", 3)
 
 
 def test_revolve_spec_fields() -> None:
@@ -562,6 +567,20 @@ def test_sketch_create_spec_is_versioned_and_requires_v2_persistence() -> None:
     assert spec.label_zh == "创建草图"
     assert spec.cli.verb_aliases == ("sketch-create",)
     assert spec.params_schema["required"] == ["sketch_id", "frame", "entities"]
+
+
+def test_sketch_point_requires_new_command_version() -> None:
+    from mycad.core.sketch import PointEntity, Sketch, WorkPlaneFrame
+
+    point = PointEntity("a1" * 16, (2, 3))
+    sketch = Sketch("b2" * 16, WorkPlaneFrame.xy(), (point,))
+    params = sketch.to_mapping(version=4)
+    with pytest.raises(ValidationError):
+        validate_params(_spec("sketch.create", 3), params, defs=COMMAND_SCHEMA_DEFS)
+    assert (
+        validate_params(_spec("sketch.create", 5), params, defs=COMMAND_SCHEMA_DEFS)["entities"]
+        == params["entities"]
+    )
 
 
 def test_sketch_create_v2_schema_accepts_layered_sketch_and_rejects_missing_entity_layer() -> None:
@@ -858,9 +877,12 @@ def test_no_p1_p2_command_id_leak(leak: str) -> None:
     assert all(leak not in command_id.split(".") for command_id in ids)
 
 
-def test_no_datum_namespace_leak() -> None:
+def test_datum_namespace_contains_only_adr_016_commands() -> None:
     ids = _registered_ids(_builtin_registry())
-    assert not any(command_id.startswith("datum.") for command_id in ids)
+    assert {command_id for command_id in ids if command_id.startswith("datum.")} == {
+        "datum.coordinate_system.create",
+        "datum.plane.create",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -869,19 +891,24 @@ def test_no_datum_namespace_leak() -> None:
 
 
 def test_affected_objects_static_shape() -> None:
-    assert len(AFFECTED_OBJECTS) == 28
+    assert len(AFFECTED_OBJECTS) == 29
     ids = _registered_ids(_builtin_registry())
     # Legacy sketch/layer commands remain outside agent plans.
     assert set(AFFECTED_OBJECTS) == set(ids) - {
         "sketch.create",
         "sketch.constraint.add",
         "sketch.constraint.update",
+        "sketch.revise",
+        "drawing.sketch.revise",
         "drawing.layers.set",
+        "datum.coordinate_system.create",
+        "datum.plane.create",
     }
-    assert len(set(AFFECTED_OBJECTS.values())) == 18
+    assert len(set(AFFECTED_OBJECTS.values())) == 19
     assert set(AFFECTED_OBJECTS.values()) == {
         "box_body",
         "cylinder_body",
+        "sphere_body",
         "extruded_body",
         "revolved_body",
         "hole",
@@ -911,6 +938,7 @@ def test_affected_objects_static_shape() -> None:
         "sketch.create",
         "sketch.constraint.add",
         "sketch.constraint.update",
+        "sketch.revise",
     ],
 )
 def test_planned_command_rejects_out_of_table_ids(unknown_id: str) -> None:
@@ -966,8 +994,8 @@ def test_cli_aliases_are_pairwise_distinct() -> None:
         if spec.id not in latest or spec.version > latest[spec.id].version:
             latest[spec.id] = spec
     aliases = [alias for spec in latest.values() for alias in spec.cli.verb_aliases]
-    assert len(aliases) == 26
-    assert len(set(aliases)) == 26
+    assert len(aliases) == 27
+    assert len(set(aliases)) == 27
 
 
 def test_cut_verb_is_exclusive_to_boolean_cut() -> None:

@@ -74,6 +74,7 @@ class DrawingWorkbench(QMainWindow):
     model_requested = Signal()
     open_requested = Signal()
     new_requested = Signal()
+    choose_source_requested = Signal()
 
     def __init__(
         self,
@@ -84,6 +85,7 @@ class DrawingWorkbench(QMainWindow):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.Widget)
         self.services, self.unit = services, unit
+        self.source_selection_available = False
         self.loaded: LoadedDocument | None = None
         self.session_id = 0
         self.state = DrawingState()
@@ -106,6 +108,7 @@ class DrawingWorkbench(QMainWindow):
         self._dock_visible = True
         self._start_after_sheet: SourceBinding | None = None
         self.canvas = DrawingCanvas()
+        self.canvas.view_selection_guard = self._allow_canvas_view_selection
         self.pages = QStackedWidget()
         self.pages.addWidget(self.canvas)
         self.start_page = QWidget()
@@ -144,7 +147,10 @@ class DrawingWorkbench(QMainWindow):
         self.open_button.clicked.connect(self.open_requested.emit)
         self.new_button = QPushButton("新建零件…")
         self.new_button.clicked.connect(self.new_requested.emit)
+        self.choose_source_button = QPushButton("选择工程图来源…")
+        self.choose_source_button.clicked.connect(self.choose_source_requested.emit)
         for button in (
+            self.choose_source_button,
             self.sketch_view_button,
             self.generate_button,
             self.sketch_button,
@@ -373,6 +379,13 @@ class DrawingWorkbench(QMainWindow):
     def _prepare_dimension(self) -> bool:
         if self.loaded is None or (self.unit is not None and self.unit.is_busy):
             return False
+        if not self._view_edit_finished():
+            return False
+        if not self._annotation_finished():
+            return False
+        if self.placement is not None:
+            self._set_message("请先完成或取消当前视图放置，再标尺寸。")
+            return False
         if self.notes.pending:
             self._set_message("请先完成文字（Ctrl+Enter），或按 Esc 取消后再标尺寸。")
             return False
@@ -381,8 +394,18 @@ class DrawingWorkbench(QMainWindow):
         self._show_annotation_tab(self.annotations)
         return True
 
+    def _annotation_finished(self) -> bool:
+        if self.annotations.pending:
+            self._set_message("请先完成或取消当前标注，再执行其他操作。")
+            return False
+        return True
+
     def begin_text(self) -> None:
         if self.loaded is None or (self.unit is not None and self.unit.is_busy):
+            return
+        if not self._view_edit_finished():
+            return
+        if not self._annotation_finished():
             return
         if self.placement is not None or self._start_after_sheet is not None:
             self._set_message("请先按 Enter 完成视图放置，或 Esc 取消，再添加文字。")
@@ -443,10 +466,26 @@ class DrawingWorkbench(QMainWindow):
     def _has_projection_source(self) -> bool:
         return bool(
             self.loaded is not None
-            and self.loaded.document.document_type == "part"
+            and self.loaded.document.document_kind in {"part", "drawing"}
             and self.services is not None
             and self.services.kernel.body_ids
         )
+
+    @property
+    def has_pending_view_edit(self) -> bool:
+        return self._preview_params is not None or self._pending_delete is not None
+
+    def _view_edit_finished(self) -> bool:
+        if self.has_pending_view_edit:
+            self._set_message("请先完成或取消当前视图操作，再启动其他命令。")
+            return False
+        return True
+
+    def _allow_canvas_view_selection(self, identity: UUID | None) -> bool:
+        if self.has_pending_view_edit and identity != self.canvas.selected_view:
+            self._set_message("请先完成或取消当前视图操作，再选择其他视图。")
+            return False
+        return True
 
     def _update_start_page(self) -> None:
         has_source = self._has_projection_source()
@@ -458,13 +497,24 @@ class DrawingWorkbench(QMainWindow):
         self.base_action.setEnabled(has_source and not busy)
         self.open_button.setEnabled(self.services is not None and not busy)
         self.new_button.setEnabled(self.services is not None and not busy)
+        self.choose_source_button.setVisible(
+            self.loaded is not None and self.loaded.document.document_kind == "drawing"
+        )
+        self.choose_source_button.setEnabled(self.source_selection_available and not busy)
+        self.choose_source_button.setToolTip(
+            "选择已打开的零件或独立二维图作为来源。"
+            if self.source_selection_available
+            else "当前窗口不支持多文档来源选择。"
+        )
         self.sketch_button.setEnabled(self.loaded is not None and not busy)
         self.model_button.setEnabled(
             self.loaded is not None and self.loaded.document.document_type == "part" and not busy
         )
         if self.loaded is None:
             description = "先新建或打开文件；完成草图后可直接放到图纸，也可从三维实体生成投影。"
-        elif self.loaded.document.document_type != "part":
+        elif self.loaded.document.document_kind == "drawing" and not has_source:
+            description = "请选择来源零件或独立二维草图，然后放置工程视图。"
+        elif self.loaded.document.document_type != "part" and not has_source:
             description = (
                 "当前是独立二维图。选择右侧已完成的草图，点击“放置草图平面视图”即可入纸。"
                 "若来源列表为空，请先返回平面草图绘制并点击“完成草图”。"
@@ -584,6 +634,13 @@ class DrawingWorkbench(QMainWindow):
     def create_sheet(self, after: Callable[[], None] | None = None) -> None:
         if self.loaded is None:
             return
+        if not self._view_edit_finished():
+            return
+        if not self._annotation_finished():
+            return
+        if self.placement is not None:
+            self._set_message("请先完成或取消当前视图放置，再新建图纸。")
+            return
         if self.notes.pending:
             self._set_message("文字尚未提交：请先 Ctrl+Enter 完成或 Esc 取消，再新建图纸。")
             return
@@ -632,13 +689,54 @@ class DrawingWorkbench(QMainWindow):
 
     def _select_tree_sheet(self, item: QTreeWidgetItem, _column: int) -> None:
         identity = item.data(0, Qt.ItemDataRole.UserRole)
-        if isinstance(identity, UUID) and identity in {s.sheet_id for s in self.state.sheets}:
+        if not isinstance(identity, UUID):
+            return
+        sheets = {sheet.sheet_id for sheet in self.state.sheets}
+        views = {view.view_id: view.sheet_id for view in self.state.views}
+        target_sheet = identity if identity in sheets else views.get(identity)
+        pending = (
+            self.notes.pending
+            or self.annotations.pending
+            or self.placement is not None
+            or self.has_pending_view_edit
+        )
+        switching_view = (
+            self.has_pending_view_edit
+            and identity in views
+            and identity != self.canvas.selected_view
+        )
+        if (
+            target_sheet is not None
+            and pending
+            and (target_sheet != self.sheet_id or switching_view)
+        ):
+            self._set_message("请先完成或取消当前文字、标注或视图操作，再切换图纸或视图。")
+            selected_view = self.canvas.selected_view
+            selected = self._view_items.get(selected_view) if selected_view is not None else None
+            if selected is None:
+                selected = next(
+                    (
+                        top
+                        for index in range(self.tree.topLevelItemCount())
+                        if (top := self.tree.topLevelItem(index)) is not None
+                        and top.data(0, Qt.ItemDataRole.UserRole) == self.sheet_id
+                    ),
+                    None,
+                )
+            if selected is not None:
+                self.tree.setCurrentItem(selected)
+            else:
+                self.tree.clearSelection()
+            return
+        if identity == self.sheet_id and pending:
+            return
+        if identity in sheets:
             self.notes.cancel()
             self.cancel_placement()
             self.sheet_id = identity
             self._load_sheet_settings()
             self._render()
-        elif isinstance(identity, UUID) and identity in {v.view_id for v in self.state.views}:
+        elif identity in views:
             if self.sheet_id != self.state.view(identity).sheet_id:
                 self.notes.cancel()
             self.sheet_id = self.state.view(identity).sheet_id
@@ -647,6 +745,10 @@ class DrawingWorkbench(QMainWindow):
             self.canvas.select_view(identity)
 
     def apply_sheet_settings(self) -> None:
+        if not self._view_edit_finished():
+            return
+        if not self._annotation_finished():
+            return
         if self.sheet_id is None:
             self.create_sheet()
             return
@@ -738,6 +840,10 @@ class DrawingWorkbench(QMainWindow):
 
     def _begin_source_placement(self, source: SourceBinding) -> None:
         if self.loaded is None or self.services is None:
+            return
+        if not self._view_edit_finished():
+            return
+        if not self._annotation_finished():
             return
         if self.placement is not None or self._start_after_sheet is not None:
             self._set_message("请先按 Enter 完成当前放置，或按 Esc 取消后重新选择来源。")
@@ -1069,6 +1175,7 @@ class DrawingWorkbench(QMainWindow):
             self.notes.pending
             or self.annotations.pending
             or (self.placement is not None and self.placement.pending)
+            or self.has_pending_view_edit
         ):
             raise ValueError("图中预览尚未提交，请先完成或取消再出图")
         current = self.services.kernel.drawing_state
@@ -1232,6 +1339,11 @@ class DrawingWorkbench(QMainWindow):
     def preview_delete(self) -> None:
         identity = self.canvas.selected_view
         if identity is None:
+            return
+        if not self._annotation_finished():
+            return
+        if self.notes.pending or self.placement is not None:
+            self._set_message("请先完成或取消当前文字或视图放置，再删除视图。")
             return
         self._pending_delete = self._delete_scope(identity)
         self.canvas.deletion_preview = set(self._pending_delete[1])

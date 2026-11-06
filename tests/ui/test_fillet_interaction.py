@@ -6,10 +6,12 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QMainWindow
 from pytestqt.qtbot import QtBot
 
 from mycad import app as mycad_app
 from mycad.app import AppServices, build_app
+from mycad.ui.fillet_toolbar import FilletCommandBar
 from mycad.ui.main_window import MainWindow
 
 _BOX: tuple[str, dict[str, object]] = (
@@ -22,6 +24,40 @@ _BOX: tuple[str, dict[str, object]] = (
         "mode": "new",
     },
 )
+
+
+def test_fillet_confirmation_requires_current_preview(qtbot: QtBot) -> None:
+    bar = FilletCommandBar()
+    qtbot.addWidget(bar)
+    bar.set_selection_count(1)
+    assert not bar.commit_button.isEnabled()
+    bar.set_preview_valid(True)
+    assert bar.commit_button.isEnabled()
+    bar.set_preview_valid(False)
+    bar.set_selection_count(2)
+    assert not bar.commit_button.isEnabled()
+    bar.set_preview_valid(True)
+    bar.set_busy(True)
+    assert not bar.commit_button.isEnabled()
+    bar.set_busy(False)
+    assert bar.commit_button.isEnabled()
+
+
+def test_narrow_fillet_bar_keeps_actions_and_radius_accessible(qtbot: QtBot) -> None:
+    window = QMainWindow()
+    qtbot.addWidget(window)
+    bar = FilletCommandBar(window)
+    window.addToolBar(bar)
+    window.resize(683, 384)
+    window.show()
+    qtbot.wait(50)
+    assert window.width() <= 683
+    for button in (bar.commit_button, bar.cancel_button):
+        assert button.isVisible()
+        assert window.rect().contains(button.mapTo(window, button.rect().bottomRight()))
+    bar.radius_edit.setFocus(Qt.FocusReason.TabFocusReason)
+    qtbot.wait(30)
+    assert bar.radius_edit.visibleRegion().boundingRect().width() >= bar.radius_edit.width() - 2
 
 
 def test_fillet_bar_sits_outside_viewport_and_accepting_radius_is_not_commit(
@@ -97,6 +133,8 @@ def test_fillet_selection_previews_and_commits_one_group(qtbot: QtBot) -> None:
     qtbot.waitUntil(lambda: "预览已更新" in window.status_command.text(), timeout=30000)
     assert bar.commit_button.isEnabled()
     assert selected_topology_id is not None and selected_point is not None
+    bar.select_source_button.click()
+    assert not bar.commit_button.isEnabled()
     for edge in snapshot.boundary_edges:
         if edge.topology_id == selected_topology_id:
             continue

@@ -152,3 +152,54 @@ def test_console_open_keeps_inline_dimension_escape(qtbot: QtBot) -> None:
             assert draft.dimensions.candidate is None
             assert not draft.dimensions.inline_box.isVisible()
             assert draft.canvas.constraints == [constraint]
+
+
+def test_console_state_is_isolated_by_document_environment(qtbot: QtBot) -> None:
+    from mycad.ui.document_session import DocumentSession
+
+    window = MainWindow(services=build_app(discoverers=[]), document_session=DocumentSession())
+    qtbot.addWidget(window)
+    window.show()
+    part = window.new_session_document("part")
+    tabs = window.bottom_tabs
+    cli = window.cli_tab
+    assert tabs is not None and cli is not None
+    window.ai_chat.input.setPlainText("保留 AI 草稿")
+    window.act_show_ai.trigger()
+    assert tabs.expanded and tabs.currentWidget() is window.ai_chat
+    sketch = window.new_session_document("sketch")
+    assert not tabs.expanded and tabs.currentWidget() is window.information_tab
+    cli.input.setText("history")
+    window.act_show_cli.trigger()
+    assert tabs.expanded and tabs.currentWidget() is cli
+    window.activate_session_document(part.loaded.document.document_id)
+    assert tabs.expanded and tabs.currentWidget() is window.ai_chat
+    assert window.ai_chat.input.toPlainText() == "保留 AI 草稿"
+    window.activate_session_document(sketch.loaded.document.document_id)
+    assert tabs.expanded and tabs.currentWidget() is cli
+    assert cli.input.text() == "history"
+
+
+def test_console_environment_state_restores_after_restart(qtbot: QtBot) -> None:
+    from mycad.app import new_document
+
+    first_services = build_app(discoverers=[])
+    first = MainWindow(services=first_services)
+    qtbot.addWidget(first)
+    first.bind_document(new_document(first_services))
+    first.show()
+    first.act_show_ai.trigger()
+    assert first.bottom_tabs is not None and first.bottom_tabs.expanded
+    first.resizeDocks([first.bottom_dock], [350], Qt.Orientation.Vertical)
+    qtbot.wait(50)
+    recorded_height = max(160, min(first.bottom_tabs.height(), 2000))
+    first.close()
+    second_services = build_app(discoverers=[])
+    second = MainWindow(services=second_services)
+    qtbot.addWidget(second)
+    second.bind_document(new_document(second_services))
+    assert second.bottom_tabs is not None and second.bottom_tabs.expanded
+    assert second.bottom_tabs.currentWidget() is second.ai_chat
+    assert second.bottom_tabs.expanded_height == recorded_height
+    assert not second.ai_chat.send_button.isEnabled()
+    second.close()

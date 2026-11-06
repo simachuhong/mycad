@@ -10,7 +10,18 @@ from dataclasses import dataclass, replace
 from typing import cast, override
 from uuid import uuid4
 
-from PySide6.QtCore import QByteArray, QPoint, QPointF, QRectF, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QByteArray,
+    QCoreApplication,
+    QEvent,
+    QPoint,
+    QPointF,
+    QRectF,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -38,6 +49,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QPushButton,
@@ -51,11 +63,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mycad.core.circle_fillet import circle_fillet_notrim
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
     Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -94,7 +108,9 @@ from mycad.core.sketch_layers import (
 )
 from mycad.ui.cad_icons import set_button_icon
 from mycad.ui.dimension_tools import DimensionTools
+from mycad.ui.drawing2d_command_bar import Drawing2DCommandBar
 from mycad.ui.layer_panel import DrawingLayerPanel
+from mycad.ui.sketch_dynamic_input import SketchDynamicInput
 from mycad.ui.sketch_navigation import SketchNavigator
 from mycad.ui.sketch_selection import entity_in_selection_box
 from mycad.ui.workspace_console import MessageLabel
@@ -119,6 +135,17 @@ class DimensionLayout:
 
 
 @dataclass(frozen=True)
+class MixedMoveState:
+    transaction_id: str
+    source_revision: int
+    original_draft: Sketch
+    original_saved: tuple[Sketch, ...]
+    current_saved: tuple[Sketch, ...]
+    base_background: tuple[tuple[SketchEntity, SketchLayer], ...]
+    overlay_background: tuple[tuple[SketchEntity, SketchLayer], ...]
+
+
+@dataclass(frozen=True)
 class _DraftState:
     entities: tuple[SketchEntity, ...]
     constraints: tuple[SketchConstraint, ...]
@@ -127,6 +154,7 @@ class _DraftState:
     active_layer_name: str
     line_points: tuple[Point2D, ...] = ()
     history_position: int = 0
+    mixed_move: MixedMoveState | None = None
 
 
 def _cross(first: Point2D, second: Point2D) -> float:
@@ -389,25 +417,61 @@ class SketchLayerManagerDialog(QDialog):
         return True
 
 
+class _CursorDimensionEntry(QLineEdit):
+    next_requested = Signal()
+    accept_requested = Signal()
+    cancel_requested = Signal()
+
+    @override
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress:
+            key = cast("QKeyEvent", event)
+            if key.key() == Qt.Key.Key_Tab:
+                self.next_requested.emit()
+                return True
+        return super().event(event)
+
+    @override
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.accept_requested.emit()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.cancel_requested.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+
 class SketchCanvas(QWidget):
     """Grid canvas with local coordinates, cursor preview, pan/zoom and snaps."""
 
     changed = Signal()
+    point_accepted = Signal(object)
     history_recorded = Signal()
     deleting = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
     cursor_changed = Signal(float, float, str)
+    pointer_moved = Signal(QPoint)
+    pointer_left = Signal()
+    committed_move_requested = Signal(object, object)
+    committed_rotation_requested = Signal(object, object, object)
+    committed_mirror_requested = Signal(object, object, object)
+    committed_delete_requested = Signal(object)
+    copy_mode_changed = Signal(int)
 
     def __init__(
         self, parent: QWidget | None = None, *, select_committed_entities: bool = False
     ) -> None:
         super().__init__(parent)
-        self.setMinimumSize(280, 240)
+        self.setMinimumSize(160, 60)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.entities: list[SketchEntity] = []
         self.background_entities: tuple[tuple[SketchEntity, SketchLayer], ...] = ()
+        self.mixed_move: MixedMoveState | None = None
+        self._invalid_mixed_transactions: set[str] = set()
         self.select_committed_entities = select_committed_entities
         self.layer_table = SketchLayerTable()
         self.active_layer_name = "0"
@@ -438,11 +502,18 @@ class SketchCanvas(QWidget):
         self.polygon_sides = 6
         self.polygon_circumscribed = False
         self.arc_direction = "逆时针"
+        self.circle_fillet_radius = 1.0
+        self.circle_fillet_radius_pending = False
+        self._circle_fillet_first: tuple[CircleEntity, Point2D] | None = None
         self._scale = 5.0
         self._pan = QPointF(0.0, 0.0)
         self._first: Point2D | None = None
         self._points: list[Point2D] = []
         self._cursor: Point2D | None = None
+        self._last_placement_raw: Point2D | None = None
+        self.dynamic_point_resolver: Callable[[Point2D, Point2D], Point2D] | None = None
+        self.dynamic_key_handler: Callable[[QKeyEvent], bool] | None = None
+        self.dynamic_click_guard: Callable[[], bool] | None = None
         self._snap_kind = ""
         self._hovered_line_edit_entity_id: str | None = None
         self._line_edit_preview_original: SketchEntity | None = None
@@ -486,6 +557,9 @@ class SketchCanvas(QWidget):
         self._transform_keep_source = True
         self._transform_angle_text = ""
         self._transform_preview: tuple[SketchEntity, ...] = ()
+        self._copy_placements: list[tuple[Point2D, int, int]] = []
+        self.copy_mode = 0
+        self._copy_repeat = True
         self._trim_drag_start: Point2D | None = None
         self._trim_drag_last: Point2D | None = None
         self._trim_drag_original_entities: tuple[SketchEntity, ...] | None = None
@@ -634,9 +708,20 @@ class SketchCanvas(QWidget):
                 for c in sketch.constraints
             )
         self.background_constraints = tuple(constraints)
-        if self.background_entities != tuple(background):
+        projected = tuple(background)
+        mixed = self.mixed_move
+        if mixed is not None:
+            if (
+                projected == mixed.base_background
+                and mixed.transaction_id not in self._invalid_mixed_transactions
+            ):
+                projected = mixed.overlay_background
+            else:
+                self._invalid_mixed_transactions.add(mixed.transaction_id)
+                self.message = "来源或工作平面已变化；暂存变换不能提交，请撤销或取消。"
+        if self.background_entities != projected:
             self._cancel_selection_box()
-        self.background_entities = tuple(background)
+        self.background_entities = projected
         self.selected_entity_ids.intersection_update(
             entity.entity_id for entity in self.selectable_entities()
         )
@@ -796,7 +881,9 @@ class SketchCanvas(QWidget):
         self._first = None
         self._points.clear()
         self.message = (
-            "修剪：单击删除曲线段，或按住左键拖过多个区段；Shift+单击临时延伸，Esc 取消。"
+            f"二维圆角（不修剪，R={self.circle_fillet_radius:g}）：请选择第一个圆；命令栏 R 修改半径。"
+            if tool == "二维圆角"
+            else "修剪：单击删除曲线段，或按住左键拖过多个区段；Shift+单击临时延伸，Esc 取消。"
             if tool == "修剪"
             else "延伸：直线和开放多段线端点延至最近有效交点；圆弧端点沿原方向延至最近有效交点。"
             if tool == "延伸"
@@ -853,12 +940,73 @@ class SketchCanvas(QWidget):
         self.update()
         return True
 
+    def apply_mixed_move(self, state: MixedMoveState, entities: tuple[SketchEntity, ...]) -> None:
+        """Record one validated provisional move across draft and committed geometry."""
+        original = tuple(self.entities)
+        self._reject_user_constraint_reference_edits(entities)
+        self._record_undo()
+        self.entities = list(entities)
+        self._preserve_satisfied_relations(entities, original_entities=original)
+        self.mixed_move = state
+        self.background_entities = state.overlay_background
+        self._snap_candidates_cache = None
+        self.message = "混合变换已暂存；完成草图时统一提交，可撤销。"
+        self.changed.emit()
+        self.update()
+
+    def mixed_move_timeline(self) -> tuple[tuple[tuple[Sketch, ...], Sketch], ...]:
+        """Return retained provisional states in the order they must be replayed."""
+        mixed = self.mixed_move
+        if mixed is None:
+            return ()
+        states = (*self._undo_history, self._draft_state())
+        result: list[tuple[tuple[Sketch, ...], Sketch]] = []
+        for state in states:
+            pending = state.mixed_move
+            if pending is None or pending.transaction_id != mixed.transaction_id:
+                continue
+            draft = replace(
+                mixed.original_draft,
+                entities=state.entities,
+                constraints=state.constraints,
+                layers=state.layers,
+            )
+            item = (pending.current_saved, draft)
+            if not result or result[-1] != item:
+                result.append(item)
+        return tuple(result)
+
+    @property
+    def mixed_move_is_valid(self) -> bool:
+        return self.mixed_move is None or (
+            self.mixed_move.transaction_id not in self._invalid_mixed_transactions
+        )
+
     def delete_selected(self) -> bool:
         """Erase draft selection and its dependent relations as one undo step."""
         if self.has_pending_geometry or self.has_active_edit_gesture:
             self.message = "请先完成当前操作，或按 Esc 取消预览，再删除所选对象。"
             self.changed.emit()
             return False
+        if self._selected_committed_entities() and not self.selected_constraint_ids:
+            if any(entity.entity_id in self.selected_entity_ids for entity in self.entities):
+                self.message = "暂不支持同时删除草稿和已提交图元；请选择同类对象。"
+                self.changed.emit()
+                return False
+            if self.mixed_move is not None:
+                self.message = "请先完成或撤销暂存变换，再删除已提交图元。"
+                self.changed.emit()
+                return False
+            if any(
+                (layer.locked or not layer.displayed)
+                and entity.entity_id in self.selected_entity_ids
+                for entity, layer in self.background_entities
+            ):
+                self.message = "选择包含已锁定或隐藏图层；图元未修改。"
+                self.changed.emit()
+                return False
+            self.committed_delete_requested.emit(tuple(self.selected_entity_ids))
+            return True
         error = self.transform_selection_error("delete") if not self.selected_constraint_ids else ""
         if error:
             self.message = error
@@ -963,6 +1111,7 @@ class SketchCanvas(QWidget):
         """Whether a pointer edit is displaying an unconfirmed draft preview."""
         return (
             self._transform_operation is not None
+            or self._circle_fillet_first is not None
             or self._trim_drag_start is not None
             or self._drag_reference is not None
             or self._selection_anchor is not None
@@ -972,10 +1121,69 @@ class SketchCanvas(QWidget):
         cancelled_selection = self._cancel_selection_box()
         return (
             self.cancel_transform()
+            or self._cancel_circle_fillet()
             or self._cancel_trim_drag()
             or self._cancel_handle_drag()
             or cancelled_selection
         )
+
+    def _cancel_circle_fillet(self) -> bool:
+        if self._circle_fillet_first is None and not self.circle_fillet_radius_pending:
+            return False
+        self._circle_fillet_first = None
+        self.circle_fillet_radius_pending = False
+        self.selected_entity_ids.clear()
+        self.message = "已取消圆角选取；草稿未变。"
+        self.changed.emit()
+        self.update()
+        return True
+
+    def set_circle_fillet_radius(self, radius: float) -> None:
+        if not math.isfinite(radius) or radius <= 1e-10:
+            raise ValueError("圆角半径必须是大于零的有限数值。")
+        self.circle_fillet_radius = radius
+        self.message = f"二维圆角（不修剪，R={radius:g}）：请选择圆。"
+        self.changed.emit()
+
+    def _circle_fillet_pick(self, point: Point2D) -> None:
+        if self.circle_fillet_radius_pending:
+            self.message = "请先在命令栏输入有效的圆角半径。"
+        elif not self._current_layer_can_draw():
+            self.message = "当前图层隐藏或已锁定，无法创建圆角。"
+        else:
+            identity = self._hit_entity_at(point)
+            entity = next(
+                (item for item in self.selectable_entities() if item.entity_id == identity), None
+            )
+            if not isinstance(entity, CircleEntity):
+                self.message = "请点选唯一的圆；当前仅支持两个圆的非修剪外切圆角。"
+            elif self._circle_fillet_first is None:
+                self._circle_fillet_first = (entity, point)
+                self.selected_entity_ids = {entity.entity_id}
+                self.message = "二维圆角：请选择第二个圆；Esc 取消。"
+            else:
+                first, first_pick = self._circle_fillet_first
+                try:
+                    if first not in self.selectable_entities():
+                        raise ValueError("第一个圆已失效，请按 Esc 后重新选择。")
+                    arc = circle_fillet_notrim(
+                        first,
+                        entity,
+                        first_pick,
+                        point,
+                        self.circle_fillet_radius,
+                        uuid4().hex,
+                        layer_name=self.active_layer_name,
+                    )
+                except ValueError as exc:
+                    self.message = str(exc)
+                else:
+                    self._circle_fillet_first = None
+                    self.selected_entity_ids.clear()
+                    if self.replace_draft_entities((*self.entities, arc)):
+                        self.message = "二维圆角已创建；原圆保留，未建立相切约束。可继续选择圆。"
+        self.changed.emit()
+        self.update()
 
     def _record_undo(self) -> None:
         self._undo_history.append(self._draft_state())
@@ -996,9 +1204,23 @@ class SketchCanvas(QWidget):
             self.active_layer_name,
             tuple(self._points) if self.tool == "直线" and self.continuous_lines else (),
             self.history_position,
+            self.mixed_move,
         )
 
     def _restore_draft_state(self, state: _DraftState) -> None:
+        previous_mixed = self.mixed_move
+        self.mixed_move = state.mixed_move
+        if (
+            state.mixed_move is not None
+            and state.mixed_move.transaction_id not in self._invalid_mixed_transactions
+        ):
+            self.background_entities = state.mixed_move.overlay_background
+        elif (
+            state.mixed_move is None
+            and previous_mixed is not None
+            and previous_mixed.transaction_id not in self._invalid_mixed_transactions
+        ):
+            self.background_entities = previous_mixed.base_background
         self.history_position = state.history_position
         if self.tool == "直线" and self.continuous_lines:
             self._points = list(state.line_points)
@@ -1033,7 +1255,9 @@ class SketchCanvas(QWidget):
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[float, str]] = []
         for entity in self.selectable_entities():
-            if isinstance(entity, SplineEntity):
+            if isinstance(entity, PointEntity):
+                distance = _distance(point, entity.position_mm)
+            elif isinstance(entity, SplineEntity):
                 points = entity.sampled_points()
                 distance = min(
                     _distance_to_segment(point, start, end)
@@ -1155,6 +1379,8 @@ class SketchCanvas(QWidget):
     def _entity_handles(
         entity: SketchEntity,
     ) -> tuple[tuple[SketchGeometryReference, Point2D], ...]:
+        if isinstance(entity, PointEntity):
+            return ((SketchGeometryReference(entity.entity_id, "vertex", 0), entity.position_mm),)
         if isinstance(entity, SplineEntity):
             return tuple(
                 (SketchGeometryReference(entity.entity_id, "vertex", index), point)
@@ -1205,6 +1431,13 @@ class SketchCanvas(QWidget):
             ),
         )
 
+    @staticmethod
+    def entity_point_references(
+        entity: SketchEntity,
+    ) -> tuple[tuple[SketchGeometryReference, Point2D], ...]:
+        """Return stable point references and positions for canvas picking."""
+        return SketchCanvas._entity_handles(entity)
+
     def _control_point_at(
         self, point: Point2D
     ) -> tuple[SketchEntity, SketchGeometryReference, Point2D] | None:
@@ -1247,6 +1480,14 @@ class SketchCanvas(QWidget):
     def transform_preview_entities(self) -> tuple[SketchEntity, ...]:
         return self._transform_preview
 
+    @property
+    def active_transform(self) -> str | None:
+        return self._transform_operation
+
+    @property
+    def transform_selecting(self) -> bool:
+        return self._transform_operation is not None and self._transform_selecting
+
     def begin_transform(
         self, operation: str, *, reference_rotation: bool = False, keep_source: bool = True
     ) -> None:
@@ -1263,10 +1504,12 @@ class SketchCanvas(QWidget):
         self._transform_reference_mode = reference_rotation
         self._transform_reference = None
         self._transform_keep_source = keep_source
+        self._copy_repeat = self.copy_mode == 0
         self._transform_angle_text = ""
         self._transform_selecting = not bool(self.selected_entity_ids)
         self._transform_base = None
         self._transform_preview = ()
+        self._copy_placements.clear()
         self.message = (
             "选择要变换的图元，Enter / 右键结束选择。"
             if self._transform_selecting
@@ -1305,15 +1548,51 @@ class SketchCanvas(QWidget):
         self._transform_selecting = False
         self._transform_reference = None
         self._transform_angle_text = ""
-        self.message = "已取消变换预览；草稿未改变。"
+        self._copy_placements.clear()
+        self.message = "已结束变换；已完成的修改保留。"
         self.changed.emit()
         self.update()
         return True
 
+    def set_copy_mode(self, mode: int) -> None:
+        """Set independent 2D copy behavior: 0 repeats, 1 places once."""
+        if mode not in (0, 1):
+            raise ValueError("COPYMODE 必须为 0 或 1。")
+        if self.copy_mode != mode:
+            self.copy_mode = mode
+            self.copy_mode_changed.emit(mode)
+        if self.copy_options_available:
+            self._copy_repeat = mode == 0
+
+    @property
+    def copy_options_available(self) -> bool:
+        """Whether COPY is waiting for its base point after selection."""
+        return (
+            self._transform_operation == "copy"
+            and not self._transform_selecting
+            and self._transform_base is None
+        )
+
+    def use_multiple_copy_for_command(self) -> None:
+        """Enable repetition for the current COPY without changing its preference."""
+        if not self.copy_options_available:
+            raise ValueError("请先选择对象，再设置当前复制模式。")
+        self._copy_repeat = True
+
     def transform_selection_error(self, operation: str) -> str:
         """Explain why the selection cannot be transformed without changing geometry."""
-        if self._selected_committed_entities():
+        if self._selected_committed_entities() and operation not in {
+            "move",
+            "copy",
+            "rotate",
+            "mirror",
+        }:
             return "选择包含已提交图元；几何修改请通过历史编辑，当前选择已保留。"
+        if operation in {"move", "copy", "rotate", "mirror"} and any(
+            layer.locked and entity.entity_id in self.selected_entity_ids
+            for entity, layer in self.background_entities
+        ):
+            return "选择包含已锁定图层；草稿未修改。"
         if any(
             self._layer(entity).locked
             for entity in self.entities
@@ -1336,6 +1615,65 @@ class SketchCanvas(QWidget):
         ):
             return "本次移动会改变用户约束引用的图元；请先处理相关约束再改几何。草稿未变。"
         return ""
+
+    def copy_selected_to_draft(self, delta: Point2D) -> tuple[SketchEntity, ...]:
+        """Copy selected draft and visible committed geometry into the draft."""
+        background = tuple(
+            entity
+            for entity, _layer in self.background_entities
+            if entity.entity_id in self.selected_entity_ids
+        )
+        original_background_ids = {entity.entity_id for entity in background}
+        source = (*self.entities, *background)
+        selected = tuple(
+            entity.entity_id for entity in source if entity.entity_id in self.selected_entity_ids
+        )
+        return tuple(
+            entity
+            for entity in copy_entities(source, selected, delta)
+            if entity.entity_id not in original_background_ids
+        )
+
+    def rotation_draft_error(self, center: Point2D, angle: float) -> str:
+        """Check the selected draft geometry before dispatching a mixed rotation."""
+        selected = tuple(
+            entity.entity_id
+            for entity in self.entities
+            if entity.entity_id in self.selected_entity_ids
+        )
+        if not selected:
+            return ""
+        try:
+            candidate = rotate_entities(tuple(self.entities), selected, center, angle)
+            self._reject_user_constraint_reference_edits(candidate)
+        except ValueError as exc:
+            return str(exc)
+        return ""
+
+    def mirror_draft_error(self, start: Point2D, end: Point2D) -> str:
+        """Check selected draft geometry before dispatching a mixed mirror."""
+        selected = tuple(
+            entity.entity_id
+            for entity in self.entities
+            if entity.entity_id in self.selected_entity_ids
+        )
+        if not selected:
+            return ""
+        try:
+            candidate = mirror_entities(tuple(self.entities), selected, start, end)
+            self._reject_user_constraint_reference_edits(candidate)
+        except ValueError as exc:
+            return str(exc)
+        return ""
+
+    def mirror_selected_to_draft(self, start: Point2D, end: Point2D) -> tuple[SketchEntity, ...]:
+        """Mirror new copies of selected draft and committed entities into the draft."""
+        original_ids = {entity.entity_id for entity in self.entities}
+        copied = self.copy_selected_to_draft((0.0, 0.0))
+        copies = tuple(
+            entity.entity_id for entity in copied if entity.entity_id not in original_ids
+        )
+        return mirror_entities(copied, copies, start, end)
 
     def _finish_transform_selection(self) -> None:
         if self._selection_anchor is not None:
@@ -1366,7 +1704,7 @@ class SketchCanvas(QWidget):
         return (
             "指定移动/复制基点；Esc 取消。"
             if self._transform_base is None
-            else "移动鼠标预览，单击目标点确认；Esc 取消。"
+            else "指定目标点，或按 Enter 使用基点作为位移；Esc 取消。"
         )
 
     def _transform_copies_source(self) -> bool:
@@ -1374,15 +1712,41 @@ class SketchCanvas(QWidget):
             self._transform_operation == "mirror" and self._transform_keep_source
         )
 
+    def _transform_pointer_point(
+        self, raw: Point2D, *, disable_snapping: bool
+    ) -> tuple[Point2D, str]:
+        point, kind = (
+            (raw, "") if self._transform_selecting or disable_snapping else self._snapped(raw)
+        )
+        base = self._transform_base
+        if (
+            self._transform_operation in {"move", "copy"}
+            and base is not None
+            and not self._transform_selecting
+            and self._orthogonal_enabled
+            and kind in {"", "栅格"}
+        ):
+            if abs(point[0] - base[0]) >= abs(point[1] - base[1]):
+                point = (point[0], base[1])
+            else:
+                point = (base[0], point[1])
+            kind = "正交"
+        return point, kind
+
     def _transform_candidate(
         self, point: Point2D, *, angle_deg: float | None = None
     ) -> tuple[SketchEntity, ...]:
         base = self._transform_base
         if base is None:
             return ()
+        transform_entities = (
+            (*self.entities, *(entity for entity, _layer in self.background_entities))
+            if self._selected_committed_entities()
+            else tuple(self.entities)
+        )
         selected = tuple(
             entity.entity_id
-            for entity in self.entities
+            for entity in transform_entities
             if entity.entity_id in self.selected_entity_ids
         )
         error = self.transform_selection_error(self._transform_operation or "move")
@@ -1391,7 +1755,15 @@ class SketchCanvas(QWidget):
         delta = (point[0] - base[0], point[1] - base[1])
         if angle_deg is None and math.hypot(*delta) <= 1e-9:
             raise ValueError("两点重合；请指定不同的方向点。")
-        entities = tuple(self.entities)
+        if self._transform_operation == "copy":
+            candidate = self.copy_selected_to_draft(delta)
+            self._reject_user_constraint_reference_edits(candidate)
+            return candidate
+        if self._transform_operation == "mirror" and self._transform_keep_source:
+            candidate = self.mirror_selected_to_draft(base, point)
+            self._reject_user_constraint_reference_edits(candidate)
+            return candidate
+        entities = transform_entities
         if self._transform_operation == "rotate":
             if angle_deg is None:
                 angle_deg = math.degrees(math.atan2(delta[1], delta[0]))
@@ -1419,6 +1791,10 @@ class SketchCanvas(QWidget):
     def rotation_center(self) -> Point2D | None:
         return self._transform_base if self._transform_operation == "rotate" else None
 
+    @property
+    def rotation_uses_reference(self) -> bool:
+        return self._transform_operation == "rotate" and self._transform_reference_mode
+
     def apply_rotation_angle(self, angle_deg: float) -> bool:
         """Apply an explicit relative angle about the currently picked center."""
         if self._transform_operation != "rotate" or self._transform_base is None:
@@ -1429,11 +1805,21 @@ class SketchCanvas(QWidget):
             self.message = str(exc)
             self.changed.emit()
             return False
-        self._show_transform_candidate(candidate, commit=True)
+        if self._selected_committed_entities():
+            self._commit_saved_rotation(angle_deg)
+        else:
+            self._show_transform_candidate(candidate, commit=True)
         return True
 
+    def _commit_saved_rotation(self, angle_deg: float) -> None:
+        center = self._transform_base
+        assert center is not None
+        selected = tuple(self.selected_entity_ids)
+        self.cancel_transform()
+        self.committed_rotation_requested.emit(selected, center, angle_deg)
+
     def _show_transform_candidate(
-        self, candidate: tuple[SketchEntity, ...], *, commit: bool
+        self, candidate: tuple[SketchEntity, ...], *, commit: bool, point: Point2D | None = None
     ) -> None:
         selected = self.selected_entity_ids
         source_ids = {entity.entity_id for entity in self.entities}
@@ -1444,6 +1830,22 @@ class SketchCanvas(QWidget):
             if (entity.entity_id not in source_ids if is_copy else entity.entity_id in selected)
         )
         if commit:
+            if (
+                self._transform_operation == "copy"
+                and self.select_committed_entities
+                and self._copy_repeat
+            ):
+                original_selection = set(selected)
+                previous_position = self.history_position
+                if self.replace_draft_entities(candidate):
+                    assert point is not None
+                    self._copy_placements.append((point, previous_position, self.history_position))
+                    self.selected_entity_ids = original_selection
+                    self._transform_preview = ()
+                    self.message = "已复制；指定下一个目标点，U 撤销，Enter / 右键结束。"
+                self.changed.emit()
+                self.update()
+                return
             label = {"move": "移动", "copy": "复制", "rotate": "旋转", "mirror": "镜像"}[
                 self._transform_operation or "move"
             ]
@@ -1469,6 +1871,7 @@ class SketchCanvas(QWidget):
         if self._transform_base is None:
             if commit:
                 self._transform_base = point
+                self.point_accepted.emit(point)
                 self.message = self._transform_point_hint()
                 self.changed.emit()
                 self.update()
@@ -1483,6 +1886,7 @@ class SketchCanvas(QWidget):
                     self.message = "参考点不能与旋转中心重合。"
                 else:
                     self._transform_reference = point
+                    self.point_accepted.emit(point)
                     self.message = self._transform_point_hint()
                 self.changed.emit()
                 self.update()
@@ -1495,7 +1899,89 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             self.update()
             return
-        self._show_transform_candidate(candidate, commit=commit)
+        if commit and self._transform_operation == "move" and self._selected_committed_entities():
+            base = self._transform_base
+            assert base is not None
+            selected = tuple(self.selected_entity_ids)
+            delta = (point[0] - base[0], point[1] - base[1])
+            self.cancel_transform()
+            self.committed_move_requested.emit(selected, delta)
+            self.point_accepted.emit(point)
+            return
+        if commit and self._transform_operation == "rotate" and self._selected_committed_entities():
+            base = self._transform_base
+            assert base is not None
+            angle = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+            if self._transform_reference is not None:
+                reference = self._transform_reference
+                angle -= math.degrees(math.atan2(reference[1] - base[1], reference[0] - base[0]))
+            self._commit_saved_rotation(angle)
+            self.point_accepted.emit(point)
+            return
+        if (
+            commit
+            and self._transform_operation == "mirror"
+            and not self._transform_keep_source
+            and self._selected_committed_entities()
+        ):
+            start = self._transform_base
+            assert start is not None
+            selected = tuple(self.selected_entity_ids)
+            self.cancel_transform()
+            self.committed_mirror_requested.emit(selected, start, point)
+            self.point_accepted.emit(point)
+            return
+        self._show_transform_candidate(candidate, commit=commit, point=point)
+        if commit and tuple(self.entities) == candidate:
+            self.point_accepted.emit(point)
+
+    def _confirm_transform_default(self) -> None:
+        if self._transform_selecting:
+            self._finish_transform_selection()
+        elif self._transform_operation == "copy" and self._transform_base is not None:
+            if self.select_committed_entities and not self._copy_placements:
+                u, v = self._transform_base
+                self._transform_point((2 * u, 2 * v), commit=True)
+            else:
+                self.cancel_transform()
+                self.message = "复制已结束；已放置的副本保留。"
+                self.changed.emit()
+        elif self._transform_operation == "move" and self._transform_base is not None:
+            u, v = self._transform_base
+            self._transform_point((2 * u, 2 * v), commit=True)
+
+    @property
+    def copy_last_point(self) -> Point2D | None:
+        """Last retained copy destination, or its original base point."""
+        if self._transform_operation != "copy":
+            return None
+        return self._copy_placements[-1][0] if self._copy_placements else self._transform_base
+
+    def undo_copy_placement(self) -> bool:
+        """Undo only the latest placement in the active repeated-copy gesture."""
+        if self._transform_operation != "copy" or not self._copy_placements:
+            self.message = "没有可撤销的复制；请选择目标点。"
+            self.changed.emit()
+            return False
+        _point, before, after = self._copy_placements[-1]
+        if (
+            self.history_position != after
+            or not self._undo_history
+            or self._undo_history[-1].history_position != before
+        ):
+            self.message = "草稿历史已变化，无法撤销该复制；请结束当前命令。"
+            self.changed.emit()
+            return False
+        self._redo_history.append(self._draft_state())
+        self._restore_draft_state(self._undo_history.pop())
+        self._copy_placements.pop()
+        self._transform_preview = ()
+        self.message = "已撤销上一个副本；指定下一个目标点。"
+        if self.copy_last_point is not None:
+            self.point_accepted.emit(self.copy_last_point)
+        self.changed.emit()
+        self.update()
+        return True
 
     def _begin_trim_drag(self, point: Point2D) -> None:
         self._clear_line_edit_preview()
@@ -1630,6 +2116,7 @@ class SketchCanvas(QWidget):
                     self.layer_table,
                     self.active_layer_name,
                     history_position=self.history_position,
+                    mixed_move=self.mixed_move,
                 )
             )
             self._advance_history()
@@ -1776,6 +2263,7 @@ class SketchCanvas(QWidget):
                     self.layer_table,
                     self.active_layer_name,
                     history_position=self.history_position,
+                    mixed_move=self.mixed_move,
                 )
             )
             self._advance_history()
@@ -1836,6 +2324,10 @@ class SketchCanvas(QWidget):
         return len(self._points)
 
     @property
+    def pending_last_point(self) -> Point2D | None:
+        return self._points[-1] if self._points else None
+
+    @property
     def current_snap_kind(self) -> str:
         return self._snap_kind
 
@@ -1863,7 +2355,7 @@ class SketchCanvas(QWidget):
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[SketchEntity, float]] = []
         for entity in self._visible_entities():
-            if isinstance(entity, SplineEntity):
+            if isinstance(entity, PointEntity | SplineEntity):
                 continue
             if isinstance(entity, LineEntity):
                 distance = _distance_to_segment(point, entity.start_mm, entity.end_mm)
@@ -1990,7 +2482,29 @@ class SketchCanvas(QWidget):
 
     def add_coordinate_point(self, point: Point2D, *, exact_point: bool = False) -> None:
         """Add a point; explicit numeric input bypasses snap and inference."""
+        if self.dynamic_click_guard is not None and not self.dynamic_click_guard():
+            self.message = "请先修正光标尺寸输入，或按 Esc 取消。"
+            self.changed.emit()
+            return
         self._accept_point(point, exact_point=exact_point)
+
+    def refresh_dynamic_preview(self) -> None:
+        if self._first is None or self._last_placement_raw is None:
+            return
+        point, self._snap_kind = self._placement_point(self._last_placement_raw)
+        if self.dynamic_point_resolver is not None:
+            try:
+                resolved = self.dynamic_point_resolver(self._first, point)
+                if resolved != point:
+                    self._snap_kind = ""
+                point = resolved
+            except ValueError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
+        self._cursor = point
+        self.cursor_changed.emit(*point, self._snap_kind)
+        self.update()
 
     def finish_polyline(self, *, close: bool = False) -> None:
         if self.tool == "样条曲线":
@@ -2099,7 +2613,9 @@ class SketchCanvas(QWidget):
         segments = self._segments()
         circular_curves: list[tuple[Point2D, float, float, float]] = []
         for entity in self.visible_snap_entities():
-            if isinstance(entity, SplineEntity):
+            if isinstance(entity, PointEntity):
+                candidates.append((entity.position_mm, "点"))
+            elif isinstance(entity, SplineEntity):
                 candidates.extend(
                     ((entity.control_points_mm[0], "端点"), (entity.control_points_mm[-1], "端点"))
                 )
@@ -2385,6 +2901,8 @@ class SketchCanvas(QWidget):
     def _stable_point_references(
         entity: SketchEntity,
     ) -> tuple[tuple[SketchGeometryReference, Point2D], ...]:
+        if isinstance(entity, PointEntity):
+            return ((SketchGeometryReference(entity.entity_id, "vertex", 0), entity.position_mm),)
         if isinstance(entity, SplineEntity):
             return ()
         if isinstance(entity, LineEntity):
@@ -2635,6 +3153,16 @@ class SketchCanvas(QWidget):
                 raw_point, temporarily_disable_snapping=temporarily_disable_snapping
             )
         )
+        if not exact_point and self._first is not None and self.dynamic_point_resolver is not None:
+            try:
+                resolved = self.dynamic_point_resolver(self._first, point)
+                if resolved != point:
+                    snap_kind = ""
+                point = resolved
+            except ValueError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
         self._snap_kind = snap_kind
         self._cursor = point
         if active_tool in {"修剪", "延伸", "分割"}:
@@ -2713,6 +3241,7 @@ class SketchCanvas(QWidget):
                 self.changed.emit()
                 return
             self._points.append(point)
+            self.point_accepted.emit(point)
             self.message = f"多段线：已放置 {len(self._points)} 个点；按 Enter 或按钮完成。"
             self.changed.emit()
             self.update()
@@ -2722,6 +3251,7 @@ class SketchCanvas(QWidget):
                 self.message = "请选择不同的下一个控制点。"
             else:
                 self._points.append(point)
+                self.point_accepted.emit(point)
                 self.message = f"样条：已放置 {len(self._points)} 个控制点，至少四点；Enter / 右键完成，Esc 取消。"
             self.changed.emit()
             self.update()
@@ -2729,6 +3259,7 @@ class SketchCanvas(QWidget):
         if self._first is None:
             self._first = point
             self._points = [point]
+            self.point_accepted.emit(point)
             self.message = self._next_point_hint()
             self.changed.emit()
             self.update()
@@ -2740,6 +3271,7 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return
         if entity is None and self.tool == "圆弧" and len(self._points) == 2:
+            self.point_accepted.emit(point)
             self.changed.emit()
             self.update()
             return
@@ -2751,6 +3283,7 @@ class SketchCanvas(QWidget):
                 return
             self._record_undo()
             self.entities.append(entity)
+            self.point_accepted.emit(point)
             self.constraints.extend(self._inferred_constraints_for_entity(entity))
             self._snap_candidates_cache = None
         if self.tool == "直线" and self.continuous_lines and entity is not None:
@@ -2884,7 +3417,11 @@ class SketchCanvas(QWidget):
                 style,
             )
         )
-        if isinstance(entity, SplineEntity):
+        if isinstance(entity, PointEntity):
+            point = self.local_to_screen(entity.position_mm)
+            painter.drawLine(point.x() - 4, point.y(), point.x() + 4, point.y())
+            painter.drawLine(point.x(), point.y() - 4, point.x(), point.y() + 4)
+        elif isinstance(entity, SplineEntity):
             points = entity.sampled_points()
             for start, end in zip(points, points[1:], strict=False):
                 painter.drawLine(self.local_to_screen(start), self.local_to_screen(end))
@@ -3408,6 +3945,13 @@ class SketchCanvas(QWidget):
 
     @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.dynamic_click_guard is not None
+            and not self.dynamic_click_guard()
+        ):
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self.selected_constraint_ids:
             self.selected_constraint_ids.clear()
             self.changed.emit()
@@ -3428,7 +3972,7 @@ class SketchCanvas(QWidget):
             Qt.MouseButton.RightButton,
         ):
             if event.button() == Qt.MouseButton.RightButton:
-                self._finish_transform_selection()
+                self._confirm_transform_default()
             else:
                 raw = self.screen_to_local(event.position())
                 if self._transform_selecting and self._hit_entity_at(raw) is None:
@@ -3442,11 +3986,9 @@ class SketchCanvas(QWidget):
                     self._select_at(raw, additive=True, subtractive=True)
                     event.accept()
                     return
-                point = (
-                    raw
-                    if self._transform_selecting
-                    or event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-                    else self._snapped(raw)[0]
+                point, _kind = self._transform_pointer_point(
+                    raw,
+                    disable_snapping=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
                 )
                 self._transform_point(point, commit=True)
             event.accept()
@@ -3470,6 +4012,10 @@ class SketchCanvas(QWidget):
             return
         if event.button() == Qt.MouseButton.LeftButton:
             point = self.screen_to_local(event.position())
+            if self.tool == "二维圆角":
+                self._circle_fillet_pick(point)
+                event.accept()
+                return
             if self.tool == "修剪":
                 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     self._cursor = point
@@ -3508,6 +4054,7 @@ class SketchCanvas(QWidget):
                     )
                     and self.tool in {"直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"},
                 )
+                self.pointer_moved.emit(event.position().toPoint())
             event.accept()
             return
         super().mousePressEvent(event)
@@ -3581,11 +4128,8 @@ class SketchCanvas(QWidget):
             return
         if self._transform_operation is not None:
             raw = self.screen_to_local(event.position())
-            point, kind = (
-                (raw, "")
-                if self._transform_selecting
-                or event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-                else self._snapped(raw)
+            point, kind = self._transform_pointer_point(
+                raw, disable_snapping=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             )
             self._cursor, self._snap_kind = point, kind
             self._transform_point(point, commit=False)
@@ -3603,6 +4147,7 @@ class SketchCanvas(QWidget):
             event.accept()
             return
         raw_point = self.screen_to_local(event.position())
+        self._last_placement_raw = raw_point
         self._cursor, self._snap_kind = (
             (raw_point, "")
             if self.tool in {"修剪", "延伸", "分割"}
@@ -3614,6 +4159,15 @@ class SketchCanvas(QWidget):
                 and self.tool in {"直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"},
             )
         )
+        if self._first is not None and self.dynamic_point_resolver is not None:
+            try:
+                resolved = self.dynamic_point_resolver(self._first, self._cursor)
+                if resolved != self._cursor:
+                    self._snap_kind = ""
+                self._cursor = resolved
+            except ValueError as exc:
+                self.message = str(exc)
+                self.changed.emit()
         if self.tool == "选择元素":
             self._hovered_entity_id = self._hit_entity_at(self._cursor)
         elif self.tool == "修剪":
@@ -3635,8 +4189,14 @@ class SketchCanvas(QWidget):
             self._refresh_line_edit_preview(None)
             self._hovered_entity_id = None
         self.cursor_changed.emit(*self._cursor, self._snap_kind)
+        self.pointer_moved.emit(position)
         self.update()
         event.accept()
+
+    @override
+    def leaveEvent(self, event: QEvent) -> None:
+        self.pointer_left.emit()
+        super().leaveEvent(event)
 
     @override
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -3655,10 +4215,8 @@ class SketchCanvas(QWidget):
             and self._transform_preview
         ):
             raw = self.screen_to_local(event.position())
-            point = (
-                raw
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-                else self._snapped(raw)[0]
+            point, _kind = self._transform_pointer_point(
+                raw, disable_snapping=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             )
             if _distance(point, self._transform_base) * self._scale > 3.0:
                 self._transform_point(point, commit=True)
@@ -3690,6 +4248,12 @@ class SketchCanvas(QWidget):
 
     @override
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self.dynamic_key_handler is not None and self.dynamic_key_handler(event):
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self._cancel_circle_fillet():
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Delete:
             self.delete_selected()
             event.accept()
@@ -3710,12 +4274,16 @@ class SketchCanvas(QWidget):
                 self.cancel_transform()
                 event.accept()
                 return
+            if self._transform_operation == "copy" and event.key() == Qt.Key.Key_U:
+                self.undo_copy_placement()
+                event.accept()
+                return
             if self._transform_operation == "rotate" and self._transform_base is not None:
                 if event.key() == Qt.Key.Key_Backspace:
                     self._transform_angle_text = self._transform_angle_text[:-1]
                 elif event.text() and all(char in "0123456789+-." for char in event.text()):
                     self._transform_angle_text += event.text()
-                elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
                     if self._transform_angle_text:
                         try:
                             angle = float(self._transform_angle_text)
@@ -3733,8 +4301,8 @@ class SketchCanvas(QWidget):
                 self.changed.emit()
                 event.accept()
                 return
-            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._finish_transform_selection()
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                self._confirm_transform_default()
                 event.accept()
                 return
         if event.matches(QKeySequence.StandardKey.Undo):
@@ -3933,6 +4501,8 @@ class SketchEditorDialog(QDialog):
                 "分割",
             )
         )
+        if select_committed_entities:
+            self.tool_combo.addItem("二维圆角")
         self.snap_check = QCheckBox("捕捉")
         self.snap_check.setChecked(True)
         self.snap_check.setToolTip(
@@ -3953,6 +4523,21 @@ class SketchEditorDialog(QDialog):
         self.orthogonal_check.setToolTip(
             "直线和折线按位移较大的方向锁定水平/竖直；捕捉到既有几何时保留捕捉点。"
         )
+        self.dynamic_input_check = QCheckBox("动态输入")
+        self.dynamic_input_check.setToolTip("为直线、矩形和圆锁定尺寸；其他工具尚不支持。")
+        self.drawing_status_shortcuts: list[QShortcut] = []
+        if select_committed_entities:
+            for key, check in (
+                ("F3", self.snap_check),
+                ("F8", self.orthogonal_check),
+                ("F9", self.grid_snap_check),
+                ("F12", self.dynamic_input_check),
+            ):
+                check.setToolTip(f"{check.toolTip()}（{key}）")
+                shortcut = QShortcut(QKeySequence(key), self)
+                shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+                shortcut.activated.connect(check.toggle)
+                self.drawing_status_shortcuts.append(shortcut)
         self.auto_relation_check = QCheckBox("自动关系")
         self.auto_relation_check.setChecked(True)
         self.auto_relation_check.setToolTip(
@@ -3993,7 +4578,8 @@ class SketchEditorDialog(QDialog):
             self.grid_snap_check,
             self.orthogonal_check,
         ):
-            layer_bar.addWidget(check)
+            if not select_committed_entities:
+                layer_bar.addWidget(check)
         self.toolbar_menu_button = QToolButton()
         self.toolbar_menu_button.setText("工具栏与面板")
         self.toolbar_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -4070,6 +4656,23 @@ class SketchEditorDialog(QDialog):
                 self.modify_toolbar if tool in {"修剪", "延伸", "分割"} else self.drawing_toolbar
             )
             toolbar.addWidget(button)
+        if select_committed_entities:
+            fillet_button = QToolButton()
+            fillet_button.setText("圆角")
+            set_button_icon(fillet_button, "fillet")
+            fillet_button.setIconSize(QSize(26, 26))
+            fillet_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            fillet_button.setToolTip(
+                "两圆外切圆角；不修剪原圆，也不创建相切约束。命令栏 R 设置半径。"
+            )
+            fillet_button.setCheckable(True)
+            fillet_button.setMinimumSize(44, 54)
+            fillet_button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            fillet_button.clicked.connect(
+                lambda _checked=False: self.tool_combo.setCurrentText("二维圆角")
+            )
+            self.tool_buttons["二维圆角"] = fillet_button
+            self.modify_toolbar.addWidget(fillet_button)
         self.tool_buttons["样条曲线"].setToolTip(
             "三次 B 样条（控制点方式）：至少四个控制点；Enter / 右键完成。首尾点在曲线上，中间点控制曲线形状。"
         )
@@ -4125,6 +4728,64 @@ class SketchEditorDialog(QDialog):
         self.dimension_controls_layout = QVBoxLayout()
         drawing.addLayout(self.dimension_controls_layout)
         drawing.addWidget(self.canvas, 1)
+        self.dynamic_input = SketchDynamicInput(self)
+        self._drawing_cursor_position: QPoint | None = None
+        self._drawing_cursor_dimensions = QLabel(self.canvas)
+        self._drawing_cursor_dimensions.setObjectName("drawingCursorDimensions")
+        self._drawing_cursor_dimensions.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        self._drawing_cursor_dimensions.setStyleSheet(
+            "QLabel { background: #f3f7fb; color: #243b53; "
+            "border: 1px solid #849bb1; padding: 3px; }"
+        )
+        self._drawing_cursor_dimensions.hide()
+        self._drawing_cursor_entry = _CursorDimensionEntry(self.canvas)
+        self._drawing_cursor_entry.setObjectName("drawingCursorEntry")
+        self._drawing_cursor_entry.setMaximumWidth(140)
+        self._drawing_cursor_entry.setMaxLength(32)
+        self._drawing_cursor_entry.hide()
+        self._drawing_cursor_entry.next_requested.connect(self._advance_cursor_entry)
+        self._drawing_cursor_entry.accept_requested.connect(self._accept_cursor_entry)
+        self._drawing_cursor_entry.cancel_requested.connect(self._cancel_cursor_entry)
+        self._drawing_cursor_field = 0
+        self._dynamic_configured_tool = ""
+        self._dynamic_was_pending = False
+        self.canvas.dynamic_point_resolver = self._resolve_dynamic_point
+        self.canvas.dynamic_key_handler = self._start_cursor_entry
+        self.canvas.dynamic_click_guard = self._accept_cursor_entry
+        self.canvas.changed.connect(self._sync_dynamic_input)
+        self.canvas.point_accepted.connect(self._clear_dynamic_locks)
+        self.dynamic_input_check.toggled.connect(self._sync_dynamic_input)
+        self.dynamic_input_check.toggled.connect(self.canvas.refresh_dynamic_preview)
+        self.dynamic_input.changed.connect(self.canvas.refresh_dynamic_preview)
+        self.dynamic_input.changed.connect(self._update_drawing_cursor_dimensions)
+        self.canvas.pointer_moved.connect(self._on_drawing_pointer_moved)
+        self.canvas.pointer_left.connect(self._on_drawing_pointer_left)
+        drawing.addWidget(self.dynamic_input)
+        self._sync_dynamic_input()
+        self.drawing_command_bar = Drawing2DCommandBar(
+            self.canvas, self._activate_command_tool, self._activate_command_transform, self
+        )
+        self.dynamic_input.escape_requested.connect(self.drawing_command_bar.cancel)
+        self.drawing_command_bar.setVisible(select_committed_entities)
+        drawing.addWidget(self.drawing_command_bar)
+        self.drawing_status_bar = QWidget()
+        self.drawing_status_bar.setObjectName("drawing2dStatusBar")
+        status_controls = QHBoxLayout(self.drawing_status_bar)
+        status_controls.setContentsMargins(0, 0, 0, 0)
+        status_controls.addStretch(1)
+        if select_committed_entities:
+            for check in (
+                self.grid_visible_check,
+                self.grid_snap_check,
+                self.orthogonal_check,
+                self.snap_check,
+                self.dynamic_input_check,
+            ):
+                status_controls.addWidget(check)
+        self.drawing_status_bar.setVisible(select_committed_entities)
+        drawing.addWidget(self.drawing_status_bar)
         coordinate_group = QGroupBox("坐标输入 / mm")
         coordinate_layout = QVBoxLayout(coordinate_group)
         coordinates = QFormLayout()
@@ -4324,7 +4985,36 @@ class SketchEditorDialog(QDialog):
         self.cancel_button.clicked.connect(self.reject)
         self.canvas.changed.connect(self._sync_state)
         self.canvas.cursor_changed.connect(self._show_cursor)
+        self._compact_toolbar_states: dict[QToolButton, tuple[int, QSize, Qt.ToolButtonStyle]] = {}
+        self._compact_layout = False
         self._sync_state()
+
+    def set_compact_layout(self, compact: bool) -> None:
+        """Reduce toolbar height on small logical screens while retaining tooltips."""
+        if compact == self._compact_layout:
+            return
+        self._compact_layout = compact
+        if compact:
+            self.ucs_label.hide()
+            for toolbar in self.drafting_toolbars:
+                for action in toolbar.actions():
+                    button = toolbar.widgetForAction(action)
+                    if isinstance(button, QToolButton):
+                        self._compact_toolbar_states[button] = (
+                            button.minimumHeight(),
+                            button.iconSize(),
+                            button.toolButtonStyle(),
+                        )
+                        button.setMinimumHeight(32)
+                        button.setIconSize(QSize(18, 18))
+                        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        else:
+            self.ucs_label.show()
+            for button, (height, icon_size, style) in self._compact_toolbar_states.items():
+                button.setMinimumHeight(height)
+                button.setIconSize(icon_size)
+                button.setToolButtonStyle(style)
+            self._compact_toolbar_states.clear()
 
     @staticmethod
     def _parameter_page(group: QGroupBox) -> QScrollArea:
@@ -4616,6 +5306,9 @@ class SketchEditorDialog(QDialog):
         self.polygon_sides_field.setValue(previous.polygon_sides_field.value())
         self.polygon_mode_combo.setCurrentText(previous.polygon_mode_combo.currentText())
         self.orthogonal_check.setChecked(previous.orthogonal_check.isChecked())
+        self.dynamic_input_check.setChecked(previous.dynamic_input_check.isChecked())
+        self.canvas.circle_fillet_radius = previous.canvas.circle_fillet_radius
+        self.drawing_command_bar.continue_from(previous.drawing_command_bar)
 
     @override
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -4871,6 +5564,8 @@ class SketchEditorDialog(QDialog):
         elif self.canvas.set_tool(tool):
             if tool != "选择元素":
                 self.parameter_tabs.setCurrentWidget(self.tool_panel)
+            if hasattr(self, "drawing_command_bar"):
+                self.drawing_command_bar.remember_tool(tool)
             if return_to_zero:
                 self.layer_combo.setCurrentText("0")
             self.canvas.setFocus()
@@ -4879,6 +5574,14 @@ class SketchEditorDialog(QDialog):
         self.tool_combo.setCurrentText(self.canvas.tool)
         del blocker
         self.status_label.setText(self.canvas.message)
+
+    def _activate_command_tool(self, tool: str) -> bool:
+        self._change_tool(tool)
+        if self.canvas.tool != tool or self.canvas.has_pending_geometry:
+            return False
+        with QSignalBlocker(self.tool_combo):
+            self.tool_combo.setCurrentText(tool)
+        return True
 
     def _change_plane(self, plane: str) -> None:
         if self.canvas.entities or self.canvas.has_pending_geometry:
@@ -4953,12 +5656,267 @@ class SketchEditorDialog(QDialog):
         else:
             self._apply_transform(operation)
 
+    def _sync_dynamic_input(self) -> None:
+        pending = self.canvas.has_pending_geometry
+        finished = self._dynamic_was_pending and not pending
+        self._dynamic_was_pending = pending
+        ended_line = (
+            self.canvas.tool == "直线"
+            and self.canvas.continuous_lines
+            and self.canvas.pending_point_count == 0
+        )
+        if finished or ended_line:
+            self.dynamic_input.clear_locks()
+        if not self.dynamic_input_check.isChecked():
+            self.dynamic_input.clear_locks()
+            self.dynamic_input.hide()
+            self._dynamic_configured_tool = ""
+            self._drawing_cursor_dimensions.hide()
+            self._drawing_cursor_entry.hide()
+            return
+        tool = {"直线": "line", "矩形": "rectangle", "圆": "circle"}.get(self.canvas.tool, "select")
+        if tool != self._dynamic_configured_tool:
+            self.dynamic_input.configure(tool)
+            self._dynamic_configured_tool = tool
+        self.dynamic_input.setVisible(tool != "select")
+        continuous_line = (
+            self.canvas.tool == "直线"
+            and self.canvas.continuous_lines
+            and self.canvas.pending_point_count > 0
+        )
+        if tool == "select" or not (self.canvas.has_pending_geometry or continuous_line):
+            self._drawing_cursor_entry.hide()
+        self._update_drawing_cursor_dimensions()
+
+    def _start_cursor_entry(self, event: QKeyEvent) -> bool:
+        text = event.text()
+        if (
+            not self.dynamic_input_check.isChecked()
+            or self._dynamic_configured_tool not in {"line", "rectangle", "circle"}
+            or self.canvas.active_transform is not None
+            or self._drawing_cursor_position is None
+            or not (self.canvas.has_pending_geometry or self.canvas.pending_point_count > 0)
+            or len(text) != 1
+            or text not in "0123456789+-."
+            or event.modifiers()
+            & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+            )
+        ):
+            return False
+        entry = self._drawing_cursor_entry
+        self._drawing_cursor_field = 0
+        entry.setText(text)
+        entry.setPlaceholderText("尺寸")
+        entry.setMaximumWidth(max(1, min(140, self.canvas.width())))
+        entry.adjustSize()
+        position = self._drawing_cursor_position
+        x = position.x() + 14
+        if x + entry.width() > self.canvas.width():
+            x = max(0, position.x() - entry.width() - 14)
+        y = position.y() + 38
+        if y + entry.height() > self.canvas.height():
+            y = max(0, position.y() - entry.height() - 14)
+        entry.move(x, y)
+        entry.show()
+        entry.raise_()
+        entry.setFocus()
+        entry.setCursorPosition(len(text))
+        return True
+
+    def _commit_cursor_entry(self) -> bool:
+        entry = self._drawing_cursor_entry
+        if entry.isHidden():
+            return True
+        try:
+            value = float(entry.text().strip())
+        except ValueError:
+            value = math.nan
+        angle = self._dynamic_configured_tool == "line" and self._drawing_cursor_field == 1
+        if not math.isfinite(value) or abs(value) > 1e9 or (not angle and round(value, 6) <= 0):
+            message = "请输入有效的角度。" if angle else "请输入大于零的有效尺寸。"
+            entry.setToolTip(message)
+            entry.setStyleSheet("border: 1px solid #b42318;")
+            self.canvas.message = message
+            self.canvas.changed.emit()
+            entry.setFocus()
+            return False
+        field = (
+            self.dynamic_input.first_value
+            if self._drawing_cursor_field == 0
+            else self.dynamic_input.second_value
+        )
+        lock = (
+            self.dynamic_input.first_lock
+            if self._drawing_cursor_field == 0
+            else self.dynamic_input.second_lock
+        )
+        lock.setChecked(True)
+        field.setValue(value)
+        entry.setStyleSheet("")
+        entry.setToolTip("")
+        return True
+
+    def _accept_cursor_entry(self) -> bool:
+        if not self._commit_cursor_entry():
+            return False
+        if not self._drawing_cursor_entry.isHidden():
+            self._drawing_cursor_entry.hide()
+            self.canvas.setFocus()
+        return True
+
+    def _advance_cursor_entry(self) -> None:
+        if not self._commit_cursor_entry():
+            return
+        if self._drawing_cursor_field == 0 and self._dynamic_configured_tool != "circle":
+            self._drawing_cursor_field = 1
+            self._drawing_cursor_entry.clear()
+            self._drawing_cursor_entry.setPlaceholderText(
+                "角度" if self._dynamic_configured_tool == "line" else "高度"
+            )
+            self._drawing_cursor_entry.setFocus()
+        else:
+            self._accept_cursor_entry()
+
+    def _cancel_cursor_entry(self) -> None:
+        self._drawing_cursor_entry.hide()
+        self.canvas.setFocus()
+        event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+        QCoreApplication.sendEvent(self.canvas, event)
+
+    def _on_drawing_pointer_moved(self, position: QPoint) -> None:
+        self._drawing_cursor_position = position
+        self._update_drawing_cursor_dimensions()
+
+    def _on_drawing_pointer_left(self) -> None:
+        self._drawing_cursor_position = None
+        self._drawing_cursor_dimensions.hide()
+
+    def _update_drawing_cursor_dimensions(self) -> None:
+        hint = self._drawing_cursor_dimensions
+        position = self._drawing_cursor_position
+        continuous_line = (
+            self.canvas.tool == "直线"
+            and self.canvas.continuous_lines
+            and self.canvas.pending_point_count > 0
+        )
+        if (
+            not self.dynamic_input_check.isChecked()
+            or self._dynamic_configured_tool == "select"
+            or not (self.canvas.has_pending_geometry or continuous_line)
+            or position is None
+        ):
+            hint.hide()
+            return
+        dynamic = self.dynamic_input
+        label = dynamic.first_label.text() or dynamic.circle_mode.currentText()
+        first = f"{label} {dynamic.first_value.text()}"
+        if dynamic.first_lock.isChecked():
+            first += "（锁定）"
+        parts = [first]
+        if not dynamic.second_value.isHidden():
+            second = f"{dynamic.second_label.text()} {dynamic.second_value.text()}"
+            if dynamic.second_lock.isChecked():
+                second += "（锁定）"
+            parts.append(second)
+        hint.setText("   ".join(parts))
+        hint.setMaximumWidth(max(1, self.canvas.width()))
+        hint.adjustSize()
+        x = min(max(0, position.x() + 14), max(0, self.canvas.width() - hint.width()))
+        y = min(max(0, position.y() + 16), max(0, self.canvas.height() - hint.height()))
+        hint.move(x, y)
+        hint.show()
+        hint.raise_()
+
+    def _resolve_dynamic_point(self, start: Point2D, point: Point2D) -> Point2D:
+        if not self.dynamic_input_check.isChecked() or self._dynamic_configured_tool == "select":
+            return point
+        self.dynamic_input.update_from_pointer(start, point)
+        return self.dynamic_input.resolve(start, point)
+
+    def _clear_dynamic_locks(self, _point: object) -> None:
+        self.dynamic_input.clear_locks()
+
+    def _activate_command_transform(self, operation: str) -> bool:
+        self._start_transform(operation)
+        return self.canvas.active_transform == operation
+
     def _apply_transform(self, operation: str) -> None:
         self.canvas.cancel_transform()
         error = self.canvas.transform_selection_error(operation)
         if error:
             self.canvas.message = error
             self.canvas.changed.emit()
+            return
+        if operation == "move" and any(
+            entity.entity_id in self.canvas.selected_entity_ids
+            for entity, _layer in self.canvas.background_entities
+        ):
+            delta = (self.delta_u_field.value(), self.delta_v_field.value())
+            if math.hypot(*delta) <= 1e-9:
+                self.status_label.setText("请指定非零 ΔU / ΔV。")
+                return
+            self.canvas.committed_move_requested.emit(tuple(self.canvas.selected_entity_ids), delta)
+            return
+        if operation == "rotate" and any(
+            entity.entity_id in self.canvas.selected_entity_ids
+            for entity, _layer in self.canvas.background_entities
+        ):
+            center = (self.center_u_field.value(), self.center_v_field.value())
+            error = self.canvas.rotation_draft_error(center, self.angle_field.value())
+            if error:
+                self.canvas.message = error
+                self.canvas.changed.emit()
+                return
+            self.canvas.committed_rotation_requested.emit(
+                tuple(self.canvas.selected_entity_ids), center, self.angle_field.value()
+            )
+            return
+        if operation == "mirror" and any(
+            entity.entity_id in self.canvas.selected_entity_ids
+            for entity, _layer in self.canvas.background_entities
+        ):
+            start = (self.center_u_field.value(), self.center_v_field.value())
+            end = (
+                (start[0] + 1.0, start[1])
+                if self.mirror_axis_combo.currentText() == "水平轴"
+                else (start[0], start[1] + 1.0)
+            )
+            if self.mirror_keep_source_check.isChecked():
+                try:
+                    updated = self.canvas.mirror_selected_to_draft(start, end)
+                except ValueError as exc:
+                    self.status_label.setText(str(exc))
+                    return
+                self.canvas.message = "已镜像所选元素；副本获得新的草图身份。"
+                self.canvas.replace_draft_entities(updated, select_new=True)
+            else:
+                error = self.canvas.mirror_draft_error(start, end)
+                if error:
+                    self.canvas.message = error
+                    self.canvas.changed.emit()
+                    return
+                self.canvas.committed_mirror_requested.emit(
+                    tuple(self.canvas.selected_entity_ids), start, end
+                )
+            return
+        if operation == "copy" and any(
+            entity.entity_id in self.canvas.selected_entity_ids
+            for entity, _layer in self.canvas.background_entities
+        ):
+            delta = (self.delta_u_field.value(), self.delta_v_field.value())
+            if math.hypot(*delta) <= 1e-9:
+                self.status_label.setText("请指定非零 ΔU / ΔV。")
+                return
+            try:
+                updated = self.canvas.copy_selected_to_draft(delta)
+            except ValueError as exc:
+                self.status_label.setText(str(exc))
+                return
+            self.canvas.message = "已复制所选元素；副本获得新的草图身份。"
+            self.canvas.replace_draft_entities(updated, select_new=True)
             return
         selected_ids = tuple(
             entity.entity_id

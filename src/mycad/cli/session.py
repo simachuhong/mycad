@@ -48,7 +48,7 @@ Subcommands:
   validate <file>         Validate a plan (.json) or script (.txt) without executing
   commands [--json]       List registered commands
   plugins                 List loaded plugins and skipped ones
-  gui                     Open the five-zone main window (Qt event loop)
+  gui [archive]           Open the desktop, optionally loading a document
   help                    Show this help text
 """
 
@@ -493,6 +493,8 @@ class CliSession:
                 entry = asdict(command)
                 if not command.amendments:
                     del entry["amendments"]
+                if command.instance_id is None:
+                    del entry["instance_id"]
                 entries.append(entry)
             self._say(json.dumps({"commands": entries}, ensure_ascii=False))
             return 0

@@ -462,12 +462,25 @@ def test_hole_blind_on_minus_z_face_drills_into_material() -> None:
     assert _volume(kernel) == pytest.approx(20**3 - math.pi * 2**2 * 5, abs=VOLUME_TOLERANCE_MM3)
 
 
-def test_hole_cylindrical_target_face_raises_target_not_plane() -> None:
+def test_hole_cylindrical_target_face_drills_radial_through_hole() -> None:
     kernel = BuildKernel()
     _cylinder_flange_blank(kernel)
     params = _hole_params("+Z", 6.0, {"kind": "through_all"})
-    params["target_face"] = {"surface": "cylinder", "rank": 0}
-    with pytest.raises(TopologyReferenceError, match="target-not-plane"):
+    params["target_face"] = {"surface": "cylinder", "axis": "+Z", "rank": 0}
+    params["position"] = {"kind": "point", "point": [0.0, 40.0, 0.0]}
+    before = _volume(kernel)
+    kernel.apply("feature.hole", params)
+    assert kernel.geometry_check().is_valid
+    assert kernel.geometry_check().solid_count == 1
+    assert 0 < _volume(kernel) < before
+
+
+def test_hole_cylindrical_target_requires_explicit_point() -> None:
+    kernel = BuildKernel()
+    _cylinder_flange_blank(kernel)
+    params = _hole_params("+Z", 6.0, {"kind": "through_all"})
+    params["target_face"] = {"surface": "cylinder", "axis": "+Z", "rank": 0}
+    with pytest.raises(ValidationError, match="point"):
         kernel.apply("feature.hole", params)
 
 

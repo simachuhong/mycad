@@ -27,7 +27,7 @@ from mycad.ui.cad_icons import set_button_icon
 from mycad.ui.command_strip import install_command_strip
 from mycad.ui.modeling_handles import DimensionHandle, dimension_handle
 
-_MODE_OPTIONS = (("新建", "new"), ("添加", "add"), ("切除", "cut"))
+_MODE_OPTIONS = (("替换", "new"), ("添加", "add"), ("切除", "cut"))
 _PROFILE_OPTIONS = (("圆形", "circle"), ("矩形", "rect"))
 _DEPTH_OPTIONS = (("盲孔", "blind"), ("贯穿", "through_all"))
 _TOOL_OPTIONS = (("长方体", "box"), ("圆柱体", "cylinder"))
@@ -90,6 +90,8 @@ class ModelingCommandBar(QToolBar):
     dimension_changed = Signal()
     distance_accepted = Signal()
     distance_input_validity_changed = Signal(bool)
+    select_source_requested = Signal()
+    position_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("建模命令", parent)
@@ -107,9 +109,11 @@ class ModelingCommandBar(QToolBar):
         self._content: QWidget | None = None
         self._commit_button: QPushButton | None = None
         self._cancel_button: QPushButton | None = None
+        self._select_source_button: QPushButton | None = None
         self._preview_label: QLabel | None = None
         self._selection_label: QLabel | None = None
         self._sketches: dict[str, Sketch] = {}
+        self._selected_region: tuple[str, tuple[str, ...]] | None = None
         self.setFixedHeight(42)
 
     @property
@@ -129,10 +133,12 @@ class ModelingCommandBar(QToolBar):
 
         self._clear_controls()
         self._command_id = command_id
+        self._selected_region = None
         self._sketches = {sketch.sketch_id: sketch for sketch in sketches}
         self._active_dimension = {
             "feature.box": "size_z",
             "feature.cylinder": "height",
+            "feature.sphere": "radius",
             "feature.extrude": "distance",
             "feature.revolve": "angle_deg",
             "modify.chamfer": "distance",
@@ -162,6 +168,25 @@ class ModelingCommandBar(QToolBar):
             self._number(layout, "radius", "半径", 5.0)
             self._number(layout, "height", "高度", 10.0)
             self._mode(layout)
+        elif command_id == "feature.sphere":
+            self._number(layout, "radius", "半径", 10.0)
+            for axis in "xyz":
+                coordinate = self._number(
+                    layout,
+                    f"center_{axis}",
+                    axis.upper(),
+                    0.0,
+                    minimum=-1_000_000.0,
+                    allow_zero=True,
+                )
+                coordinate.setDecimals(6)
+            position = QPushButton("定位球心", content)
+            position.clicked.connect(self.position_requested)
+            layout.addWidget(position)
+            self._mode(layout)
+            self._controls["mode"].setToolTip(
+                "替换删除当前实体；添加合并相交实体或保留分离实体；切除从当前实体中减去球体。"
+            )
         elif command_id in {"feature.extrude", "feature.revolve"}:
             if command_id == "feature.extrude":
                 self._combo(
@@ -201,6 +226,13 @@ class ModelingCommandBar(QToolBar):
                     ),
                     "",
                 )
+            self._combo(
+                layout,
+                "sketchRegion",
+                "区域",
+                (("全部区域", "all"), ("选中区域", "selected")),
+                "all",
+            )
             self._combo(layout, "profileType", "截面", _PROFILE_OPTIONS, "circle")
             self._number(layout, "radius", "R", 5.0)
             self._number(layout, "profile_width", "宽", 10.0)
@@ -377,6 +409,12 @@ class ModelingCommandBar(QToolBar):
         self._selection_label.setToolTip(selection_prompt)
         layout.addSpacing(6)
         layout.addWidget(self._selection_label)
+        select_source = QPushButton("选择源对象", content)
+        select_source.setObjectName("modelingSelectSource")
+        select_source.setToolTip("返回源模型后选择对象，预览将重新生成。")
+        select_source.clicked.connect(self.select_source_requested)
+        layout.addWidget(select_source)
+        self._select_source_button = select_source
         self._preview_label = QLabel("等待输入", content)
         self._preview_label.setObjectName("modelingPreviewStatus")
         layout.addWidget(self._preview_label)
@@ -412,6 +450,12 @@ class ModelingCommandBar(QToolBar):
                 "radius": self._number_value("radius"),
                 "height": self._number_value("height"),
                 "center": list(self._placement_point),
+                "mode": self._choice("mode"),
+            }
+        if command_id == "feature.sphere":
+            return {
+                "radius": self._number_value("radius"),
+                "center": [self._number_value(f"center_{axis}") for axis in "xyz"],
                 "mode": self._choice("mode"),
             }
         if command_id == "modify.chamfer":
@@ -489,7 +533,7 @@ class ModelingCommandBar(QToolBar):
                 }
             if command_id == "feature.extrude" and self._choice("extrudeSource") == "sketch":
                 extrude_sketch_params: dict[str, object] = {
-                    "profile": {"type": "sketch", "sketch_id": self._choice("sketchProfile")},
+                    "profile": self._sketch_profile(),
                     "mode": self._choice("mode"),
                     "extent_mode": self._choice("extentMode"),
                 }
@@ -498,7 +542,7 @@ class ModelingCommandBar(QToolBar):
                 return extrude_sketch_params
             if command_id == "feature.revolve" and self._choice("revolveSource") == "sketch":
                 sketch_params: dict[str, object] = {
-                    "profile": {"type": "sketch", "sketch_id": self._choice("sketchProfile")},
+                    "profile": self._sketch_profile(),
                     "angle_deg": self._number_value("angle_deg"),
                     "mode": self._choice("mode"),
                 }
@@ -582,6 +626,12 @@ class ModelingCommandBar(QToolBar):
         if len(point) != 3:
             raise ValueError("workplane point requires three coordinates")
         self._placement_point = (float(point[0]), float(point[1]), float(point[2]))
+        if self._command_id == "feature.sphere":
+            for axis, value in zip("xyz", point, strict=True):
+                control = self._controls[f"center_{axis}"]
+                if isinstance(control, QDoubleSpinBox):
+                    with QSignalBlocker(control):
+                        control.setValue(float(value))
         self._emit_values()
 
     def set_selection_status(self, message: str) -> None:
@@ -708,6 +758,8 @@ class ModelingCommandBar(QToolBar):
             self._commit_button.setProperty("busy", busy)
         if self._cancel_button is not None:
             self._cancel_button.setEnabled(not busy)
+        if self._select_source_button is not None:
+            self._select_source_button.setEnabled(not busy)
 
     def is_busy(self) -> bool:
         """Whether a commit is currently being written."""
@@ -725,6 +777,7 @@ class ModelingCommandBar(QToolBar):
         self._content = None
         self._commit_button = None
         self._cancel_button = None
+        self._select_source_button = None
         self._preview_label = None
         self._selection_label = None
 
@@ -733,6 +786,7 @@ class ModelingCommandBar(QToolBar):
         return {
             "feature.box": "长方体",
             "feature.cylinder": "圆柱体",
+            "feature.sphere": "球体",
             "feature.extrude": "拉伸",
             "feature.revolve": "旋转",
             "feature.hole": "孔",
@@ -939,6 +993,27 @@ class ModelingCommandBar(QToolBar):
         self.distance_input_validity_changed.emit(self.input_valid())
         self._emit_values()
 
+    def set_selected_sketch_region(self, sketch_id: str, entity_ids: tuple[str, ...]) -> None:
+        """Offer the selected region while retaining an explicit all-regions option."""
+        self._selected_region = (sketch_id, entity_ids)
+        control = cast("QComboBox", self._controls["sketchRegion"])
+        control.setCurrentIndex(control.findData("selected"))
+        if self._command_id == "feature.extrude":
+            self._set_extrude_source_visibility()
+        else:
+            self._set_revolve_source_visibility()
+
+    def _sketch_profile(self) -> dict[str, object]:
+        sketch_id = self._choice("sketchProfile")
+        profile: dict[str, object] = {"type": "sketch", "sketch_id": sketch_id}
+        if (
+            self._selected_region is not None
+            and self._selected_region[0] == sketch_id
+            and self._choice("sketchRegion") == "selected"
+        ):
+            profile["boundary_entity_ids"] = list(self._selected_region[1])
+        return profile
+
     def _set_extrude_source_visibility(self) -> None:
         is_face = self._choice("extrudeSource") == "face"
         is_sketch = self._choice("extrudeSource") == "sketch"
@@ -957,6 +1032,11 @@ class ModelingCommandBar(QToolBar):
         to_face = is_sketch and current_extent == "to_face"
         self._field_containers["profileType"].setVisible(not is_face and not is_sketch)
         self._field_containers["sketchProfile"].setVisible(is_sketch)
+        self._field_containers["sketchRegion"].setVisible(
+            is_sketch
+            and self._selected_region is not None
+            and self._selected_region[0] == self._choice("sketchProfile")
+        )
         self._field_containers["mode"].setVisible(not is_face)
         self._field_containers["radius"].setVisible(not is_face and not is_sketch)
         self._field_containers["profile_width"].setVisible(not is_face and not is_sketch)
@@ -969,6 +1049,11 @@ class ModelingCommandBar(QToolBar):
         for key in ("profileType", "radius", "profile_width", "profile_height"):
             self._field_containers[key].setVisible(not is_sketch)
         self._field_containers["sketchProfile"].setVisible(is_sketch)
+        self._field_containers["sketchRegion"].setVisible(
+            is_sketch
+            and self._selected_region is not None
+            and self._selected_region[0] == self._choice("sketchProfile")
+        )
         use_sketch_axis = is_sketch and self._choice("axisSource") == "sketch_line"
         self._field_containers["axisSource"].setVisible(is_sketch)
         self._field_containers["axis"].setVisible(not use_sketch_axis)

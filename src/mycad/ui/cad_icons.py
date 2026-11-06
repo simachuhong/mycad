@@ -17,6 +17,7 @@ from mycad.ui.theme import ThemeName
 
 ICON_NAMES = (
     "draw-select",
+    "draw-point",
     "draw-line",
     "draw-polyline",
     "draw-rectangle",
@@ -105,6 +106,7 @@ ICON_NAMES = (
     "shaded",
     "shaded-edges",
     "sketch",
+    "sphere",
     "undo",
     "units",
     "vertex",
@@ -189,6 +191,7 @@ COMMAND_ICONS: dict[str, str] = {
     "drawing.layers.set": "layers",
     "feature.box": "box",
     "feature.cylinder": "cylinder",
+    "feature.sphere": "sphere",
     "feature.extrude": "extrude",
     "feature.revolve": "revolve",
     "feature.hole": "hole",

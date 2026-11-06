@@ -5,7 +5,7 @@
 from uuid import uuid4
 
 import pytest
-from build123d import Box, Compound, Cylinder, Pos, fillet
+from build123d import Box, Compound, Cylinder, Edge, Pos, fillet
 
 from mycad.app import build_app, new_document
 from mycad.core.drawing_projection import (
@@ -22,6 +22,37 @@ def request(
     normal: tuple[float, float, float] = (0, 0, 1), up: tuple[float, float, float] = (0, 1, 0)
 ) -> DrawingProjectionRequest:
     return DrawingProjectionRequest(uuid4(), "fixture", 1, ViewBasis.from_normal_up(normal, up))
+
+
+def test_projection_edge_length_filter_matches_exact_edge_lengths() -> None:
+    from mycad.geom.drawing_projection import edge_long_enough
+
+    edges = (
+        Edge.make_line((0, 0, 0), (4, 3, 0)),
+        Edge.make_circle(2),
+        Edge.make_ellipse(4, 2),
+        Edge.make_spline([(0, 0, 0), (1, 2, 0), (3, 0, 0)]),
+        Edge.make_bezier((0, 0, 0), (1, 2, 0), (3, 0, 0)),
+    )
+    for edge in edges:
+        for threshold in (edge.length * 0.99, edge.length, edge.length * 1.01):
+            assert edge_long_enough(edge, threshold) == (edge.length >= threshold)
+
+
+def test_projection_curve_kind_matches_build123d() -> None:
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+    from mycad.geom.drawing_projection import projection_curve_kind
+
+    edges = (
+        Edge.make_line((0, 0, 0), (4, 3, 0)),
+        Edge.make_circle(2),
+        Edge.make_ellipse(4, 2),
+        Edge.make_spline([(0, 0, 0), (1, 2, 0), (3, 0, 0)]),
+        Edge.make_bezier((0, 0, 0), (1, 2, 0), (3, 0, 0)),
+    )
+    for edge in edges:
+        assert projection_curve_kind(edge, BRepAdaptor_Curve(edge.wrapped)) == edge.geom_type
 
 
 def test_asymmetric_three_views_have_expected_coordinates() -> None:

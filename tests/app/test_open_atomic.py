@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from mycad.app import build_app, new_document, open_app_document
+from mycad.core.command_identity import ExecutionContext
 from mycad.core.exceptions import GeometryBuildError, MycadError
 from mycad.core.persistence import save_document
 from mycad.geom.kernel import BuildKernel
@@ -92,20 +93,23 @@ def test_geometry_rebuild_failure_preserves_active_state(
     path = tmp_path / "geometry-failure.mc.json"
     _write_archive(path, None)
     active = _active_model(services)
-    original_apply = BuildKernel.apply
+    original_apply = BuildKernel.apply_with_context
     replay_count = 0
 
     def fail_second_candidate_apply(
-        kernel: BuildKernel, command_id: str, params: Mapping[str, object]
+        kernel: BuildKernel,
+        command_id: str,
+        params: Mapping[str, object],
+        context: ExecutionContext,
     ) -> None:
         nonlocal replay_count
         if kernel is not services.kernel:
             replay_count += 1
             if replay_count == 2:
                 raise GeometryBuildError("candidate geometry failure")
-        original_apply(kernel, command_id, params)
+        original_apply(kernel, command_id, params, context)
 
-    monkeypatch.setattr(BuildKernel, "apply", fail_second_candidate_apply)
+    monkeypatch.setattr(BuildKernel, "apply_with_context", fail_second_candidate_apply)
 
     with pytest.raises(GeometryBuildError, match="candidate geometry failure"):
         open_app_document(services, path)

@@ -9,21 +9,24 @@ dispatch branch stays Qt-free.
 
 from __future__ import annotations
 
+from functools import partial
+from pathlib import Path
+
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from mycad.app import build_app, new_workspace_document
+from mycad.app import build_app
 from mycad.ui.document_session import DocumentSession
 from mycad.ui.main_window import MainWindow
 
 
-def run_gui() -> int:
-    """Compose services, seed one fresh document, run the window's loop."""
+def run_gui(path: Path | None = None) -> int:
+    """Compose services and open the start page without creating a document."""
     qapp = QApplication.instance() or QApplication([])
     services = build_app()
-    # Fresh document; kernel reset stays exclusive to mycad.app.new_document,
-    # and the window must come after it: the viewport takes the kernel port.
-    loaded = new_workspace_document(services, kind="part")
     window = MainWindow(services=services, document_session=DocumentSession())
-    window.bind_document(loaded)
+    window.show_start_page()
     window.show()
+    if path is not None:
+        QTimer.singleShot(0, partial(window.open_document_path, path.absolute()))
     return qapp.exec()

@@ -101,6 +101,52 @@ def test_export_action_uses_current_clean_scene_and_blocks_stale(
     assert "更新" in bench.hint.text()
 
 
+@pytest.mark.parametrize("operation", ["move", "delete"])
+def test_output_is_blocked_during_uncommitted_view_edit(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingSheet, DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 80, "size_y": 30, "size_z": 10})
+    sheet = DrawingSheet(uuid4())
+    view = DrawingView(uuid4(), sheet.sheet_id)
+    loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(sheet))
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.updates.sync(
+        bench.session_id, services.kernel.drawing_source_fingerprint, {view.view_id: view.basis}
+    )
+    batch = bench.updates.begin()
+    assert batch is not None
+    bench.updates.finish(batch, (services.kernel.project_drawing(batch.requests[0]),))
+    assert not bench.output_scene().issues
+    bench.canvas.select_view(view.view_id)
+    if operation == "move":
+        bench.canvas.view_dragged.emit(view.view_id, "move", (90.0, 100.0), False)
+    else:
+        bench.preview_delete()
+    with pytest.raises(ValueError, match="预览"):
+        bench.output_scene()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    assert not bench.output_scene().issues
+
+
 @pytest.mark.parametrize("kind", ["pdf", "dxf"])
 def test_writer_failure_keeps_original_and_cleans_temporary(
     qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str

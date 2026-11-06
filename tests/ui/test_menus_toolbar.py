@@ -22,7 +22,7 @@ from mycad.ui import main_window
 from mycad.ui.main_window import MainWindow
 
 #: UI初稿 §3 verbatim.
-MENU_TITLES = ("文件", "编辑", "视图", "特征", "工具", "智能体", "帮助")
+MENU_TITLES = ("文件", "编辑", "视图", "特征", "草图", "工具", "智能体", "帮助")
 
 
 def _top_level_menu_labels(win: MainWindow) -> tuple[str, ...]:
@@ -35,7 +35,7 @@ def test_application_settings_are_isolated_from_user_configuration(tmp_path: Pat
     assert Path(settings.fileName()).resolve().is_relative_to(tmp_path.resolve())
 
 
-def test_seven_menus_in_order(qapp: QApplication) -> None:
+def test_menus_in_order(qapp: QApplication) -> None:
     assert _top_level_menu_labels(MainWindow()) == MENU_TITLES
 
 
@@ -85,6 +85,7 @@ def test_navigation_and_selection_actions_change_only_view_state(
     win.orientation_actions["top"].trigger()
     win.projection_actions["perspective"].trigger()
     win.selection_filter_actions["face"].trigger()
+    win.act_show_coordinate_axes.setChecked(False)
     win.act_show_coordinate_axes.trigger()
     win.act_show_xy_grid.trigger()
 
@@ -173,32 +174,21 @@ def test_real_bus_probe_flips_status_fields(qapp: QApplication) -> None:
 
 
 #: 主工具栏保留文件、视图和通用操作；建模入口独立。
-TOOLBAR_TEXTS = (
-    "二维绘图",
-    "三维视图",
-    "新建",
-    "打开",
-    "保存",
-    "撤销",
-    "重做",
-    "适应窗口",
-    "返回当前模型",
-    "着色边线",
-    "查看待确认计划",
-)
+TOOLBAR_TEXTS = ("新建", "打开", "保存", "撤销", "重做", "⋯")
 
 
 def test_toolbar_carries_the_high_frequency_actions(qapp: QApplication) -> None:
     win = MainWindow()
-    actions = [action for action in win.main_toolbar.actions() if not action.isSeparator()]
+    actions = [action for action in win.main_toolbar.actions() if action.text()]
     assert tuple(action.text() for action in actions) == TOOLBAR_TEXTS
-    # 菜单与工具栏共用同一批 QAction 对象：勾选/启用状态不会分叉。
-    assert actions[0] is win.act_view_2d
-    assert actions[1] is win.act_view_3d
-    assert actions[2] is win.act_new
-    assert actions[7] is win.act_fit_view
-    assert actions[8] is win.act_return_current_model
-    assert actions[9] is win.act_shaded_wireframe
+    assert actions == [
+        win.act_new,
+        win.act_open,
+        win.act_save,
+        win.act_undo,
+        win.act_redo,
+        win.act_customize_quick_access,
+    ]
 
 
 def test_render_mode_action_group_changes_only_view_presentation(qapp: QApplication) -> None:

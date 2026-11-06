@@ -17,6 +17,8 @@ from mycad.core.persistence import LoadedDocument, save_document
 from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
 
 BUILTIN_IDS: list[str] = [
+    "datum.coordinate_system.create",
+    "datum.plane.create",
     "drawing.annotation.create",
     "drawing.annotation.delete",
     "drawing.annotation.update",
@@ -27,6 +29,7 @@ BUILTIN_IDS: list[str] = [
     "drawing.sheet.create",
     "drawing.sheet.delete",
     "drawing.sheet.update",
+    "drawing.sketch.revise",
     "drawing.view.create",
     "drawing.view.delete",
     "drawing.view.update",
@@ -36,6 +39,7 @@ BUILTIN_IDS: list[str] = [
     "feature.hole",
     "feature.hole_pattern",
     "feature.revolve",
+    "feature.sphere",
     "modify.body_pattern",
     "modify.body_transform",
     "modify.boolean_bodies",
@@ -49,6 +53,7 @@ BUILTIN_IDS: list[str] = [
     "sketch.constraint.add",
     "sketch.constraint.update",
     "sketch.create",
+    "sketch.revise",
 ]
 
 

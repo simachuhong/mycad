@@ -13,6 +13,18 @@ from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
 from mycad.ui.modeling_toolbar import ModelingCommandBar
 
 
+def test_source_selection_cannot_interrupt_running_model_write(qtbot: QtBot) -> None:
+    bar = ModelingCommandBar()
+    qtbot.addWidget(bar)
+    bar.configure("feature.hole")
+    button = bar.findChild(QPushButton, "modelingSelectSource")
+    assert button is not None
+    bar.set_busy(True)
+    assert not button.isEnabled()
+    bar.set_busy(False)
+    assert button.isEnabled()
+
+
 def test_chamfer_command_bar_exposes_positive_setback_distance(qtbot: QtBot) -> None:
     bar = ModelingCommandBar()
     qtbot.addWidget(bar)
@@ -33,6 +45,8 @@ def test_narrow_command_bar_keeps_confirmation_visible(qtbot: QtBot) -> None:
     bar.configure("feature.hole_pattern")
     window.resize(683, 384)
     window.show()
+    window.activateWindow()
+    qtbot.waitUntil(window.isActiveWindow)
     qtbot.wait(50)
     assert window.width() <= 683
     for name in ("modelingCommitButton", "modelingCancelButton"):
@@ -44,6 +58,7 @@ def test_narrow_command_bar_keeps_confirmation_visible(qtbot: QtBot) -> None:
     assert field is not None
     field.setFocus(Qt.FocusReason.TabFocusReason)
     qtbot.wait(30)
+    assert field.hasFocus()
     assert field.visibleRegion().boundingRect().width() >= field.width() - 2
 
 
@@ -360,3 +375,22 @@ def test_through_hole_drops_the_blind_depth_value(qtbot: QtBot) -> None:
     depth_kind.setCurrentIndex(depth_kind.findData("through_all"))
 
     assert bar.values()["depth"] == {"kind": "through_all"}
+
+
+def test_sphere_command_bar_supports_world_center_and_radius(qtbot: QtBot) -> None:
+    bar = ModelingCommandBar()
+    qtbot.addWidget(bar)
+    bar.configure("feature.sphere")
+    for name, value in (("center_x", 3.0), ("center_y", -4.0), ("center_z", 5.0)):
+        field = bar.findChild(QDoubleSpinBox, name)
+        assert field is not None
+        field.setValue(value)
+    assert bar.values() == {"radius": 10.0, "center": [3.0, -4.0, 5.0], "mode": "new"}
+
+
+def test_sphere_adopted_position_keeps_six_decimal_places(qtbot: QtBot) -> None:
+    bar = ModelingCommandBar()
+    qtbot.addWidget(bar)
+    bar.configure("feature.sphere")
+    bar.set_placement_point((1.234567, -2.345678, 3.456789))
+    assert bar.values()["center"] == pytest.approx([1.234567, -2.345678, 3.456789], abs=1e-9)

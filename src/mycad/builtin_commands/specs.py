@@ -18,8 +18,11 @@ definition (#round11-3); inline boolean commands deliberately accept no
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import cast
 
+from mycad.builtin_commands.bound_hole_spec import BOUND_HOLE_SPEC
+from mycad.builtin_commands.datum_specs import DATUM_SPECS, PLANE
 from mycad.builtin_commands.drawing_specs import DRAWING_COMMAND_SPECS
 from mycad.builtin_commands.reference_specs import REFERENCE_COMMAND_SPECS
 from mycad.commands.spec import CliSyntax, CommandSpec
@@ -65,6 +68,24 @@ _BASE_BUILTIN_COMMAND_SPECS: tuple[CommandSpec, ...] = (
             "additionalProperties": False,
         },
         cli=CliSyntax(verb_aliases=("cylinder",)),
+        undo_compensation="history_replay",
+    ),
+    CommandSpec(
+        id="feature.sphere",
+        version=1,
+        summary_en="Create a sphere",
+        label_zh="球体",
+        params_schema={
+            "type": "object",
+            "properties": {
+                "radius": {"$ref": "#/$defs/Positive"},
+                "center": {"$ref": "#/$defs/Center3"},
+                "mode": {"$ref": "#/$defs/Mode"},
+            },
+            "required": ["radius"],
+            "additionalProperties": False,
+        },
+        cli=CliSyntax(verb_aliases=("sphere",)),
         undo_compensation="history_replay",
     ),
     CommandSpec(
@@ -983,6 +1004,28 @@ def _sketch_constraint_add_v3_schema() -> dict[str, object]:
     return schema
 
 
+def _sketch_revise_schema() -> dict[str, object]:
+    """Freeze local entities and existing relations for a single sketch revision."""
+    create = _sketch_create_v3_schema()
+    create_properties = cast("dict[str, object]", create["properties"])
+    constraint = _sketch_constraint_add_v3_schema()
+    constraint_properties = cast("dict[str, object]", constraint["properties"])
+    return {
+        "type": "object",
+        "properties": {
+            "sketch_id": deepcopy(create_properties["sketch_id"]),
+            "base_state_sha256": {"type": "string", "minLength": 64, "maxLength": 64},
+            "entities": deepcopy(create_properties["entities"]),
+            "constraints": {
+                "type": "array",
+                "items": deepcopy(constraint_properties["constraint"]),
+            },
+        },
+        "required": ["sketch_id", "base_state_sha256", "entities", "constraints"],
+        "additionalProperties": False,
+    }
+
+
 def _drawing_layers_schema() -> dict[str, object]:
     sketch = _sketch_create_v2_schema()
     properties = cast("dict[str, object]", sketch["properties"])
@@ -1014,8 +1057,86 @@ def _drawing_layers_schema() -> dict[str, object]:
     }
 
 
-BUILTIN_COMMAND_SPECS = (
+def _sketch_create_v4_schema() -> dict[str, object]:
+    schema = _sketch_create_v3_schema()
+    properties = cast("dict[str, object]", schema["properties"])
+    properties.pop("frame")
+    properties.pop("support_face", None)
+    properties["support"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["plane", "offset_uv_mm", "rotation_deg", "flip_normal"],
+        "properties": {
+            "plane": PLANE,
+            "offset_uv_mm": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2,
+            },
+            "rotation_deg": {"type": "number"},
+            "flip_normal": {"type": "boolean"},
+        },
+    }
+    required = cast("list[str]", schema["required"])
+    required.remove("frame")
+    required.append("support")
+    return {"oneOf": [_sketch_create_v3_schema(), schema]}
+
+
+def _with_point_entities(schema: dict[str, object]) -> dict[str, object]:
+    properties = cast("dict[str, object]", schema["properties"])
+    entity_array = cast("dict[str, object]", properties["entities"])
+    items = cast("dict[str, object]", entity_array["items"])
+    variants = cast("list[object]", items["oneOf"])
+    variants.append(
+        {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "minLength": 32, "maxLength": 36},
+                "kind": {"const": "point"},
+                "construction": {"type": "boolean"},
+                "layer_name": {"type": "string", "minLength": 1, "maxLength": 255},
+                "position_mm": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+            },
+            "required": ["entity_id", "kind", "construction", "layer_name", "position_mm"],
+            "additionalProperties": False,
+        }
+    )
+    return schema
+
+
+def _sketch_create_v5_schema() -> dict[str, object]:
+    variants = cast("list[dict[str, object]]", _sketch_create_v4_schema()["oneOf"])
+    return {"oneOf": [_with_point_entities(variant) for variant in variants]}
+
+
+_RELEASED_COMMAND_SPECS = (
     *_BASE_BUILTIN_COMMAND_SPECS,
+    *DATUM_SPECS,
+    CommandSpec(
+        id="sketch.create",
+        version=4,
+        summary_en="Create a datum-associated sketch",
+        label_zh="创建关联草图",
+        params_schema=_sketch_create_v4_schema(),
+        cli=CliSyntax(verb_aliases=("sketch-create",)),
+        min_archive_version=6,
+    ),
+    CommandSpec(
+        id="sketch.create",
+        version=5,
+        summary_en="Create a sketch with positioning points",
+        label_zh="创建含点草图",
+        params_schema=_sketch_create_v5_schema(),
+        cli=CliSyntax(verb_aliases=("sketch-create",)),
+        min_archive_version=6,
+    ),
     CommandSpec(
         id="feature.extrude",
         version=4,
@@ -1106,6 +1227,66 @@ BUILTIN_COMMAND_SPECS = (
         undo_compensation="history_replay",
     ),
     CommandSpec(
+        id="sketch.constraint.add",
+        version=4,
+        summary_en="Constrain an associated sketch using its local state",
+        label_zh="添加关联草图约束",
+        params_schema=_sketch_constraint_add_v3_schema(),
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+        undo_compensation="history_replay",
+    ),
+    CommandSpec(
+        id="sketch.constraint.update",
+        version=2,
+        summary_en="Revise an associated sketch dimension using its local state",
+        label_zh="修改关联草图尺寸",
+        params_schema=_sketch_constraint_add_v3_schema(),
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+        undo_compensation="history_replay",
+    ),
+    CommandSpec(
+        id="sketch.revise",
+        version=1,
+        summary_en="Revise existing sketch geometry and regenerate its consumers",
+        label_zh="修改草图几何",
+        params_schema=_sketch_revise_schema(),
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+        undo_compensation="history_replay",
+    ),
+    CommandSpec(
+        id="sketch.revise",
+        version=2,
+        summary_en="Revise sketch geometry including positioning points",
+        label_zh="修改含点草图",
+        params_schema=_with_point_entities(_sketch_revise_schema()),
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+    ),
+    CommandSpec(
+        id="drawing.sketch.revise",
+        version=1,
+        summary_en="Revise multiple sketches as one atomic operation",
+        label_zh="批量修改草图几何",
+        params_schema={
+            "type": "object",
+            "properties": {
+                "revisions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": _with_point_entities(_sketch_revise_schema()),
+                }
+            },
+            "required": ["revisions"],
+            "additionalProperties": False,
+        },
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+        undo_compensation="history_replay",
+    ),
+    CommandSpec(
         id="drawing.layers.set",
         version=1,
         summary_en="Set shared drawing layers and dimension defaults",
@@ -1117,4 +1298,41 @@ BUILTIN_COMMAND_SPECS = (
     ),
     *DRAWING_COMMAND_SPECS,
     *REFERENCE_COMMAND_SPECS,
+    BOUND_HOLE_SPEC,
+)
+
+
+def _region_schema(value: object) -> object:
+    """Copy a released schema while replacing only its sketch profile references."""
+    if isinstance(value, dict):
+        return {key: _region_schema(item) for key, item in cast("dict[str, object]", value).items()}
+    if isinstance(value, list):
+        return [_region_schema(item) for item in cast("list[object]", value)]
+    if isinstance(value, str):
+        return {
+            "#/$defs/SketchProfileReference": "#/$defs/SketchRegionProfileReference",
+            "#/$defs/SketchExtrudeProfile": "#/$defs/RegionSketchExtrudeProfile",
+            "#/$defs/SketchRevolveProfile": "#/$defs/RegionSketchRevolveProfile",
+        }.get(value, value)
+    return value
+
+
+def _region_spec(command_id: str, source_version: int, target_version: int) -> CommandSpec:
+    source = next(
+        spec
+        for spec in _RELEASED_COMMAND_SPECS
+        if spec.id == command_id and spec.version == source_version
+    )
+    return replace(
+        source,
+        version=target_version,
+        summary_en=f"{source.summary_en}; optionally select a sketch region",
+        params_schema=cast("dict[str, object]", _region_schema(source.params_schema)),
+    )
+
+
+BUILTIN_COMMAND_SPECS = (
+    *_RELEASED_COMMAND_SPECS,
+    _region_spec("feature.extrude", 4, 5),
+    _region_spec("feature.revolve", 3, 4),
 )

@@ -5,13 +5,73 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QVector3D
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QImage, QMouseEvent, QRegion, QVector3D
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QWidget
 from pytestqt.qtbot import QtBot
 
 from mycad.app import build_app
 from mycad.ui.theme import ThemeName
 from mycad.ui.viewport import GLViewport, ProjectionMode, ViewOrientation, camera_basis
+
+
+def test_world_origin_is_visible_and_tracks_world_position(qtbot: QtBot) -> None:
+    view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    assert view.coordinate_axes_visible()
+    assert view.coordinate_indicator.origin_visible
+    assert view.project_world_point((0, 0, 0)) == pytest.approx((400, 300))
+    view.setCameraPosition(pos=QVector3D(10, 0, 0))
+    assert view.project_world_point((0, 0, 0)) != pytest.approx((400, 300))
+
+
+def test_world_origin_snap_for_3d_placement(qtbot: QtBot) -> None:
+    view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.set_orientation("top")
+    origin = view.project_world_point((0, 0, 0))
+    assert origin is not None
+    assert view.placement_point_at(origin[0] + 5, origin[1]) == (0, 0, 0)
+    assert view.placement_point_at(origin[0] + 5, origin[1], bypass_snap=True) != (0, 0, 0)
+    assert view.placement_point_at(origin[0] + 20, origin[1]) != (0, 0, 0)
+    view.set_coordinate_axes_visible(False)
+    assert view.placement_point_at(origin[0] + 5, origin[1]) != (0, 0, 0)
+
+
+def test_placement_click_snaps_to_visible_world_origin(qtbot: QtBot) -> None:
+    view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.set_orientation("top")
+    view.set_modeling_context_active(True)
+    view.set_placement_context_active(True)
+    view.show()
+    qtbot.wait(50)
+    points: list[object] = []
+
+    def record(point: object, _position: QPoint) -> None:
+        points.append(point)
+
+    view.workplane_point_picked.connect(record)
+    QApplication.sendEvent(
+        view,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(405, 300),
+            QPointF(405, 300),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    assert view.coordinate_indicator.origin_snap_active
+    QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(405, 300))
+    assert points == [(0, 0, 0)]
+    view.set_placement_context_active(False)
+    assert not view.coordinate_indicator.origin_snap_active
 
 
 @pytest.mark.parametrize(
@@ -125,3 +185,29 @@ def test_camera_basis_has_no_pole_discontinuity(qtbot: QtBot, elevation: float) 
         (matrix.row(0).x(), matrix.row(0).y(), matrix.row(0).z()), abs=1e-6
     )
     assert up == pytest.approx((matrix.row(1).x(), matrix.row(1).y(), matrix.row(1).z()), abs=1e-6)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_indicator_overlay_has_no_background_or_title(qtbot: QtBot, theme: ThemeName) -> None:
+    view = GLViewport(viewport_port=build_app(discoverers=[]).kernel)
+    qtbot.addWidget(view)
+    view.resize(800, 600)
+    view.set_orientation("isometric")
+    view.set_theme(theme)
+    indicator = view.coordinate_indicator
+    indicator.sync_scene()
+    image = QImage(indicator.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    indicator.render(image, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+    # The former card and title areas must leave underlying content untouched.
+    assert all(
+        image.pixelColor(x, y).alpha() == 0
+        for y in range(image.height() - 155, image.height() - 135)
+        for x in range(15, 145)
+    )
+    # The overlay still draws visible axis strokes in its original corner.
+    assert any(
+        image.pixelColor(x, y).alpha() > 0
+        for y in range(image.height() - 120, image.height() - 10)
+        for x in range(10, 150)
+    )

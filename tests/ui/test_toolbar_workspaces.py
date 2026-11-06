@@ -59,6 +59,7 @@ def test_three_dimensional_actions_have_their_own_toolbar(qtbot: QtBot) -> None:
     window = MainWindow(services=build_app(discoverers=()))
     qtbot.addWidget(window)
     window.show()
+    window.modeling_toolbar.show()
     assert window.toolBarBreak(window.modeling_toolbar)
     main_texts = {action.text() for action in window.main_toolbar.actions()}
     model_texts = {action.text() for action in window.modeling_toolbar.actions()}

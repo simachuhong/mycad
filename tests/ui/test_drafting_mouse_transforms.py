@@ -96,6 +96,102 @@ def test_command_first_selection_and_zero_delta_do_not_duplicate(qtbot: QtBot) -
     assert not canvas.has_active_edit_gesture
 
 
+@pytest.mark.parametrize("confirmation", ["enter", "space", "right_click"])
+def test_move_uses_first_point_as_displacement(qtbot: QtBot, confirmation: str) -> None:
+    draft = SketchEditorDialog()
+    qtbot.addWidget(draft)
+    draft.show()
+    canvas = draft.canvas
+    line = LineEntity(uuid4().hex, (10.0, 20.0), (20.0, 20.0))
+    canvas.replace_draft_entities((line,))
+    canvas.selected_entity_ids = {line.entity_id}
+    canvas.begin_transform("move")
+    canvas.add_coordinate_point((2.0, 3.0), exact_point=True)
+    if confirmation == "enter":
+        QTest.keyClick(canvas, Qt.Key.Key_Return)
+    elif confirmation == "space":
+        QTest.keyClick(canvas, Qt.Key.Key_Space)
+    else:
+        QTest.mouseClick(canvas, Qt.MouseButton.RightButton)
+    assert canvas.entities == [LineEntity(line.entity_id, (12.0, 23.0), (22.0, 23.0))]
+    assert not canvas.has_active_edit_gesture
+    assert canvas.undo_last_operation()
+    assert canvas.entities == [line]
+
+
+def test_move_command_first_space_finishes_selection(qtbot: QtBot) -> None:
+    draft = SketchEditorDialog()
+    qtbot.addWidget(draft)
+    draft.show()
+    canvas = draft.canvas
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    canvas.replace_draft_entities((line,))
+    canvas.begin_transform("move")
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((5.0, 0.0)))
+    QTest.keyClick(canvas, Qt.Key.Key_Space)
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    canvas.add_coordinate_point((2.0, 3.0), exact_point=True)
+    assert canvas.entities == [LineEntity(line.entity_id, (2.0, 3.0), (12.0, 3.0))]
+
+
+def test_move_pointer_obeys_ortho_but_typed_coordinates_do_not(qtbot: QtBot) -> None:
+    draft = SketchEditorDialog()
+    qtbot.addWidget(draft)
+    draft.resize(1200, 800)
+    draft.show()
+    canvas = draft.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_orthogonal_enabled(True)
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    canvas.replace_draft_entities((line,))
+    canvas.selected_entity_ids = {line.entity_id}
+    canvas.begin_transform("move")
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    target = canvas.local_to_screen((20.0, 5.0))
+    position = QPointF(target)
+    QApplication.sendEvent(
+        canvas,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            position,
+            canvas.mapToGlobal(position),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
+    preview = canvas.transform_preview_entities[0]
+    assert isinstance(preview, LineEntity)
+    assert preview.start_mm[1] == 0.0
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=target)
+    moved = canvas.entities[0]
+    assert isinstance(moved, LineEntity)
+    assert moved.start_mm[0] == pytest.approx(canvas.screen_to_local(QPointF(target))[0])
+    assert moved.start_mm[1] == 0.0
+    assert canvas.undo_last_operation()
+    canvas.begin_transform("move")
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    canvas.add_coordinate_point((20.0, 5.0), exact_point=True)
+    assert canvas.entities[0] == LineEntity(line.entity_id, (20.0, 5.0), (30.0, 5.0))
+
+
+def test_move_object_snap_takes_precedence_over_ortho(qtbot: QtBot) -> None:
+    draft = SketchEditorDialog()
+    qtbot.addWidget(draft)
+    draft.resize(1200, 800)
+    draft.show()
+    canvas = draft.canvas
+    canvas.set_orthogonal_enabled(True)
+    line = LineEntity(uuid4().hex, (0.0, 0.0), (10.0, 0.0))
+    target = LineEntity(uuid4().hex, (30.0, 20.0), (40.0, 20.0))
+    canvas.replace_draft_entities((line, target))
+    canvas.selected_entity_ids = {line.entity_id}
+    canvas.begin_transform("move")
+    canvas.add_coordinate_point((0.0, 0.0), exact_point=True)
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((30.0, 20.0)))
+    assert canvas.entities == [LineEntity(line.entity_id, (30.0, 20.0), (40.0, 20.0)), target]
+
+
 def test_spline_control_point_drawing_finishes_and_undoes(qtbot: QtBot) -> None:
     from mycad.core.sketch import SplineEntity
 

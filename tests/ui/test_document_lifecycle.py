@@ -126,7 +126,7 @@ def test_independent_drawing_new_save_and_open_roundtrip(
     assert drawing.commands == ()
     feature_actions = {action.text(): action for action in window.menu_feature.actions()}
     assert not feature_actions["拉伸"].isEnabled()
-    assert feature_actions["草图"].isEnabled()
+    assert feature_actions["创建草图"].isEnabled()
     assert window.command_palette is not None
 
     _patch_save_path(monkeypatch, target)

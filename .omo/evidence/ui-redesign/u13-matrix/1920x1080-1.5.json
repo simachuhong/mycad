@@ -1,0 +1,259 @@
+{
+  "physical": "1920x1080",
+  "scale": "1.5",
+  "platform": "xcb",
+  "windows": {
+    "home": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "2d": true,
+        "drawing": true,
+        "part": true
+      },
+      "visible_sizes": {
+        "2d": [
+          191,
+          120
+        ],
+        "drawing": [
+          204,
+          120
+        ],
+        "part": [
+          190,
+          120
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-home.png"
+    },
+    "part": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "ribbon": true,
+        "documents": true
+      },
+      "visible_sizes": {
+        "ribbon": [
+          1272,
+          178
+        ],
+        "documents": [
+          932,
+          35
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-part.png"
+    },
+    "part-sketch": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "plane": true,
+        "lock": true,
+        "line": true,
+        "finish": true,
+        "dynamic_first": true,
+        "dynamic_second": true,
+        "viewport": true
+      },
+      "visible_sizes": {
+        "plane": [
+          74,
+          31
+        ],
+        "lock": [
+          74,
+          31
+        ],
+        "line": [
+          64,
+          31
+        ],
+        "finish": [
+          90,
+          31
+        ],
+        "dynamic_first": [
+          110,
+          23
+        ],
+        "dynamic_second": [
+          110,
+          23
+        ],
+        "viewport": [
+          930,
+          330
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-part-sketch.png"
+    },
+    "bound-hole": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "confirm": true,
+        "cancel": true,
+        "preview": true,
+        "viewport": true
+      },
+      "visible_sizes": {
+        "confirm": [
+          81,
+          31
+        ],
+        "cancel": [
+          42,
+          31
+        ],
+        "preview": [
+          63,
+          31
+        ],
+        "viewport": [
+          930,
+          269
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-bound-hole.png"
+    },
+    "history-edit": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "confirm": true,
+        "cancel": true,
+        "parameters": true
+      },
+      "visible_sizes": {
+        "confirm": [
+          81,
+          31
+        ],
+        "cancel": [
+          42,
+          31
+        ],
+        "parameters": [
+          55,
+          31
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-history-edit.png"
+    },
+    "history-parameters": {
+      "logical_size": [
+        480,
+        320
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "done": true
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-history-parameters.png"
+    },
+    "drawing2d": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "canvas": true,
+        "command_input": true,
+        "document_tabs": true
+      },
+      "visible_sizes": {
+        "canvas": [
+          1266,
+          303
+        ],
+        "command_input": [
+          614,
+          31
+        ],
+        "document_tabs": [
+          1280,
+          35
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-drawing2d.png"
+    },
+    "drawing": {
+      "logical_size": [
+        1280,
+        720
+      ],
+      "screen_logical_size": [
+        1280,
+        720
+      ],
+      "device_pixel_ratio": 1.5,
+      "controls_reachable": {
+        "canvas_or_start": true,
+        "choose_source": true,
+        "document_tabs": true
+      },
+      "visible_sizes": {
+        "canvas_or_start": [
+          1012,
+          423
+        ],
+        "choose_source": [
+          345,
+          36
+        ],
+        "document_tabs": [
+          1280,
+          35
+        ]
+      },
+      "image": "/media/sima/Data/projects/MyCAD/.omo/evidence/ui-redesign/u13-matrix/1920x1080-1.5-drawing.png"
+    }
+  }
+}

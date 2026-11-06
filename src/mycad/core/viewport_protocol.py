@@ -17,9 +17,94 @@ from typing import Literal, Protocol, cast, runtime_checkable
 
 from mycad.core.geometry_types import Tessellation
 from mycad.core.identity import BodyId, TopologyId
+from mycad.core.sketch import WorkPlaneFrame
 from mycad.core.sketch_layers import DEFAULT_SKETCH_LAYER, SketchLayer
+from mycad.core.spatial_frames import RigidFrame
+from mycad.core.spatial_references import SpatialReference
 
 Point3 = tuple[float, float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class ViewportSketchRegion:
+    """Display mesh for a sketch region identified by its authored outer contour."""
+
+    boundary_entity_ids: tuple[str, ...]
+    mesh: Tessellation
+    hole_entity_ids: tuple[tuple[str, ...], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ViewportDatum:
+    """Persistent spatial output and its evaluated world-space frame."""
+
+    reference: SpatialReference
+    name: str
+    frame: RigidFrame | WorkPlaneFrame
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("datum display requires a name")
+        if self.reference.kind == "coordinate_system" and isinstance(self.frame, RigidFrame):
+            return
+        if self.reference.kind == "datum_plane" and isinstance(self.frame, WorkPlaneFrame):
+            return
+        raise ValueError("datum reference and evaluated frame must have matching types")
+
+
+@dataclass(frozen=True, slots=True)
+class ViewportSnapAnchor:
+    """Exact current BREP anchor with its runtime object ownership."""
+
+    kind: Literal["vertex", "midpoint", "center"]
+    point: Point3
+    body_id: BodyId | None
+    topology_id: TopologyId | None
+    source_key: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("vertex", "midpoint", "center"):
+            raise ValueError("invalid snap anchor kind")
+        if len(self.point) != 3 or any(not math.isfinite(value) for value in self.point):
+            raise ValueError("snap anchor coordinates must be finite")
+        if self.topology_id is None and not self.source_key:
+            raise ValueError("snap anchor requires an object identity")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateInteractionScene:
+    """Display and pick data for one source-bound candidate generation."""
+
+    document_id: str
+    file_id: str
+    revision: int
+    session_identity: int
+    candidate_id: str
+    generation: int
+    viewport: ViewportData | None
+    sketches: tuple[ViewportSketchData, ...]
+    datums: tuple[ViewportDatum, ...]
+    snap_anchors: tuple[ViewportSnapAnchor, ...]
+
+    def matches(
+        self, document_id: str, revision: int, session: int, candidate_id: str, generation: int
+    ) -> bool:
+        return (
+            self.document_id == document_id
+            and self.revision == revision
+            and self.session_identity == session
+            and self.candidate_id == candidate_id
+            and self.generation == generation
+        )
+
+
+@runtime_checkable
+class SpatialDatumPort(Protocol):
+    """Evaluated datums independently of solid mesh availability."""
+
+    def datum_display_data(self) -> tuple[ViewportDatum, ...]: ...
+
+    def snap_anchor_data(self) -> tuple[ViewportSnapAnchor, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +216,30 @@ class ViewportSketchDimension:
 
 
 @dataclass(frozen=True, slots=True)
+class ViewportSketchPoint:
+    """One authored point in world coordinates for screen-sized display."""
+
+    entity_id: str
+    point: Point3
+    layer: SketchLayer = DEFAULT_SKETCH_LAYER
+
+    def __post_init__(self) -> None:
+        if (
+            not self.entity_id
+            or len(self.point) != 3
+            or any(isinstance(value, bool) or not math.isfinite(value) for value in self.point)
+        ):
+            raise ValueError("sketch display point requires identity and finite coordinates")
+
+
+@dataclass(frozen=True, slots=True)
 class ViewportSketchData:
     """Sketch curves rendered as a non-pickable overlay over the model."""
 
     sketch_id: str
     curves: tuple[ViewportSketchCurve, ...]
     dimensions: tuple[ViewportSketchDimension, ...] = ()
+    points: tuple[ViewportSketchPoint, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.sketch_id:

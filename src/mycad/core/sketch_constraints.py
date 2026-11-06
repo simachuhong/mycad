@@ -362,7 +362,7 @@ class SketchConstraintSolveResult:
     branch_changes: tuple[SketchBranchChange, ...] = ()
 
     def command_params(
-        self, base_sketch: Sketch, constraint: SketchConstraint
+        self, base_sketch: Sketch, constraint: SketchConstraint, *, local_frame: bool = False
     ) -> dict[str, object]:
         """Return replay inputs for an explicit Bus confirmation."""
         if self.status != "success" or self.sketch is None or self.solver_version is None:
@@ -377,10 +377,12 @@ class SketchConstraintSolveResult:
         )
         if solved_constraint is None:
             raise ValueError("successful sketch result is missing the confirmed constraint")
-        solution_entities = self.sketch.to_mapping(version=3)["entities"]
+        solution_entities = self.sketch.to_state_mapping()["entities"]
         return {
             "sketch_id": base_sketch.sketch_id,
-            "base_state_sha256": base_sketch.state_digest(),
+            "base_state_sha256": (
+                base_sketch.local_state_digest() if local_frame else base_sketch.state_digest()
+            ),
             "constraint": solved_constraint.to_mapping(),
             "solver_id": self.solver_id,
             "solver_version": self.solver_version,

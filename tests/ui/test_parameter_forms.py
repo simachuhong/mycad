@@ -156,6 +156,45 @@ def test_unselected_root_one_of_reports_validation_error(qtbot: QtBot) -> None:
         form.normalized_params()
 
 
+@pytest.mark.parametrize("bound", [False, True])
+@pytest.mark.parametrize("staged", ["empty", "valid", "invalid"])
+def test_selector_chooses_its_branch_without_validating_unfinished_fields(
+    qtbot: QtBot, bound: bool, staged: str
+) -> None:
+    registry = _registry()
+    values: dict[str, object] = (
+        {}
+        if staged == "empty"
+        else {
+            "position": {"kind": "center"},
+            "diameter": 0 if staged == "invalid" else 4,
+            "depth": {"kind": "through_all"},
+        }
+    )
+    form = ParameterForm(
+        registry.get("feature.hole"),
+        values,
+        registry,
+    )
+    qtbot.addWidget(form)
+    target = (
+        {"kind": "bound_face", "source_instance_id": "a" * 32, "role": "box.+Z"}
+        if bound
+        else {"surface": "plane", "axis": "+Z"}
+    )
+    form.set_selector("target_face", target)
+    assert form.field_widget("target_face") is not None
+    if staged == "valid":
+        assert form.normalized_params() == {**values, "target_face": target}
+    else:
+        with pytest.raises(ValidationError):
+            form.normalized_params()
+        form.set_value("position", {"kind": "center"})
+        form.set_value("diameter", 4)
+        form.set_value("depth", {"kind": "through_all"})
+        assert form.normalized_params()["target_face"] == target
+
+
 def test_root_one_of_labels_hole_workflows(qtbot: QtBot) -> None:
     registry = _registry()
     form = ParameterForm(registry.get("feature.hole"), {}, registry)
@@ -167,6 +206,7 @@ def test_root_one_of_labels_hole_workflows(qtbot: QtBot) -> None:
         "请选择…",
         "面孔",
         "草图孔",
+        "绑定面孔",
     ]
 
 
@@ -184,7 +224,7 @@ def test_hole_form_labels_nested_schema_choices(qtbot: QtBot) -> None:
     ]
 
     assert choices == [
-        ["请选择…", "面孔", "草图孔"],
+        ["请选择…", "面孔", "草图孔", "绑定面孔"],
         ["请选择…", "几何条件", "视口锚定面"],
         ["请选择…", "面心", "指定点"],
         ["请选择…", "贯穿", "盲孔"],

@@ -378,6 +378,22 @@ class SketchSupportFace:
 
 
 @dataclass(frozen=True, slots=True)
+class PointEntity:
+    """A persistent sketch-local positioning point, not a profile edge."""
+
+    entity_id: str
+    position_mm: Point2D
+    construction: bool = False
+    layer_name: str = "0"
+
+    def __post_init__(self) -> None:
+        _validate_identity(self.entity_id, "entity_id")
+        object.__setattr__(self, "position_mm", _point2(self.position_mm, "point position"))
+        _boolean(self.construction, "construction")
+        object.__setattr__(self, "layer_name", _entity_layer_name(self.layer_name))
+
+
+@dataclass(frozen=True, slots=True)
 class LineEntity:
     """Finite line segment with a persistent sketch-local identity."""
 
@@ -570,7 +586,13 @@ class SplineEntity:
 
 
 type SketchEntity = (
-    LineEntity | PolylineEntity | CircleEntity | ArcEntity | RectangleEntity | SplineEntity
+    PointEntity
+    | LineEntity
+    | PolylineEntity
+    | CircleEntity
+    | ArcEntity
+    | RectangleEntity
+    | SplineEntity
 )
 
 
@@ -580,6 +602,8 @@ def _entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
         "construction": entity.construction,
         "layer_name": entity.layer_name,
     }
+    if isinstance(entity, PointEntity):
+        return {**common, "kind": "point", "position_mm": list(entity.position_mm)}
     if isinstance(entity, SplineEntity):
         return {
             **common,
@@ -632,6 +656,14 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
     common = ("entity_id", "kind", "construction")
     layer_name = mapping.get("layer_name", "0")
     entity_common = (*common, "layer_name") if require_layer else common
+    if kind == "point":
+        data = _strict_mapping(mapping, "point entity", (*entity_common, "position_mm"))
+        return PointEntity(
+            cast("str", data["entity_id"]),
+            _point2(data["position_mm"], "point position"),
+            _boolean(data["construction"], "construction"),
+            cast("str", layer_name),
+        )
     if kind == "spline":
         data = _strict_mapping(mapping, "spline entity", (*entity_common, "control_points_mm"))
         raw_points = data["control_points_mm"]
@@ -738,6 +770,7 @@ class Sketch:
                 cast("object", entity),
                 (
                     LineEntity,
+                    PointEntity,
                     PolylineEntity,
                     CircleEntity,
                     ArcEntity,
@@ -789,8 +822,10 @@ class Sketch:
 
     def to_mapping(self, *, version: int = 2) -> dict[str, object]:
         """Return JSON-compatible command values in the requested schema version."""
-        if version not in (1, 2, 3):
+        if version not in (1, 2, 3, 4):
             raise ValueError(f"unsupported sketch mapping version {version}")
+        if version < 4 and any(isinstance(entity, PointEntity) for entity in self.entities):
+            raise ValueError("point sketches require mapping version 4")
         if version < 3 and any(isinstance(entity, SplineEntity) for entity in self.entities):
             raise ValueError("spline sketches require mapping version 3")
         entities = [_entity_to_mapping(entity) for entity in self.entities]
@@ -820,20 +855,35 @@ class Sketch:
             raise ValueError("dimensioned sketch cannot be represented by mapping version 2")
         if self.support_face is not None:
             result["support_face"] = self.support_face.to_mapping()
-        if version == 3:
+        if version >= 3:
             result["constraints"] = [constraint.to_mapping() for constraint in self.constraints]
         return result
 
     def to_state_mapping(self) -> dict[str, object]:
         """Return canonical sketch state, including durable constraint records."""
         return {
-            **self.to_mapping(version=3),
+            **self.to_mapping(
+                version=4 if any(isinstance(entity, PointEntity) for entity in self.entities) else 3
+            ),
         }
 
     def state_digest(self) -> str:
         """Hash the complete accepted state for stale-preview detection."""
         encoded = json.dumps(
             self.to_state_mapping(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def local_state_digest(self) -> str:
+        """Hash local geometry and constraints without the evaluated workplane frame."""
+        state = self.to_state_mapping()
+        state.pop("frame")
+        encoded = json.dumps(
+            state,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,

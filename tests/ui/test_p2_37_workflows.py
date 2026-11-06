@@ -16,7 +16,6 @@ from pytestqt.qtbot import QtBot
 from mycad.app import AppServices, build_app
 from mycad.ui.main_window import MainWindow
 from mycad.ui.right_panel import HistoryEditDialog
-from mycad.ui.sketch_editor import SketchEditorDialog
 from tests.helpers.step_roundtrip import read_step
 
 pytestmark = pytest.mark.usefixtures("choose_new_part")
@@ -101,6 +100,8 @@ def _archive(
     actual_count, actual_volume = read_step(step)
     assert actual_count == count
     assert actual_volume == pytest.approx(volume, rel=1e-7)
+    assert window.viewport is not None
+    QTest.keyClick(window.viewport, Qt.Key.Key_Escape)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", archive_path)
     window.act_open.trigger()
     qtbot.waitUntil(
@@ -131,16 +132,17 @@ def test_symmetric_bracket_from_gui_copy_mirror_union_and_two_edges(
     loaded, unit = window.loaded_document(), window.execution_unit
     assert loaded is not None and unit is not None
     window.act_sketch.trigger()
-    editor = window.findChild(SketchEditorDialog)
-    assert editor is not None
-    editor.closed_check.setChecked(True)
-    editor.tool_combo.setCurrentText("多段线")
-    for u, v in ((0, 0), (30, 0), (30, 30), (24, 30), (24, 6), (0, 6)):
-        editor.u_field.setValue(u)
-        editor.v_field.setValue(v)
-        editor.coordinate_add_button.click()
-    editor.finish_polyline_button.click()
-    editor.finish_button.click()
+    task = window.part_sketch_task
+    assert task is not None
+    task.lock_plane()
+    vertices = ((0, 0), (30, 0), (30, 30), (24, 30), (24, 6), (0, 6))
+    for start, end in zip(vertices, (*vertices[1:], vertices[0]), strict=True):
+        task.select_tool("line")
+        task.place_uv(start)
+        task.place_uv(end)
+    task.preview()
+    assert task.confirm_button.isEnabled(), task.status_label.text()
+    task.confirm()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 1 and not unit.is_busy, timeout=30000)
     bar = _start(window, "feature.extrude")
     _choice(bar, "extrudeSource", "sketch")
@@ -289,6 +291,7 @@ def test_generic_body_array_with_unrelated_body_edit_undo_and_archive(
             field.setValue(4)
             dialog.reason_field.setText("通用实体阵列增加到四件，保留无关实体")
             dialog.preview_changes()
+            qtbot.waitUntil(dialog.confirm_button.isEnabled, timeout=30000)
             dialog.confirm_changes()
         except BaseException:
             dialog.reject()
@@ -296,7 +299,9 @@ def test_generic_body_array_with_unrelated_body_edit_undo_and_archive(
 
     QTimer.singleShot(0, revise_count)
     edit.click()
-    qtbot.waitUntil(lambda: not unit.is_busy, timeout=30000)
+    qtbot.waitUntil(
+        lambda: bool(loaded.document.commands[-1].amendments) and not unit.is_busy, timeout=30000
+    )
     assert loaded.document.commands[-1].timestamp_utc == timestamp
     assert len(loaded.document.commands[-1].amendments) == 1
     check_instances(4)

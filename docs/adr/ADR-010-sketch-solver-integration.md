@@ -61,3 +61,26 @@ Reference annotations are measured from the accepted solved geometry after new @
 New canvas dimensions default to driving, with an explicit reference switch. The optional `anchor_mode` dimension metadata is `auto` (omitted for legacy compatibility), `start`, `end`, or `symmetric`; only linear dimensions accept explicit endpoint policies. During an edit, the adapter may add temporary fixed-point or midpoint gauges to PlaneGCS. They are not persisted as geometric relations, do not participate in later unrelated edits, and are excluded from the reported persistent-system degrees of freedom. Auto honors fixed/locked geometry in the constraint component first, otherwise holds the first measured point or radial center; angles retain their first edge. Explicit policies never relax existing constraints.
 
 PlaneGCS `difference(param1, param2, value)` defines `param2-param1=value`; projected dimensions use that argument order and independently validate the resulting signed displacement. Non-ordinate projections retain their seeded direction; ordinate dimensions retain the requested sign. This corrects the prior reversed horizontal/vertical result while leaving archived frozen coordinates unchanged. Constraint edits still preserve IDs, annotation layers and positions, with Bus history recording only the accepted solution and dimension metadata.
+
+## Part-sketch associated editing (archive v6)
+
+`sketch.constraint.add@4` and `sketch.constraint.update@2` use a digest of the
+local sketch state, excluding the workplane frame. This allows a frozen solution
+to replay after a referenced datum moves without treating a world-coordinate
+change as a local geometry change. Older command versions retain their original
+full-state digest and replay behavior. These new versions require archive v6;
+the Bus retains the old default versions for existing callers.
+
+`sketch.revise@1` appends a structural revision with a local base-state digest.
+It can preserve or remove existing constraints and accept inferred horizontal,
+vertical or coincident relations involving newly added geometry. It cannot
+modify existing constraints or add user constraints. Replay validates references
+and geometric residuals without re-solving,
+then rebuilds downstream consumers in an isolated candidate. Invalid or stale
+revisions are rejected without committing partial changes. Explicit constraint
+changes use their own solver-backed, confirmed commands. A new sketch and its
+individually confirmed constraints can be committed together as an atomic
+candidate. The part-sketch editor records each explicitly confirmed solve in its
+original order and combines it with intervening structural revisions in one
+atomic candidate. Draft undo/redo selects the active sequence; each solve retains
+its own frozen coordinates and audit command.

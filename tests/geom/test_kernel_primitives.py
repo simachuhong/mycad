@@ -174,7 +174,6 @@ def test_flange_full_construction_volume_is_analytic() -> None:
 @pytest.mark.parametrize(
     ("command_id", "params"),
     [
-        ("feature.sphere", {"radius": 5.0}),
         ("garbage.command", {}),
         ("feature.box", {}),
     ],

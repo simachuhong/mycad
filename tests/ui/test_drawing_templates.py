@@ -86,6 +86,31 @@ def test_embedded_custom_size_survives_settings(
     assert services.kernel.drawing_state.sheets[0].template == template
 
 
+def test_sheet_settings_only_update_the_selected_sheet(qtbot: QtBot) -> None:
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    first = DrawingSheet(uuid4(), name="第一张")
+    second = DrawingSheet(uuid4(), name="第二张")
+    for sheet in (first, second):
+        loaded.bus.execute("drawing.sheet.create", drawing_object_mapping(sheet))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    bench = window.drawing_workbench
+    unit = window.execution_unit
+    assert unit is not None
+    target = bench.tree.topLevelItem(1)
+    assert target is not None
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == second.sheet_id
+    bench.title.setText("第二张修改")
+    bench.apply_sheet_settings()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    state = services.kernel.drawing_state
+    assert state.sheet(first.sheet_id) == first
+    assert state.sheet(second.sheet_id).name == "第二张修改"
+
+
 @pytest.mark.parametrize("standard", ["GB", "ISO"])
 def test_template_pdf_dxf_and_rotated_text(qtbot: QtBot, tmp_path: Path, standard: str) -> None:
     template = builtin_template(standard, "A4")

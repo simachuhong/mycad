@@ -7,14 +7,14 @@ from __future__ import annotations
 from typing import cast
 from uuid import UUID
 
-from mycad.core.document_references import validate_reference_tree
+from mycad.core.document_references import DocumentReference, validate_reference_tree
 from mycad.core.exceptions import ValidationError
 from mycad.core.schema_v3 import validate_archive_v3
 
 ARCHIVE_VERSION_V4 = 4
 
 
-def validate_archive_v4(data: object) -> None:
+def validate_archive_v4(data: object, *, max_reference_version: int = 4) -> None:
     if not isinstance(data, dict):
         raise ValidationError("archive: expected object")
     root = cast("dict[str, object]", data)
@@ -52,7 +52,12 @@ def validate_archive_v4(data: object) -> None:
         for command in cast("list[dict[str, object]]", root["commands"]):
             if command["id"] not in DRAWING2D_COMMAND_IDS:
                 raise ValidationError("drawing document cannot contain solid commands")
-    validate_reference_tree(root)
+    validate_reference_tree(root, max_archive_version=max_reference_version)
+    # Validate adopted bytes and their fingerprint before any kernel is reset.
+    # The cycle/version walk above must precede recursive schema dispatch.
+    for command in cast("list[dict[str, object]]", root["commands"]):
+        if command["id"] in ("reference.attach", "reference.update"):
+            DocumentReference.from_mapping(cast("dict[str, object]", command["params"]))
     if kind != "drawing" and any(
         str(c["id"]).startswith(
             ("drawing.sheet.", "drawing.view.", "drawing.annotation.", "drawing.note.")

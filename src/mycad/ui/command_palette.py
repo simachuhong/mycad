@@ -17,7 +17,8 @@ deliberately excludes Chinese labels for the English CLI).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
@@ -29,8 +30,10 @@ from PySide6.QtWidgets import (
 
 from mycad.commands.registry import CommandRegistry
 from mycad.commands.spec import CommandSpec
+from mycad.core.document import AFFECTED_OBJECTS
 from mycad.core.document_kinds import DRAWING2D_COMMAND_IDS, DocumentType
 from mycad.core.exceptions import UnknownCommandError
+from mycad.ui.action_catalog import ActionCatalog
 from mycad.ui.cad_icons import (
     CATEGORY_ICONS,
     command_icon_name,
@@ -42,6 +45,9 @@ from mycad.ui.theme import ThemeName
 
 #: Footer text from UI draft §5.3, verbatim.
 PLUGIN_HINT_TEXT = "插件命令自动出现"
+_SPECIAL_COMMANDS = frozenset(
+    {"datum.coordinate_system.create", "datum.plane.create", "drawing.layers.set"}
+)
 
 #: Tree data role storing the raw command id on each leaf.
 COMMAND_ID_ROLE = Qt.ItemDataRole.UserRole
@@ -58,6 +64,12 @@ class CommandPalette(QWidget):
         self._registry = registry
         self._document_type: DocumentType = "part"
         self._icon_theme: ThemeName = current_icon_theme()
+        self._catalog: ActionCatalog | None = None
+        self._observed_actions: set[QAction] = set()
+        self._known_action_ids: set[str] = set()
+        self._catalog_timer = QTimer(self)
+        self._catalog_timer.setSingleShot(True)
+        self._catalog_timer.timeout.connect(self._update_action_states)
 
         layout = QVBoxLayout(self)
         self.search_box = QLineEdit()
@@ -66,7 +78,7 @@ class CommandPalette(QWidget):
         layout.addWidget(self.search_box)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(("命令",))
+        self.tree.setHeaderLabels(("命令", "状态"))
         self.tree.setIconSize(QSize(20, 20))
         layout.addWidget(self.tree)
 
@@ -90,6 +102,7 @@ class CommandPalette(QWidget):
                 (
                     {
                         "drawing": "图纸",
+                        "datum": "基准",
                         "feature": "创建特征",
                         "modify": "修改",
                         "sketch": "草图",
@@ -102,9 +115,13 @@ class CommandPalette(QWidget):
             for spec in specs:
                 if self._document_type == "drawing2d" and spec.id not in DRAWING2D_COMMAND_IDS:
                     continue
-                child = QTreeWidgetItem((self._leaf_label(spec),))
+                disabled, explanation = self._availability(spec.id)
+                status = "不可用" if disabled else "可用"
+                child = QTreeWidgetItem((self._leaf_label(spec), status))
                 child.setData(0, COMMAND_ID_ROLE, spec.id)
-                child.setToolTip(0, f"{spec.label_zh} · {spec.id}")
+                child.setToolTip(0, f"{spec.label_zh} · {spec.id} · 分组 {category} {explanation}")
+                if disabled:
+                    child.setDisabled(True)
                 set_tree_icon(child, command_icon_name(spec.id), self._icon_theme)
                 group.addChild(child)
             self.tree.addTopLevelItem(group)
@@ -118,6 +135,58 @@ class CommandPalette(QWidget):
     def set_icon_theme(self, theme: ThemeName) -> None:
         self._icon_theme = theme
         refresh_tree_icons(self.tree, theme)
+
+    def set_action_catalog(self, catalog: ActionCatalog) -> None:
+        """Reflect shared action availability without creating duplicate commands."""
+        if self._catalog is not None:
+            self._catalog.changed.disconnect(self._catalog_changed)
+        self._catalog = catalog
+        catalog.changed.connect(self._catalog_changed)
+        self._catalog_changed()
+        self.refresh()
+
+    def _catalog_changed(self) -> None:
+        if self._catalog is None:
+            return
+        for _identity, action in self._catalog.entries():
+            self._known_action_ids.add(_identity)
+            if action not in self._observed_actions:
+                action.changed.connect(self._schedule_refresh)
+                self._observed_actions.add(action)
+        self._schedule_refresh()
+
+    def _schedule_refresh(self) -> None:
+        self._catalog_timer.start(0)
+
+    def _availability(self, identity: str) -> tuple[bool, str]:
+        action = self._catalog.find(identity) if self._catalog is not None else None
+        if action is not None:
+            return not action.isEnabled(), action.toolTip()
+        if identity in self._known_action_ids:
+            return True, "动作当前不可用；对应插件可能未加载"
+        if identity in AFFECTED_OBJECTS or identity in _SPECIAL_COMMANDS:
+            return False, "可从命令库启动"
+        return True, "当前不支持从命令库直接执行，请使用对应工作区入口"
+
+    def _update_action_states(self) -> None:
+        if self._catalog is None:
+            return
+        for index in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(index)
+            if group is None:
+                continue
+            category = group.toolTip(0)
+            for child_index in range(group.childCount()):
+                child = group.child(child_index)
+                if child is None:
+                    continue
+                identity = child.data(0, COMMAND_ID_ROLE)
+                if not isinstance(identity, str):
+                    continue
+                disabled, explanation = self._availability(identity)
+                child.setDisabled(disabled)
+                child.setText(1, "不可用" if disabled else "可用")
+                child.setToolTip(0, f"{child.text(0)} · {identity} · 分组 {category} {explanation}")
 
     def set_document_type(self, document_type: DocumentType) -> None:
         """Show only commands valid for the currently bound document kind."""
@@ -179,6 +248,8 @@ class CommandPalette(QWidget):
     # ------------------------------------------------------------------
 
     def _activate_item(self, item: QTreeWidgetItem, _column: int) -> None:
+        if item.isDisabled():
+            return
         command_id = item.data(0, COMMAND_ID_ROLE)
         if command_id:
             self.command_activated.emit(str(command_id))

@@ -287,3 +287,514 @@ def test_removing_placement_sheet_cancels_draft_and_allows_undo_redo(
     bench.begin_placement()
     assert bench.placement is not None
     bench.cancel_placement()
+
+
+@pytest.mark.parametrize("draft_kind", ["view", "note"])
+@pytest.mark.parametrize("target_kind", ["sheet", "view"])
+def test_switching_sheet_preserves_unsubmitted_draft(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, draft_kind: str, target_kind: str
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    first, second = uuid4(), uuid4()
+    for identity in (first, second):
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+    if target_kind == "view":
+        loaded.bus.execute(
+            "drawing.view.create", drawing_object_mapping(DrawingView(uuid4(), second))
+        )
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    assert bench.sheet_id == first
+    if draft_kind == "view":
+        bench.begin_placement()
+        assert bench.placement is not None
+        bench.placement.click((80, 80))
+    else:
+        bench.notes.begin()
+        bench.notes.click((80.0, 80.0))
+        bench.notes.editor.setPlainText("尚未提交的文字")
+    first_item = bench.tree.topLevelItem(0)
+    assert first_item is not None
+    bench.tree.itemClicked.emit(first_item, 0)
+    assert bench.sheet_id == first
+    if draft_kind == "view":
+        assert bench.placement is not None
+    else:
+        assert bench.notes.pending
+    second_item = bench.tree.topLevelItem(1)
+    assert second_item is not None
+    target = second_item if target_kind == "sheet" else second_item.child(0)
+    assert target is not None
+    bench.tree.setCurrentItem(target)
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == first
+    assert bench.tree.currentItem() is first_item
+    assert "完成或取消" in bench.hint.text()
+    if draft_kind == "view":
+        assert bench.placement is not None and bench.placement.pending
+        bench.cancel_placement()
+    else:
+        assert bench.notes.pending and bench.notes.editor.toPlainText() == "尚未提交的文字"
+        bench.notes.cancel()
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == second
+
+
+def test_switching_sheet_preserves_unsubmitted_annotation(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.core.drawing_projection import LineCurve
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    first, second = uuid4(), uuid4()
+    for identity in (first, second):
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+    view = DrawingView(uuid4(), first)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.updates.sync(
+        bench.session_id, services.kernel.drawing_source_fingerprint, {view.view_id: view.basis}
+    )
+    batch = bench.updates.begin()
+    assert batch is not None
+    bench.updates.finish(batch, (services.kernel.project_drawing(batch.requests[0]),))
+    bench.annotations.begin("aligned")
+    for curve in bench.projections[view.view_id].curves:
+        if isinstance(curve.geometry, LineCurve) and curve.source is not None:
+            bench.annotations.choose(view.view_id, curve.curve_id, (80.0, 80.0))
+            if bench.annotations.draft is not None:
+                break
+    pending = bench.annotations.draft
+    assert pending is not None
+    target = bench.tree.topLevelItem(1)
+    assert target is not None
+    bench.tree.setCurrentItem(target)
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == first and bench.annotations.draft == pending
+    assert "完成或取消" in bench.hint.text()
+    bench.annotations.cancel()
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == second
+
+
+def test_selecting_view_on_current_sheet_keeps_note_draft(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    view = DrawingView(uuid4(), sheet)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.notes.begin()
+    bench.notes.click((80.0, 80.0))
+    bench.notes.editor.setPlainText("文字草稿")
+    parent = bench.tree.topLevelItem(0)
+    assert parent is not None
+    item = parent.child(0)
+    assert item is not None
+    bench.tree.itemClicked.emit(item, 0)
+    assert bench.sheet_id == sheet and bench.canvas.selected_view == view.view_id
+    assert bench.notes.pending and bench.notes.editor.toPlainText() == "文字草稿"
+
+
+def test_switching_sheet_preserves_pending_view_deletion(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    first, second = uuid4(), uuid4()
+    for identity in (first, second):
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+    view = DrawingView(uuid4(), first)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.canvas.select_view(view.view_id)
+    bench.preview_delete()
+    assert bench.confirm_delete_action.isVisible()
+    target = bench.tree.topLevelItem(1)
+    assert target is not None
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == first and bench.confirm_delete_action.isVisible()
+    assert "完成或取消" in bench.hint.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    assert not bench.confirm_delete_action.isVisible()
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == second
+
+
+def test_switching_sheet_preserves_view_move_preview(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    first, second = uuid4(), uuid4()
+    for identity in (first, second):
+        loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(identity)})
+    view = DrawingView(uuid4(), first)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    original = loaded.document.commands
+    bench.canvas.view_dragged.emit(view.view_id, "move", (90.0, 100.0), False)
+    target = bench.tree.topLevelItem(1)
+    assert target is not None
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == first and loaded.document.commands == original
+    assert "完成或取消" in bench.hint.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.sheet_id == second and loaded.document.commands == original
+
+
+@pytest.mark.parametrize("operation", ["move", "delete"])
+def test_pending_view_edit_blocks_window_close(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QFileDialog
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    view = DrawingView(uuid4(), sheet)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    loaded.document.mark_clean()
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.canvas.select_view(view.view_id)
+    if operation == "move":
+        bench.canvas.view_dragged.emit(view.view_id, "move", (90.0, 100.0), False)
+    else:
+        bench.preview_delete()
+    target = tmp_path / "not-saved.mc.json"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *_args: (str(target), ""))
+    )
+    assert window.act_save.isEnabled()
+    window.act_save.trigger()
+    assert not target.exists()
+    assert "工程图" in window.status_command.text()
+    assert not window.close()
+    assert "工程图" in window.status_command.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    assert window.close()
+
+
+@pytest.mark.parametrize("operation", ["move", "delete"])
+def test_pending_view_edit_blocks_switch_to_another_view(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    first, second = DrawingView(uuid4(), sheet), DrawingView(uuid4(), sheet)
+    for view in (first, second):
+        loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.canvas.select_view(first.view_id)
+    if operation == "move":
+        bench.canvas.view_dragged.emit(first.view_id, "move", (90.0, 100.0), False)
+    else:
+        bench.preview_delete()
+    sheet_item = bench.tree.topLevelItem(0)
+    assert sheet_item is not None
+    target = sheet_item.child(1)
+    assert target is not None
+    bench.tree.setCurrentItem(target)
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.canvas.selected_view == first.view_id
+    assert bench.tree.currentItem() is sheet_item.child(0)
+    assert "完成或取消" in bench.hint.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    bench.tree.itemClicked.emit(target, 0)
+    assert bench.canvas.selected_view == second.view_id
+
+
+def test_pending_view_deletion_blocks_selecting_another_canvas_view(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtCore import QPointF, Qt
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingNote, DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    first = DrawingView(uuid4(), sheet, anchor_mm=(60, 100))
+    second = DrawingView(uuid4(), sheet, anchor_mm=(180, 100))
+    for view in (first, second):
+        loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    note = DrawingNote(uuid4(), sheet, "说明", (130, 140))
+    loaded.bus.execute("drawing.note.create", drawing_object_mapping(note))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.updates.sync(
+        bench.session_id,
+        services.kernel.drawing_source_fingerprint,
+        {view.view_id: view.basis for view in (first, second)},
+    )
+    batch = bench.updates.begin()
+    assert batch is not None
+    bench.updates.finish(
+        batch, tuple(services.kernel.project_drawing(req) for req in batch.requests)
+    )
+    bench.refresh()
+    bench.canvas.fit_view()
+    bench.canvas.select_view(first.view_id)
+    bench.preview_delete()
+    note_point = bench.canvas.note_text_position(note.note_id)
+    QTest.mouseDClick(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=note_point)
+    assert bench.canvas.selected_view == first.view_id and bench.canvas.selected_note is None
+    assert not bench.notes.pending
+    point = bench.canvas.mapFromScene(QPointF(180, -100))
+    QTest.mouseClick(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert bench.canvas.selected_view == first.view_id
+    assert bench.confirm_delete_action.isVisible()
+    assert "完成或取消" in bench.hint.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+    QTest.mouseClick(bench.canvas.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert bench.canvas.selected_view == second.view_id
+
+
+@pytest.mark.parametrize("action", ["sheet", "text", "dimension", "placement", "settings"])
+@pytest.mark.parametrize("operation", ["move", "delete"])
+def test_pending_view_edit_blocks_starting_another_command(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, action: str, operation: str
+) -> None:
+    from PySide6.QtCore import Qt
+
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    view = DrawingView(uuid4(), sheet)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.canvas.select_view(view.view_id)
+    if operation == "move":
+        bench.canvas.view_dragged.emit(view.view_id, "move", (90.0, 100.0), False)
+    else:
+        bench.preview_delete()
+    before = loaded.document.commands
+    if action == "sheet":
+        bench.create_sheet()
+    elif action == "text":
+        bench.begin_text()
+    elif action == "dimension":
+        bench.annotations.begin("aligned")
+    elif action == "placement":
+        bench.begin_placement()
+    else:
+        bench.apply_sheet_settings()
+    assert bench.has_pending_view_edit
+    if operation == "delete":
+        assert bench.confirm_delete_action.isVisible()
+    assert bench.canvas.selected_view == view.view_id
+    assert not bench.notes.pending and not bench.canvas.annotation_mode and bench.placement is None
+    assert loaded.document.commands == before
+    assert "完成或取消" in bench.hint.text()
+    QTest.keyClick(bench.canvas, Qt.Key.Key_Escape)
+
+
+@pytest.mark.parametrize(
+    "action", ["sheet", "text", "placement", "settings", "delete", "dimension"]
+)
+def test_unsubmitted_dimension_blocks_other_operations(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.core.drawing import DrawingView
+    from mycad.core.drawing_codec import drawing_object_mapping
+    from mycad.core.drawing_projection import LineCurve
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    sheet = uuid4()
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(sheet)})
+    view = DrawingView(uuid4(), sheet)
+    loaded.bus.execute("drawing.view.create", drawing_object_mapping(view))
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.updates.sync(
+        bench.session_id, services.kernel.drawing_source_fingerprint, {view.view_id: view.basis}
+    )
+    batch = bench.updates.begin()
+    assert batch is not None
+    bench.updates.finish(batch, (services.kernel.project_drawing(batch.requests[0]),))
+    bench.canvas.select_view(view.view_id)
+    bench.annotations.begin("aligned")
+    for curve in bench.projections[view.view_id].curves:
+        if isinstance(curve.geometry, LineCurve) and curve.source is not None:
+            bench.annotations.choose(view.view_id, curve.curve_id, (80.0, 80.0))
+            if bench.annotations.draft is not None:
+                break
+    draft = bench.annotations.draft
+    assert draft is not None
+    history = len(loaded.document.commands)
+    operations = {
+        "sheet": bench.create_sheet,
+        "text": bench.begin_text,
+        "placement": bench.begin_placement,
+        "settings": bench.apply_sheet_settings,
+        "delete": bench.preview_delete,
+        "dimension": lambda: bench.annotations.begin("horizontal"),
+    }
+    operations[action]()
+    assert bench.annotations.draft == draft
+    assert len(loaded.document.commands) == history
+    assert bench.placement is None and not bench.notes.pending
+    assert not bench.confirm_delete_action.isVisible()
+    assert "完成或取消" in bench.hint.text()
+
+
+@pytest.mark.parametrize("action", ["sheet", "dimension"])
+def test_active_view_placement_blocks_other_operations(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 40, "size_y": 20, "size_z": 8})
+    loaded.bus.execute("drawing.sheet.create", {"sheet_id": str(uuid4())})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    bench = window.drawing_workbench
+    monkeypatch.setattr(bench, "request_update", lambda: None)
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("drawing")
+    bench.begin_placement()
+    placement = bench.placement
+    assert placement is not None
+    history = len(loaded.document.commands)
+    if action == "sheet":
+        bench.create_sheet()
+    else:
+        bench.annotations.begin("aligned")
+    assert bench.placement is placement
+    assert len(loaded.document.commands) == history
+    assert not bench.canvas.annotation_mode
+    assert "完成或取消" in bench.hint.text()

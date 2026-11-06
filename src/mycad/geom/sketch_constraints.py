@@ -13,6 +13,7 @@ from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -636,6 +637,8 @@ def _reference_entity(sketch: Sketch, reference: SketchGeometryReference) -> Ske
 
 def _reference_point(sketch: Sketch, reference: SketchGeometryReference) -> tuple[float, float]:
     entity = _reference_entity(sketch, reference)
+    if isinstance(entity, PointEntity) and reference.kind == "vertex" and reference.index == 0:
+        return entity.position_mm
     if isinstance(entity, SplineEntity):
         if reference.kind == "start":
             return entity.control_points_mm[0]
@@ -908,6 +911,14 @@ def _relation_violations(
     return tuple(violations)
 
 
+def validate_sketch_revision_geometry(base: Sketch, revised: Sketch) -> Sketch:
+    """Refresh reference dimensions and verify all remaining driving relations."""
+    refreshed = refresh_reference_dimensions(revised)
+    if _dimension_violations(refreshed) or _relation_violations(base, refreshed):
+        raise ValueError("revised geometry violates existing constraints")
+    return refreshed
+
+
 def inferred_coincident_satisfied(sketch: Sketch, constraint: SketchConstraint) -> bool:
     """Check a persisted inferred coincidence without invoking PlaneGCS."""
     if constraint.kind != "coincident" or constraint.source != "inferred" or not constraint.driving:
@@ -1138,7 +1149,9 @@ def _sketch_linear_scale(sketch: Sketch) -> float:
     points: list[tuple[float, float]] = []
     radii: list[float] = []
     for entity in sketch.entities:
-        if isinstance(entity, LineEntity):
+        if isinstance(entity, PointEntity):
+            points.append(entity.position_mm)
+        elif isinstance(entity, LineEntity):
             points.extend((entity.start_mm, entity.end_mm))
         elif isinstance(entity, SplineEntity):
             points.extend(entity.control_points_mm)
@@ -1197,6 +1210,10 @@ def _add_line(solver: PlaneGcsSketch, start: int, end: int) -> int:
 def _add_entity(
     solver: PlaneGcsSketch, entity: SketchEntity, *, fixed: bool = False
 ) -> _EntityBinding:
+    if isinstance(entity, PointEntity):
+        return _EntityBinding(
+            entity, (_add_point(solver, entity.position_mm, fixed=fixed),), fixed=fixed
+        )
     if isinstance(entity, SplineEntity):
         points = tuple(_add_point(solver, point, fixed=fixed) for point in entity.control_points_mm)
         return _EntityBinding(entity, points, fixed=fixed)
@@ -1293,6 +1310,8 @@ def _binding(
 def _point_for(reference: SketchGeometryReference, bindings: dict[str, _EntityBinding]) -> int:
     bound = _binding(reference, bindings)
     entity = bound.entity
+    if isinstance(entity, PointEntity) and reference.kind == "vertex" and reference.index == 0:
+        return bound.points[0]
     if reference.kind == "center" and isinstance(entity, CircleEntity | ArcEntity):
         return bound.points[0]
     if isinstance(entity, LineEntity):
@@ -1622,6 +1641,8 @@ def _read_solved_entity(solver: PlaneGcsSketch, binding: _EntityBinding) -> Sket
         # exactly, including arc angle normalization and metadata.
         return binding.entity
     entity = binding.entity
+    if isinstance(entity, PointEntity):
+        return replace(entity, position_mm=_point_value(solver, binding.points[0]))
     if isinstance(entity, SplineEntity):
         return SplineEntity(
             entity.entity_id,

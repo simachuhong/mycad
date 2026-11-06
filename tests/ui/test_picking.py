@@ -480,7 +480,7 @@ def test_body_face_edge_and_vertex_filters_select_runtime_topology(
         view.dispose()
 
 
-def test_fillet_candidate_keeps_source_edges_pickable_and_camera_stable(
+def test_fillet_candidate_requires_return_to_source_before_edge_picking(
     services: AppServices,
 ) -> None:
     loaded = _loaded(services, _BOX)
@@ -510,11 +510,12 @@ def test_fillet_candidate_keeps_source_edges_pickable_and_camera_stable(
         assert view.selection() == selection_before
         assert view.camera_state() == camera_before
         target = view.selection_target_at(*projected, "edge")
-        assert target is not None
-        assert target.topology_ids == (edge.topology_id,)
+        assert target is None
         view.clear_candidate_preview()
         assert view.selection() == selection_before
         assert view.camera_state() == camera_before
+        target = view.selection_target_at(*projected, "edge")
+        assert target is not None and target.topology_ids == (edge.topology_id,)
     finally:
         view.dispose()
 

@@ -1,5 +1,7 @@
 # Profile, Work Plane, and Dimension Prototype
 
+2026-11-02 scope update: this is a historical value-prototype record. The implemented sketch model now lives in `core/sketch.py`; do not interpret the questions below as the current implementation status. The proposed next architecture separates persistent coordinate/datum definitions from evaluated work-plane frames; see the [3D modeling foundation revision](../superpowers/specs/2026-11-02-3d-modeling-foundation-design.md). Neither arbitrary numeric frames nor planar sketches establish support for named coordinate systems, associative datum features, or non-coplanar 3D sketches.
+
 Status: phase-2 design decision and value-only prototype. This record does not add a command, solver, GUI sketch editor, or `.mc.json` v1 field.
 
 ## Coordinate frame

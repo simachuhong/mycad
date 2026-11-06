@@ -1,5 +1,45 @@
 # Phase 2 — 基础 CAD 功能补齐 Todo
 
+## 2026-11-04 全应用 UI 整改排期（优先适用）
+
+用户选择本轮交付统一设计与 TODO，详见[统一设计](../../docs/design/2026-11-04-unified-ui-design.md)和[U00–U14 清单](../../docs/design/2026-11-04-unified-ui-todo.md)。启动首页提供二维图、工程图、三维零件、三维装配四入口；独立二维按 AutoCAD，零件/零件草图/工程图按 ST10。装配当前仅预留，明确不可创建。
+
+后续先完成首页/环境框架 U00–U02，再完成三维功能区和原 T1/T2 复验 U03–U04；接续动态输入、画布尺寸、区域与特征。二维与工程图另包整改。下文较早的“下一实施包”建议由新清单接替；已确认后端证据及历史勾选保留，不将设计完成计入工程或用户验收完成率。
+
+## 2026-11-02 三维基础范围补充（待实施）
+
+用户指出三维场景草图、多坐标系和辅助平面的结构缺口。统一分析、框架与验收见[三维建模基础修订](../../docs/superpowers/specs/2026-11-02-3d-modeling-foundation-design.md)。已有二维草图及任意数值 WorkPlaneFrame 不代表这些需求已交付；非共面空间草图另外验收。
+
+- [ ] M0：空间/引用/v6 兼容契约及 datum 命名空间启用 ADR。v6、候选迁移及基准命令已接入并有定向测试；最终集成验证进行中，详见 [M0/M1 实施计划](../../docs/superpowers/plans/2026-11-02-m0-m1-spatial-foundation.md)。
+- [ ] M1：相对坐标系 → 主/偏置基准面 → 关联草图 → 拉伸的开发 API 闭环已实现；最终集成验证进行中。
+- [ ] M2：独立三维零件草图工作台（工具栏/选择/草稿/会话与二维绘图分离）、锁平面、正视/旋转、共享底层候选拾取与捕捉。
+- [ ] M3：角度/三点基准平面、多坐标系管理及参数编辑。
+- [ ] M4：上游驱动、失败诊断/有限改绑、取消/撤销/保存重开和桌面验收。
+- [ ] M5：非共面 XYZ 点/线/折线空间草图首版；空间约束/曲线随后单列扩展。
+
+下一实施包建议 M0/M1，M2 后接保留需求的 E3-B，再接 M3/M4 与 E3-C/D，最后验收 M5。M 编号独立登记，旧 35 项/31 勾选是历史统计，不含本补充，不能作为新范围完成率；不撤销已确认工程证据。M6 高级构造与路径消费者列入后续扩展，不阻塞基础包。
+
+## 进度复核与下一步（2026-10-29）
+
+当前源码基线 `ba2f539`：35 项主任务中 31 项已勾选，P2-12、P2-19、P2-26、P2-44
+仍未关闭，P2-F1～F4 也均未关闭。31/35 仅为工程任务勾选率，不能解释为发布完成度。
+G 组勾选继续表示工程实现，不替代人工复验；Gate C/R 尚未收口。
+
+详细证据、近期增量与收口清单见 [Phase 2 进度评估与下一步开发任务](../../docs/phase2-progress-and-next-tasks-2026-10-29.md)。
+P2-19 的 78 条 gated 扰动记录已具体化；N1/N2 引用契约和 Boolean 拓扑演化原型已落地，
+N6 的局部圆柱直径、undo 中间态与 STEP 有效性/包围盒检查已补。P2-12/19 仍为 partial，
+后续需完成可重放绑定身份、持久化/修复、更多特征演化与剩余场景验收。
+
+2026-11-02 增量：E1 有限面追踪及孔定位实验已有证据；E2-A 已交付显式 v5 命令实例身份、Bus/redo 事务、隔离预览、Save As 和内部再生上下文，见 [ADR-014](../../docs/adr/ADR-014-command-instance-identity.md) 与 [E2-A 验收](../evidence/e2a-command-identity/acceptance.md)。E2-B 接入真实 hole@3 绑定分支、primitive 平面角色、原生演化及局部孔位，见 [ADR-015](../../docs/adr/ADR-015-bound-face-hole.md) 与 [E2-B 验收](../evidence/e2b-bound-face-hole/acceptance.md)。GUI 绑定确认及失效修复仍属 E3，更多特征演化与场景验收待补，P2-12/19 保持 partial；桌面默认格式仍为 v4。
+
+E3-A 隔离候选重放与原子确认已通过定向验收，见 [E3-A 证据](../evidence/e3a-replay-candidates/acceptance.md)。E3-B/C/D 尚未交付，当前次序以本页新增 M 系列路线为准；[E3 任务记录](../../docs/design/n3-e3-next-task-todo-2026-11-02.md)保留既有证据、分裂后继与撤销语义边界。
+
+后续独立批准的机械三视图、草图入纸、模板、多文档独立保存已有实现；
+文档归属以 [ADR-013](../../docs/adr/ADR-013-document-ownership-and-save-session.md) 和 v4 为准。
+下文保留原阶段范围与历史评估，新实现随当前版本回归，不将完整工程制图自动并入阶段承诺。
+曲面/放样评估另见 [My3D 对标分析](../../docs/design/my3d-part-solid-edge-assessment-2026-10-29.md)，
+仍接续 P3-38 的范围决策，不作为既定 Phase 2 发布前置。本次复核不改任何原任务勾选。
+
 ## 状态与范围基线（2026-10-23 修订）
 
 - 状态：规划拆分已完成；用户随后授权夜间自主开发，2026-10-23 已开始前期基础修复。
@@ -437,7 +477,7 @@ Phase 3 单独估算，不从 Phase 2 缺陷缓冲中扣企业和数据库成本
   验收：E07 场景中，显式“最大面”查询可以随尺寸改变；“同一设计对象”引用必须保持身份或报失效，
   不静默跳到另一个实体；对分裂、合并、删除和歧义给出命令及引用位置；修复经 Bus 且追加审计。
   新引用持久化需通过 P2-24；不宣称有限范围策略彻底解决拓扑命名问题。
-  当前状态：partial；删除/无匹配/歧义及显式 Bus 修复已覆盖。当前操作不保留 OCCT modified/generated 演化映射，故 split/merge 只报 ambiguous，不猜测 lineage。证据：[`task-P2-11-19-cad-semantic-loop.md`](../evidence/task-P2-11-19-cad-semantic-loop.md)。
+  当前状态：partial；N1 引用契约矩阵和 N2 的 operation-local cut/hole 演化原型已覆盖 preserve/modify/generate/split/merge/delete；索引仅在一次操作内有效，未贯通跨特征引用重绑、存档重放或 UI 修复。未知 lineage 仍需安全失败，不猜测 lineage。证据：[`task-P2-11-19-cad-semantic-loop.md`](../evidence/task-P2-11-19-cad-semantic-loop.md)、[`task-N1-N2-N6-topology-2026-10-29.md`](../evidence/task-N1-N2-N6-topology-2026-10-29.md)。
 
 - [x] **P2-13｜P1｜统一几何结果有效性与意图检查**
 
@@ -499,8 +539,8 @@ Phase 3 单独估算，不从 Phase 2 缺陷缓冲中扣企业和数据库成本
   验收：已承诺支持样本全部通过创建—选择—改参—测量—保存重开—导出；
   至少 100 组有明确预期的参数扰动/恢复场景检查引用、尺寸及有效性；
   执行 undo/redo、重开及 STEP 往返后满足相同几何约束；使用公差化几何断言，不依赖跨版本 STEP 字节相同。
-  当前状态：partial；30 个 primitive-only 扰动已执行，另 78 个完整特征链保持 gated，等 P2-32～P2-37。
-  证据：[`task-P2-11-19-cad-semantic-loop.md`](../evidence/task-P2-11-19-cad-semantic-loop.md)。
+  当前状态：场景具体化、局部圆柱直径与 undo 中间态、18 个受支持样本的 STEP 有效性/包围盒/圆柱直径回读已验证；108/108 条扰动/恢复可执行。正式验收仍 partial：跨重放绑定身份、孔位/孔数完整矩阵及拒绝样本导出策略未收口，且依赖 P2-12。任务分解见进度报告 N1～N6 与 N1/N2/N6 实施证据。
+  证据：[`task-P2-19-scenarios-2026-10-29.md`](../evidence/task-P2-19-scenarios-2026-10-29.md)、[`task-P2-11-19-cad-semantic-loop.md`](../evidence/task-P2-11-19-cad-semantic-loop.md)。
 
 ### D. 既有计划确认正确性
 

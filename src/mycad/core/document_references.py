@@ -35,14 +35,19 @@ class DocumentReference:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> DocumentReference:
-        from mycad.core.schema_v4 import validate_archive_v4
+        from mycad.core.archive_validation import validate_versioned_archive
 
         keys = ("reference_id", "file_id", "kind", "path", "object_id", "fingerprint", "archive")
         if set(value) != set(keys) or any(not isinstance(value[k], str) for k in keys[:-1]):
             raise ValidationError("reference: invalid fields")
         archive = value["archive"]
-        validate_archive_v4(archive)
-        archive = deepcopy(cast("dict[str, object]", archive))
+        if not isinstance(archive, dict):
+            raise ValidationError("reference source must use archive v4, v5 or v6")
+        archive = cast("dict[str, object]", archive)
+        if archive.get("version") not in (4, 5, 6):
+            raise ValidationError("reference source must use archive v4, v5 or v6")
+        validate_versioned_archive(archive)
+        archive = deepcopy(archive)
         if value["file_id"] != archive["file_id"] or value["kind"] != archive["document_kind"]:
             raise ValidationError("reference file_id/kind does not match source identity")
         if value["kind"] not in ("sketch", "part"):
@@ -80,13 +85,17 @@ class DocumentReference:
 
 
 def validate_reference_tree(
-    root: Mapping[str, object], ancestors: frozenset[str] = frozenset()
+    root: Mapping[str, object],
+    ancestors: frozenset[str] = frozenset(),
+    *,
+    max_archive_version: int | None = None,
 ) -> None:
     """Reject cyclic identities before source replay, including embedded snapshots."""
     identity = cast("str", root["file_id"])
     if identity in ancestors:
         raise ValidationError("cyclic document reference")
     visited = ancestors | {identity}
+    maximum = max_archive_version if max_archive_version is not None else root.get("version", 4)
     for raw in cast("list[dict[str, object]]", root["commands"]):
         if raw["id"] in ("reference.attach", "reference.update"):
             params = cast("dict[str, object]", raw["params"])
@@ -98,4 +107,9 @@ def validate_reference_tree(
                 source.get("commands"), list
             ):
                 raise ValidationError("reference archive is missing identity/history")
+            source_version = source.get("version")
+            if type(source_version) is not int or type(maximum) is not int:
+                raise ValidationError("reference archive version must be an integer")
+            if source_version > maximum:
+                raise ValidationError("reference requires a compatible archive version")
             validate_reference_tree(source, visited)

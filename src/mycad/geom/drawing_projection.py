@@ -12,6 +12,7 @@ from typing import Literal
 from build123d import Compound, Edge, Face, GeomType, Solid, Wire
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepLib import BRepLib
+from OCP.GeomAbs import GeomAbs_CurveType
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 from OCP.HLRAlgo import HLRAlgo_Projector
 from OCP.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape
@@ -39,11 +40,12 @@ def exact_curve(edge: Edge) -> CurveGeometry:
     """Preserve OCCT analytic curves and trimmed rational spline data."""
     adaptor = BRepAdaptor_Curve(edge.wrapped)
     first, last = adaptor.FirstParameter(), adaptor.LastParameter()
-    if edge.geom_type == GeomType.LINE:
+    kind = edge.geom_type
+    if kind == GeomType.LINE:
         a, b = adaptor.Value(first), adaptor.Value(last)
         return LineCurve((a.X(), a.Y()), (b.X(), b.Y()))
-    if edge.geom_type in (GeomType.CIRCLE, GeomType.ELLIPSE):
-        if edge.geom_type == GeomType.CIRCLE:
+    if kind in (GeomType.CIRCLE, GeomType.ELLIPSE):
+        if kind == GeomType.CIRCLE:
             circle = adaptor.Circle()
             center, axes = circle.Location(), circle.Position()
             major = minor = circle.Radius()
@@ -55,14 +57,14 @@ def exact_curve(edge: Edge) -> CurveGeometry:
         rotation = math.degrees(math.atan2(xaxis.Y(), xaxis.X()))
         sign = 1 if axes.Direction().Z() > 0 else -1
         sweep = sign * min(360.0, math.degrees(last - first))
-        if edge.geom_type == GeomType.CIRCLE:
+        if kind == GeomType.CIRCLE:
             return ArcCurve(
                 (center.X(), center.Y()), major, rotation + sign * math.degrees(first), sweep
             )
         return EllipseCurve(
             (center.X(), center.Y()), major, minor, rotation, sign * math.degrees(first), sweep
         )
-    if edge.geom_type == GeomType.BSPLINE:
+    if kind == GeomType.BSPLINE:
         curve = adaptor.BSpline()
         curve.Segment(first, last, 1e-9)
         poles = tuple(
@@ -88,7 +90,7 @@ def exact_curve(edge: Edge) -> CurveGeometry:
             tuple(curve.Weight(i) for i in range(1, curve.NbPoles() + 1)),
             curve.IsPeriodic(),
         )
-    raise ValueError(f"Unsupported exact projected curve: {edge.geom_type.name}")
+    raise ValueError(f"Unsupported exact projected curve: {kind.name}")
 
 
 def face_reference(face: Face) -> DrawingGeometryReference | None:
@@ -139,33 +141,66 @@ def _edges(shape: TopoDS_Shape) -> tuple[Edge, ...]:
     return result
 
 
-def _key(edge: Edge) -> CurveKey:
+def projection_curve_kind(edge: Edge, curve: BRepAdaptor_Curve) -> GeomType:
+    """Reuse the edge adaptor for supported curve types; preserve fallback behavior."""
+    kind = curve.GetType()
+    if kind == GeomAbs_CurveType.GeomAbs_Line:
+        return GeomType.LINE
+    if kind == GeomAbs_CurveType.GeomAbs_Circle:
+        return GeomType.CIRCLE
+    if kind == GeomAbs_CurveType.GeomAbs_Ellipse:
+        return GeomType.ELLIPSE
+    if kind == GeomAbs_CurveType.GeomAbs_BSplineCurve:
+        return GeomType.BSPLINE
+    return edge.geom_type
+
+
+def edge_long_enough(
+    edge: Edge,
+    threshold: float = 1e-7,
+    *,
+    curve: BRepAdaptor_Curve | None = None,
+    kind: GeomType | None = None,
+) -> bool:
+    """Filter tiny edges without numerical integration of analytic curves."""
+    curve = curve if curve is not None else BRepAdaptor_Curve(edge.wrapped)
+    kind = kind if kind is not None else edge.geom_type
+    if kind in (GeomType.LINE, GeomType.CIRCLE):
+        length = abs(curve.LastParameter() - curve.FirstParameter())
+        if kind == GeomType.CIRCLE:
+            length *= curve.Circle().Radius()
+        # Preserve the existing OCCT comparison at its numerical boundary.
+        if abs(length - threshold) > max(1e-12, abs(threshold) * 1e-9):
+            return length >= threshold
+    return edge.length >= threshold
+
+
+def _key(edge: Edge, curve: BRepAdaptor_Curve, kind: GeomType) -> CurveKey:
     # Geometry-only identity within one projection, not a persistent reference.
     # Finite samples cannot identify arbitrary splines: keep their exact data.
-    if edge.geom_type == GeomType.BSPLINE:
-        curve = exact_curve(edge)
-        if isinstance(curve, LineCurve):
+    if kind == GeomType.BSPLINE:
+        spline = exact_curve(edge)
+        if isinstance(spline, LineCurve):
             return tuple(
                 sorted(
                     (
-                        (round(curve.start[0], 7), round(curve.start[1], 7)),
-                        (round(curve.end[0], 7), round(curve.end[1], 7)),
+                        (round(spline.start[0], 7), round(spline.start[1], 7)),
+                        (round(spline.end[0], 7), round(spline.end[1], 7)),
                     )
                 )
             )
-        assert isinstance(curve, SplineCurve)
-        return curve
-    adaptor = BRepAdaptor_Curve(edge.wrapped)
-    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
-    if edge.geom_type == GeomType.LINE:
-        a, b = adaptor.Value(first), adaptor.Value(last)
+        assert isinstance(spline, SplineCurve)
+        return spline
+    first, last = curve.FirstParameter(), curve.LastParameter()
+    if kind == GeomType.LINE:
+        a, b = curve.Value(first), curve.Value(last)
         return tuple(
             sorted(((round(a.X(), 7), round(a.Y(), 7)), (round(b.X(), 7), round(b.Y(), 7))))
         )
     points = tuple(
         (round(point.X(), 7), round(point.Y(), 7))
         for point in (
-            adaptor.Value(first + (last - first) * fraction) for fraction in (0, 0.25, 0.5, 0.75, 1)
+            curve.Value(first + (last - first) * fraction) for fraction in (0, 0.25, 0.5, 0.75, 1)
         )
     )
     return min(points, tuple(reversed(points)))
@@ -221,9 +256,11 @@ def project_shape(
     )
     for compound, visibility, silhouette in groups:
         for edge in _edges(compound):
-            if edge.length < 1e-7:
+            adaptor = BRepAdaptor_Curve(edge.wrapped)
+            kind = projection_curve_kind(edge, adaptor)
+            if not edge_long_enough(edge, curve=adaptor, kind=kind):
                 continue
-            key = _key(edge)
+            key = _key(edge, adaptor, kind)
             if key in geometry:
                 if silhouette:
                     geometry[key] = replace(geometry[key], silhouette=True)
@@ -283,9 +320,11 @@ def project_shape(
                 output.OutLineHCompound(selected),
             ):
                 for edge in _edges(compound):
-                    if edge.length < 1e-7:
+                    adaptor = BRepAdaptor_Curve(edge.wrapped)
+                    kind = projection_curve_kind(edge, adaptor)
+                    if not edge_long_enough(edge, curve=adaptor, kind=kind):
                         continue
-                    key = _key(edge)
+                    key = _key(edge, adaptor, kind)
                     if key in geometry and geometry[key].source is None:
                         geometry[key] = replace(
                             geometry[key],

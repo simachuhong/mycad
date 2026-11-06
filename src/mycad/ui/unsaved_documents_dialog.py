@@ -30,8 +30,12 @@ class UnsavedDocumentsDialog(QDialog):
         layout.addWidget(QLabel("勾选要保存的文档；未勾选的修改将在成功退出后放弃。"))
         self.list = QListWidget()
         for entry in entries:
-            item = QListWidgetItem(entry.label)
-            item.setToolTip(str(entry.path) if entry.path else "尚未命名")
+            pending_view = entry.workbench is not None and entry.workbench.has_pending_view_edit
+            item = QListWidgetItem(entry.label + (" · 视图操作未确认" if pending_view else ""))
+            location = str(entry.path) if entry.path else "尚未命名"
+            item.setToolTip(
+                f"{location}\n请先回到该文档完成或取消视图操作。" if pending_view else location
+            )
             item.setCheckState(Qt.CheckState.Checked)
             self.list.addItem(item)
         layout.addWidget(self.list)

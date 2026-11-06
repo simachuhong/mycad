@@ -160,3 +160,16 @@ class WorkspaceConsole(QTabWidget):
     def show_page(self, page: QWidget) -> None:
         self.setCurrentWidget(page)
         self.set_expanded(True)
+
+    def capture_state(self) -> tuple[bool, int, int]:
+        height = self.expanded_height
+        if self.expanded and self.isVisible():
+            height = max(160, min(self.height(), 2000))
+        return self.expanded, max(0, self.currentIndex()), max(160, min(height, 2000))
+
+    def restore_state(self, state: tuple[bool, int, int]) -> None:
+        expanded, page, height = state
+        self.expanded_height = height
+        if 0 <= page < self.count():
+            self.setCurrentIndex(page)
+        self.set_expanded(expanded)

@@ -8,14 +8,15 @@ import math
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
 from mycad.app import build_app, new_document, open_app_document
 from mycad.core.persistence import save_document
 from mycad.core.sketch import CircleEntity, LineEntity
+from mycad.formats.providers.dxf_provider import read_sketch_dxf, write_sketch_dxf
 from mycad.ui.main_window import MainWindow
 from mycad.ui.sketch_editor import SketchEditorDialog
 
@@ -77,10 +78,15 @@ def test_origin_grid_and_object_snap_priority(qtbot: QtBot) -> None:
     canvas.cursor_changed.connect(capture)
 
     def hover(u: float, v: float) -> tuple[float, float, str]:
-        QApplication.processEvents()
-        # Seed a different position: Qt may coalesce a move to the previous cursor location.
-        QTest.mouseMove(canvas, QPoint(1, 1))
-        QTest.mouseMove(canvas, canvas.local_to_screen((u, v)))
+        event = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(canvas.local_to_screen((u, v))),
+            QPointF(canvas.mapToGlobal(canvas.local_to_screen((u, v)))),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QCoreApplication.sendEvent(canvas, event)
         return events[-1]
 
     assert hover(0.4, -0.4) == (0.0, 0.0, "UCS 原点")
@@ -338,10 +344,112 @@ def test_driven_drawing_commits_saves_and_replays(qtbot: QtBot, tmp_path: Path) 
     reopened = open_app_document(services, path)
     assert reopened.document.document_type == "drawing2d"
     assert services.kernel.sketches[0] == saved
+    dxf_path = tmp_path / "dimensions.dxf"
+    report = write_sketch_dxf(services.kernel.sketches[0], dxf_path)
+    imported = read_sketch_dxf(dxf_path)
+    assert not report.complete
+    assert any("未导出" in warning for warning in report.warnings)
+    assert imported.report.complete
+    assert imported.sketch.constraints == tuple(
+        constraint for constraint in saved.constraints if constraint.kind == "distance"
+    )
+    assert imported.sketch.entities == saved.entities
     window.close()
 
 
-def test_three_dimensional_undo_does_not_edit_hidden_draft(qtbot: QtBot) -> None:
+def test_2d_draw_copy_layer_dimension_save_and_dxf_chain(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = build_app(discoverers=())
+    loaded = new_document(services, document_type="drawing2d")
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.bind_document(loaded)
+    window.act_view_2d.trigger()
+    draft = window.active_sketch_dialog()
+    unit = window.execution_unit
+    assert draft is not None and unit is not None
+
+    def choose_layer_name(*_args: object, **_kwargs: object) -> tuple[str, bool]:
+        return "轮廓", True
+
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", choose_layer_name)
+    draft.layer_manager_button.click()
+    panel = draft.active_layer_manager
+    assert panel is not None
+    panel.add_button.click()
+    qtbot.waitUntil(
+        lambda: not unit.is_busy and draft.layer_combo.findText("轮廓") >= 0, timeout=10000
+    )
+    draft.layer_combo.setCurrentText("轮廓")
+    panel.close()
+
+    bar = draft.drawing_command_bar
+    for text in ("L", "0,0", "30,0", ""):
+        bar.input.setText(text)
+        QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    assert len(draft.canvas.entities) == 1
+    source = draft.canvas.entities[0]
+    draft.canvas.selected_entity_ids = {source.entity_id}
+    for text in ("COPY", "0,0", "0,20", ""):
+        bar.input.setText(text)
+        QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    assert len(draft.canvas.entities) == 2
+    assert all(entity.layer_name == "轮廓" for entity in draft.canvas.entities)
+    _drive_line(draft, 45.0)
+    assert draft.canvas.constraints[-1].value == pytest.approx(45.0)
+    draft.dimensions.driving_check.setChecked(False)
+    draft.dimensions.buttons["aligned"].click()
+    _click_dimension(draft, (15.0, 20.0))
+    _click_dimension(draft, (15.0, 35.0))
+    assert draft.canvas.constraints[-1].value == pytest.approx(30.0)
+    assert not draft.canvas.constraints[-1].driving
+    draft.finish_button.click()
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=10000)
+    saved = services.kernel.sketches[0]
+    path = tmp_path / "draw-copy-dimension.mc.json"
+    target = tmp_path / "draw-copy-dimension.dxf"
+
+    def choose_save(_parent: object, caption: str, *_args: object) -> tuple[str, str]:
+        return str(target if "导出" in caption else path), ""
+
+    def choose_open(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        return str(path), ""
+
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getSaveFileName", choose_save)
+    monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", choose_open)
+    window.act_save.trigger()
+    qtbot.waitUntil(lambda: path.is_file() and not unit.is_busy, timeout=10000)
+    window.act_open.trigger()
+    qtbot.waitUntil(
+        lambda: window.loaded_document() is not loaded and not unit.is_busy, timeout=10000
+    )
+    reopened = window.loaded_document()
+    assert reopened is not None and reopened.document.document_type == "drawing2d"
+    assert services.kernel.sketches[0] == saved
+
+    from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
+
+    reports: list[str] = []
+
+    def accept_export(dialog: DxfOutputPreviewDialog) -> int:
+        assert dialog.renderer.isValid()
+        reports.append(dialog.report_label.text())
+        return int(dialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(DxfOutputPreviewDialog, "exec", accept_export)
+    window.act_export.trigger()
+    qtbot.waitUntil(lambda: target.is_file() and not unit.is_busy, timeout=10000)
+    imported = read_sketch_dxf(target)
+    assert len(reports) == 1 and "未导出" in reports[0]
+    assert imported.sketch.entities == saved.entities
+    assert imported.sketch.constraints == tuple(
+        constraint for constraint in saved.constraints if constraint.kind == "distance"
+    )
+
+
+def test_part_sketch_and_document_undo_have_separate_histories(qtbot: QtBot) -> None:
     services = build_app(discoverers=())
     loaded = new_document(services)
     loaded.bus.execute(
@@ -351,26 +459,41 @@ def test_three_dimensional_undo_does_not_edit_hidden_draft(qtbot: QtBot) -> None
     qtbot.addWidget(window)
     window.bind_document(loaded)
     window.show()
-    window.act_view_2d.trigger()
-    draft = window.active_sketch_dialog()
-    assert draft is not None
-    for point in ((0.0, 0.0), (30.0, 0.0)):
-        draft.canvas.add_coordinate_point(point)
-    before = tuple(draft.canvas.entities)
-    window.act_view_3d.trigger()
+    window.act_sketch.trigger()
+    task = window.part_sketch_task
+    assert task is not None
+    task.lock_plane()
+    task.select_tool("line")
+    task.place_uv((0.0, 0.0))
+    task.place_uv((30.0, 0.0))
+    window.act_undo.trigger()
+    assert task.session.sketch.entities == ()
+    assert len(loaded.document.commands) == 1
+    window.act_redo.trigger()
+    assert len(task.session.sketch.entities) == 1
+    assert len(loaded.document.commands) == 1
+    task.reject()
     window.act_undo.trigger()
     unit = window.execution_unit
     assert unit is not None
     qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
-    assert tuple(draft.canvas.entities) == before
     assert len(loaded.document.commands) == 0
-    window.act_redo.trigger()
-    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
-    assert len(loaded.document.commands) == 1
-    assert tuple(draft.canvas.entities) == before
-    window.act_view_2d.trigger()
-    draft.reject()
     window.close()
+
+
+def test_2d_view_on_part_does_not_replace_document_or_start_part_sketch(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 20.0, "size_y": 10.0, "size_z": 5.0})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    window.act_view_2d.trigger()
+    assert window.loaded_document() is loaded
+    assert len(loaded.document.commands) == 1
+    assert window.part_sketch_task is None
+    assert window.active_workspace == "model"
 
 
 def test_explicit_coordinate_fields_bypass_origin_grid_and_inference(qtbot: QtBot) -> None:

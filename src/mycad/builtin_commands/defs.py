@@ -150,6 +150,33 @@ COMMAND_SCHEMA_DEFS: Mapping[str, Any] = {
         },
         "description": ("引用命令历史中先前创建的闭合草图；草图尺寸变化后，重放会重新构建该特征。"),
     },
+    "SketchRegionProfileReference": {
+        "type": "object",
+        "required": ["type", "sketch_id"],
+        "additionalProperties": False,
+        "properties": {
+            "type": {"const": "sketch"},
+            "sketch_id": {"type": "string", "minLength": 32, "maxLength": 36},
+            "boundary_entity_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 32, "maxLength": 36},
+                "minItems": 1,
+            },
+        },
+        "description": "草图区域以外边界图元身份引用；未指定时使用全部区域。",
+    },
+    "RegionSketchExtrudeProfile": {
+        "oneOf": [
+            {"$ref": "#/$defs/ExtrudeProfile"},
+            {"$ref": "#/$defs/SketchRegionProfileReference"},
+        ]
+    },
+    "RegionSketchRevolveProfile": {
+        "oneOf": [
+            {"$ref": "#/$defs/Profile"},
+            {"$ref": "#/$defs/SketchRegionProfileReference"},
+        ]
+    },
     "SketchExtrudeProfile": {
         "oneOf": [
             {"$ref": "#/$defs/ExtrudeProfile"},

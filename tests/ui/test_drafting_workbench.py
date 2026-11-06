@@ -118,11 +118,16 @@ def test_part_sketch_is_embedded_and_can_commit_continuous_lines(qtbot: QtBot) -
     window.show()
     window.bind_document(loaded)
     window.act_sketch.trigger()
-    draft = window.active_sketch_dialog()
-    assert draft is not None and not draft.isWindow()
+    draft = window.part_sketch_task
+    assert draft is not None
+    draft.lock_plane()
+    draft.select_tool("continuous")
     for point in ((0.0, 0.0), (30.0, 0.0), (30.0, 20.0)):
-        draft.canvas.add_coordinate_point(point)
-    draft.finish_button.click()
+        draft.place_uv(point)
+    draft.select_tool("select")
+    draft.preview()
+    assert draft.confirm_button.isEnabled(), draft.status_label.text()
+    draft.confirm()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 1, timeout=10000)
     assert loaded.document.commands[0].id == "sketch.create"
     assert len(services.kernel.sketches[0].entities) == 2
@@ -345,7 +350,7 @@ def test_submit_refusal_restores_embedded_draft(
     qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     services = build_app(discoverers=())
-    loaded = new_document(services)
+    loaded = new_document(services, document_type="drawing2d")
     window = MainWindow(services=services)
     qtbot.addWidget(window)
     window.show()

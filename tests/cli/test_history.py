@@ -100,6 +100,39 @@ def test_python_api_actor_null_and_amendments_only_when_present(
     assert set(second) == SEVEN_KEYS
 
 
+def test_v5_history_keeps_bound_reference_and_command_identity(
+    session: CliSession,
+    services: AppServices,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    loaded = new_document(services)
+    loaded.bus.execute("feature.cylinder", {"radius": 10, "height": 6})
+    loaded.bus.apply_identity_upgrade(loaded.bus.prepare_identity_upgrade())
+    target = {
+        "kind": "bound_face",
+        "source_instance_id": loaded.document.commands[0].instance_id,
+        "role": "cylinder.top",
+    }
+    loaded.bus.execute(
+        "feature.hole",
+        {
+            "target_face": target,
+            "position": {"kind": "local", "uv_mm": [2, 0]},
+            "diameter": 2,
+            "depth": {"kind": "blind", "value": 2},
+        },
+    )
+    archive = tmp_path / "bound.mc.json"
+    save_document(loaded.document, archive)
+    assert session.execute_line(f"open {archive}") == 0
+    first, second = _history(session, capsys)
+    assert set(first) == SEVEN_KEYS | {"instance_id"}
+    assert first["instance_id"] == loaded.document.commands[0].instance_id
+    assert second["instance_id"] == loaded.document.commands[1].instance_id
+    assert cast("dict[str, object]", second["params"])["target_face"] == target
+
+
 def test_bad_history_argument_is_usage_error(
     session: CliSession, capsys: pytest.CaptureFixture[str]
 ) -> None:

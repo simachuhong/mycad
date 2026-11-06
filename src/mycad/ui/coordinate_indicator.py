@@ -35,7 +35,8 @@ class CoordinateIndicator(QWidget):
         self._view_matrix = view_matrix
         self._project_origin = project_origin
         self._theme: ThemeName = "light"
-        self.origin_visible = False
+        self.origin_visible = True
+        self.origin_snap_active = False
         self._scene_key: object = None
         self.show()
 
@@ -52,6 +53,11 @@ class CoordinateIndicator(QWidget):
     def set_origin_visible(self, visible: bool) -> None:
         self.origin_visible = visible
         self.update()
+
+    def set_origin_snap_active(self, active: bool) -> None:
+        if self.origin_snap_active != active:
+            self.origin_snap_active = active
+            self.update()
 
     def sync_scene(self) -> None:
         """Refresh only on camera/size changes, avoiding a GL repaint loop."""
@@ -112,13 +118,6 @@ class CoordinateIndicator(QWidget):
         tokens = theme_tokens(self._theme)
         # Logical pixels keep the cue consistent at all camera distances / DPI.
         panel = QRectF(8, max(4, self.height() - 164), 148, 156)
-        painter.setPen(QPen(QColor(tokens.divider), 1))
-        background = QColor(tokens.panel)
-        background.setAlpha(235)
-        painter.setBrush(background)
-        painter.drawRoundedRect(panel, 9, 9)
-        painter.setPen(QColor(tokens.secondary_text))
-        painter.drawText(panel.adjusted(10, 7, -10, -125), Qt.AlignmentFlag.AlignLeft, "全局 XYZ")
         font = painter.font()
         font.setPointSizeF(10)
         font.setBold(True)
@@ -127,9 +126,12 @@ class CoordinateIndicator(QWidget):
         origin = self._project_origin() if self.origin_visible else None
         if origin is not None:
             point = QPointF(*origin)
-            safe = QRectF(self.rect()).adjusted(80, 80, -80, -80)
-            if safe.contains(point) and not panel.adjusted(-60, -60, 60, 60).contains(point):
+            if QRectF(self.rect()).contains(point):
                 self._draw_triad(painter, point, 32)
+                color = QColor("#F08000") if self.origin_snap_active else QColor(tokens.text)
+                painter.setPen(QPen(color, 2))
+                painter.setBrush(QColor(tokens.canvas))
+                painter.drawEllipse(point, 5, 5)
                 painter.setPen(QColor(tokens.text))
                 painter.drawText(point + QPointF(-30, 65), "O (0, 0, 0)")
         painter.end()

@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
 from mycad.core.sketch import (
     CircleEntity,
     LineEntity,
+    Point2D,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -90,6 +92,7 @@ _DIMENSION_UNITS: dict[str, ConstraintUnit] = {
 def _entity_label(index: int, entity: SketchEntity) -> str:
     kind = type(entity).__name__.removesuffix("Entity")
     label = {
+        "Point": "点",
         "Line": "直线",
         "Polyline": "多段线",
         "Rectangle": "矩形",
@@ -101,6 +104,8 @@ def _entity_label(index: int, entity: SketchEntity) -> str:
 
 
 def _reference_kinds(entity: SketchEntity) -> tuple[str, ...]:
+    if isinstance(entity, PointEntity):
+        return ("vertex",)
     if isinstance(entity, SplineEntity):
         return ("start", "end", "vertex")
     if isinstance(entity, LineEntity):
@@ -139,6 +144,7 @@ class SketchConstraintDialog(QDialog):
         self._preview_update = preview_update
         self._asynchronous_preview = asynchronous_preview
         self._preview_generation = 0
+        self._new_dimension_position: Point2D | None = None
         self._last_candidate: (
             tuple[Sketch, SketchConstraint, SketchConstraintSolveResult] | None
         ) = None
@@ -287,6 +293,11 @@ class SketchConstraintDialog(QDialog):
                 self.second_reference.setCurrentIndex(index)
         self.dimension_combo.setItemText(0, "新增尺寸")
         self.driving_check.setText("驱动尺寸：改变几何（取消勾选为参考尺寸，仅测量）")
+
+    def set_dimension_position(self, position: Point2D) -> None:
+        """Use the point chosen on the sketch canvas for a new dimension."""
+        self._new_dimension_position = position
+        self._invalidate_preview()
 
     @staticmethod
     def _reference_combo() -> QComboBox:
@@ -515,6 +526,7 @@ class SketchConstraintDialog(QDialog):
             "user",
             self.precision_field.value(),
             self.scale_field.value(),
+            position_mm=self._new_dimension_position if unit is not None else None,
         )
 
     def _invalidate_preview(self, *_args: object) -> None:

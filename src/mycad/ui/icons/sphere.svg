@@ -1,0 +1,8 @@
+<!-- SPDX-FileCopyrightText: 2026 MyCAD contributors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+<g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<circle cx="12" cy="12" r="9" fill="#E6EDF4" stroke="#33465B" stroke-width="1.5"/>
+<path d="M3 12c0-2.5 4-4.5 9-4.5s9 2 9 4.5" stroke="#2563A6" stroke-width="1.25" stroke-dasharray="2 2"/>
+<path d="M3 12c0 2.5 4 4.5 9 4.5s9-2 9-4.5" stroke="#2563A6" stroke-width="1.5"/>
+</g></svg>

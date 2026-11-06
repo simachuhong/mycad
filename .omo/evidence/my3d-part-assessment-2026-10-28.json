@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-28T23:17:47.056534+08:00",
+  "task": "my3d-part-solid-edge-assessment",
+  "event": "geometry_capability_probe",
+  "scope": "Part modeling only; no assembly; assessment, no product implementation",
+  "base_commit": "ef21b2e",
+  "worktree": "Pre-existing uncommitted changes present; inspected current workspace",
+  "versions": {
+    "build123d": "0.11.1",
+    "cadquery-ocp-novtk": "7.9.3.1.1"
+  },
+  "tests": {
+    "command": ".venv/bin/python -m pytest tests/geom/test_geometry_validity.py tests/geom/test_semantic_selectors.py tests/geom/test_sketch_spline.py tests/geom/test_body_operations.py -q",
+    "passed": 40,
+    "elapsed_seconds": 6.69,
+    "scope_limit": "Not full suite or GUI acceptance"
+  },
+  "loft_probe": {
+    "inputs": "Circle radius 10 at Z=0; circle radius 5 at Z=20; Solid.make_loft and Shell.make_loft",
+    "solid": {
+      "backend_valid": true,
+      "solids": 1,
+      "faces": 3,
+      "mycad_valid": true
+    },
+    "sheet": {
+      "backend_valid": true,
+      "solids": 0,
+      "faces": 1,
+      "mycad_valid": false,
+      "issues": [
+        "no-solid-result"
+      ]
+    },
+    "diagnosis": "Current MyCAD validate_result explicitly rejects non-null geometry with zero solids."
+  },
+  "gordon_probe": {
+    "constructor": "Face.make_gordon_surface(profiles, guides), default tolerance",
+    "network": "x,y in (0,10,20); z=factor*x*y. profiles vary y at fixed x; guides vary x at fixed y. Line inputs use endpoints; spline inputs use all three samples via Edge.make_spline.",
+    "cases": [
+      {
+        "factor": 0,
+        "curve": "line",
+        "max_pair_gap_mm": 0,
+        "valid": true,
+        "area_mm2": 400
+      },
+      {
+        "factor": 0.02,
+        "curve": "line",
+        "max_pair_gap_mm": 1.7763568394002505e-15,
+        "error": "IntersectionError: U-directional B-spline 1 and V-directional B-spline 2 don't intersect!",
+        "reproduced": true
+      },
+      {
+        "factor": 0.02,
+        "curve": "spline",
+        "max_pair_gap_mm": 1.7763568394002505e-15,
+        "valid": true,
+        "area_mm2": 420.599576
+      }
+    ],
+    "diagnosis": "Representation-sensitive failure reaches ocp_gordon intersection-matrix construction. Exact numerical root cause not established; successful spline control is not a validated general fix."
+  },
+  "decision": "Require representation/tolerance regression and prototype acceptance before committing BlueSurf-equivalent scope; preserve existing solid validation for solid-result commands.",
+  "cleanup": "In-memory geometry only; no CAD output or product code changed; JSON evidence and this ledger event retained."
+}

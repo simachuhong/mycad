@@ -23,6 +23,7 @@ from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -116,6 +117,7 @@ class _SketchSource(Protocol):
 
 class _DxfAttributes(Protocol):
     layer: str
+    location: Sequence[float]
     start: Sequence[float]
     end: Sequence[float]
     center: Sequence[float]
@@ -157,6 +159,10 @@ class _Spline(_DxfEntity, Protocol):
 
 
 class _Modelspace(Protocol):
+    def add_point(
+        self, location: Sequence[float], *, dxfattribs: Mapping[str, object]
+    ) -> _DxfEntity: ...
+
     def add_open_spline(
         self,
         control_points: Iterable[Sequence[float]],
@@ -790,7 +796,9 @@ def write_sketch_dxf(sketch: Sketch, path: Path) -> DxfExchangeReport:
     for entity in sketch.entities:
         is_rectangle = isinstance(entity, RectangleEntity)
         attributes = {"layer": entity.layer_name}
-        if isinstance(entity, SplineEntity):
+        if isinstance(entity, PointEntity):
+            dxf_entity = modelspace.add_point(entity.position_mm, dxfattribs=attributes)
+        elif isinstance(entity, SplineEntity):
             dxf_entity = modelspace.add_open_spline(
                 ((u, v, 0.0) for u, v in entity.control_points_mm),
                 degree=3,
@@ -1027,6 +1035,8 @@ def _read_entity(
     construction: bool,
 ) -> SketchEntity | None:
     kind = entity.dxftype()
+    if kind == "POINT":
+        return PointEntity(entity_id, _xy(entity.dxf.location, scale), construction, layer_name)
     if kind in {"LWPOLYLINE", "CIRCLE", "ARC"} and not _is_world_xy_normal(entity.dxf.extrusion):
         raise ValueError("只支持位于全局 XY 平面的图元")
     if kind == "SPLINE":

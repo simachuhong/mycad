@@ -42,9 +42,12 @@ EXPECTED_DEF_NAMES: tuple[str, ...] = (
     "Position",
     "Positive",
     "Profile",
+    "RegionSketchExtrudeProfile",
+    "RegionSketchRevolveProfile",
     "SketchExtrudeProfile",
     "SketchHole",
     "SketchProfileReference",
+    "SketchRegionProfileReference",
     "SketchRevolveProfile",
     "Tool",
 )

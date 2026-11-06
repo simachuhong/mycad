@@ -26,6 +26,7 @@ class ExecutionResult:
     operation: str
     value: object | None
     error: str | None
+    error_detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ class _ExecutionWorker(QObject):
                 operation=request.operation,
                 value=None,
                 error=f"{type(exc).__name__}: {message}",
+                error_detail=f"{type(exc).__name__}: {exc}",
             )
         self.finished.emit(result)
 
@@ -76,6 +78,7 @@ class SerializedExecutionUnit(QObject):
     busy_changed = Signal(bool)
     result_ready = Signal(object)
     stale_result_discarded = Signal(int)
+    result_delivery_finished = Signal()
     _request_ready = Signal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -97,6 +100,9 @@ class SerializedExecutionUnit(QObject):
         self._session_id = 0
         self._request_id = 0
         self._busy = False
+        self._result_delivery_depth = 0
+        self._idle_notification_depth = 0
+        self._completion_callback_depths: list[int] = []
         self._operation: str | None = None
         self._closed = False
         self._callbacks: dict[int, Callable[[ExecutionResult], None]] = {}
@@ -105,6 +111,24 @@ class SerializedExecutionUnit(QObject):
     def is_busy(self) -> bool:
         """Whether an operation is running on the serialized worker."""
         return self._busy
+
+    @property
+    def is_delivering_result(self) -> bool:
+        """Whether completion signals and their callback are being delivered."""
+        return self._result_delivery_depth > 0
+
+    @property
+    def is_notifying_idle(self) -> bool:
+        """Whether synchronous listeners are handling the idle notification."""
+        return self._idle_notification_depth > 0
+
+    @property
+    def is_notifying_result(self) -> bool:
+        """Whether result signals, rather than the owning callback, are running."""
+        return self.is_delivering_result and not (
+            self._completion_callback_depths
+            and self._completion_callback_depths[-1] == self._result_delivery_depth
+        )
 
     @property
     def session_id(self) -> int:
@@ -129,7 +153,13 @@ class SerializedExecutionUnit(QObject):
         on_complete: Callable[[ExecutionResult], None] | None = None,
     ) -> bool:
         """Start work if idle; reject duplicate or post-shutdown requests."""
-        if self._busy or self._closed or session_id != self._session_id:
+        if (
+            self._busy
+            or self._closed
+            or self.is_notifying_idle
+            or self.is_notifying_result
+            or session_id != self._session_id
+        ):
             return False
         self._request_id += 1
         request = _ExecutionRequest(
@@ -151,16 +181,30 @@ class SerializedExecutionUnit(QObject):
         """Reset busy state and deliver the result on this object's thread."""
         if not isinstance(value, ExecutionResult):
             return
-        self._busy = False
-        self._operation = None
-        self.busy_changed.emit(False)
-        callback = self._callbacks.pop(value.request_id, None)
-        if value.session_id != self._session_id:
-            self.stale_result_discarded.emit(value.session_id)
-            return
-        self.result_ready.emit(value)
-        if callback is not None:
-            callback(value)
+        self._result_delivery_depth += 1
+        try:
+            self._busy = False
+            self._operation = None
+            self._idle_notification_depth += 1
+            try:
+                self.busy_changed.emit(False)
+            finally:
+                self._idle_notification_depth -= 1
+            callback = self._callbacks.pop(value.request_id, None)
+            if value.session_id != self._session_id:
+                self.stale_result_discarded.emit(value.session_id)
+                return
+            self.result_ready.emit(value)
+            if callback is not None:
+                self._completion_callback_depths.append(self._result_delivery_depth)
+                try:
+                    callback(value)
+                finally:
+                    self._completion_callback_depths.pop()
+        finally:
+            self._result_delivery_depth -= 1
+            if self._result_delivery_depth == 0:
+                self.result_delivery_finished.emit()
 
     def shutdown(self, *, wait_for_running: bool = False) -> bool:
         """Stop the worker, optionally waiting for an active operation to finish.

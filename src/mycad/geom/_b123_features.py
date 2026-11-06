@@ -46,6 +46,7 @@ from mycad.core.exceptions import (
 from mycad.core.selectors import BodySelector, EdgeSelector, FaceSelector
 from mycad.core.sketch import CircleEntity, LineEntity
 from mycad.core.sketch import Sketch as SketchValue
+from mycad.core.topology_evolution import TopologyEvolution
 from mycad.geom._b123_ops import (
     checked_mapping,
     normalize_result,
@@ -56,11 +57,16 @@ from mycad.geom._b123_ops import (
 )
 from mycad.geom.profiles import CircleProfile, Profile, RectProfile, profile_from_mapping
 from mycad.geom.selectors import resolve_body, resolve_edges, resolve_face
-from mycad.geom.sketch_profiles import make_sketch_faces
+from mycad.geom.sketch_profiles import make_sketch_faces, select_sketch_region
+from mycad.geom.topology_evolution import boolean_with_evolution
 
 
 def apply_feature(
-    existing: Part | None, command_id: str, params: Mapping[str, object]
+    existing: Part | None,
+    command_id: str,
+    params: Mapping[str, object],
+    *,
+    evolution_callback: Callable[[TopologyEvolution], None] | None = None,
 ) -> Part | None:
     """Apply one feature command to ``existing``; return the new solid state."""
 
@@ -74,7 +80,7 @@ def apply_feature(
     if command_id == "modify.chamfer":
         return _chamfer(existing, command_id, checked)
     if command_id == "modify.boolean_cut":
-        return _boolean_cut(existing, command_id, checked)
+        return _boolean_cut(existing, command_id, checked, evolution_callback)
     if command_id == "modify.boolean_intersect":
         return _boolean_intersect(existing, command_id, checked)
     if command_id == "modify.boolean_bodies":
@@ -84,11 +90,27 @@ def apply_feature(
     if command_id == "modify.body_pattern":
         return _body_pattern(existing, command_id, checked)
     if command_id == "feature.hole":
-        return _hole(existing, command_id, checked)
+        return _hole(existing, command_id, checked, evolution_callback)
     if command_id == "feature.hole_pattern":
         return _hole_pattern(existing, command_id, checked)
     msg = f"{command_id}: command is not implemented in the geometry kernel"
     raise ValidationError(message=msg, command_id=command_id)
+
+
+def _sketch_profile_faces(
+    sketch: SketchValue, profile: Mapping[str, object], command_id: str
+) -> tuple[Face, ...]:
+    raw_ids = profile.get("boundary_entity_ids")
+    if raw_ids is None:
+        return make_sketch_faces(sketch)
+    if (
+        not isinstance(raw_ids, list)
+        or not raw_ids
+        or any(not isinstance(identity, str) for identity in cast("list[object]", raw_ids))
+    ):
+        raise ValidationError("草图区域边界引用无效。", command_id=command_id)
+    identities = tuple(cast("list[str]", raw_ids))
+    return (select_sketch_region(sketch, identities, command_id=command_id).face,)
 
 
 def apply_sketch_extrusion(
@@ -100,7 +122,9 @@ def apply_sketch_extrusion(
     command_id = "feature.extrude"
     reject_unknown_keys(params, _SKETCH_EXTRUDE_KEYS, command_id)
     profile = checked_mapping(params.get("profile"), command_id)
-    reject_unknown_keys(profile, frozenset({"type", "sketch_id"}), command_id)
+    reject_unknown_keys(
+        profile, frozenset({"type", "sketch_id", "boundary_entity_ids"}), command_id
+    )
     sketch_id = profile.get("sketch_id")
     if profile.get("type") != "sketch" or not isinstance(sketch_id, str):
         raise ValidationError("拉伸草图引用无效。", command_id=command_id)
@@ -108,7 +132,7 @@ def apply_sketch_extrusion(
     if sketch is None:
         raise ValidationError("拉伸引用的草图不存在。", command_id=command_id)
     mode = parse_mode(params, command_id)
-    faces = make_sketch_faces(sketch)
+    faces = _sketch_profile_faces(sketch, profile, command_id)
     raw_extent_mode = params.get("extent_mode", "one_sided")
     if raw_extent_mode == "to_face":
         selector = checked_mapping(params.get("target_face"), command_id)
@@ -210,7 +234,9 @@ def apply_sketch_revolve(
     command_id = "feature.revolve"
     reject_unknown_keys(params, _REVOLVE_KEYS, command_id)
     profile = checked_mapping(params.get("profile"), command_id)
-    reject_unknown_keys(profile, frozenset({"type", "sketch_id"}), command_id)
+    reject_unknown_keys(
+        profile, frozenset({"type", "sketch_id", "boundary_entity_ids"}), command_id
+    )
     sketch_id = profile.get("sketch_id")
     if profile.get("type") != "sketch" or not isinstance(sketch_id, str):
         raise ValidationError("旋转草图引用无效。", command_id=command_id)
@@ -225,7 +251,7 @@ def apply_sketch_revolve(
         axis = _sketch_line_axis(sketches, axis_reference, sketch_id, command_id)
     angle = _revolve_angle(params.get("angle_deg", 360.0), command_id)
     mode = parse_mode(params, command_id)
-    faces = make_sketch_faces(sketch)
+    faces = _sketch_profile_faces(sketch, profile, command_id)
     try:
         solid = revolve(cast("Face | Iterable[Face]", faces), axis=axis, revolution_arc=angle)
     except MycadError:
@@ -607,7 +633,10 @@ def _tool_solid(tool: object, command_id: str) -> Part:
 
 
 def _boolean_cut(
-    existing: Part | None, command_id: str, params: Mapping[str, object]
+    existing: Part | None,
+    command_id: str,
+    params: Mapping[str, object],
+    evolution_callback: Callable[[TopologyEvolution], None] | None = None,
 ) -> Part | None:
     """modify.boolean_cut: subtract an inline tool solid — the only command
     on the ``cut`` verb (feature commands subtract via ``mode='cut'``)."""
@@ -620,6 +649,10 @@ def _boolean_cut(
         msg = f"{command_id}: boolean_cut requires an existing solid; kernel is empty"
         raise GeometryBuildError(message=msg, command_id=command_id)
     tool = _tool_solid(params["tool"], command_id)
+    if evolution_callback is not None:
+        result, evolution = boolean_with_evolution("cut", [existing], [tool])
+        evolution_callback(evolution)
+        return result
     try:
         result = existing - tool
     except MycadError:
@@ -994,18 +1027,24 @@ def _parse_hole_position(value: object, command_id: str) -> tuple[float, float, 
         return None
     if set(position) == {"kind", "point"} and position["kind"] == "point":
         return parse_center({"center": position["point"]}, command_id)
-    raise ValidationError(message="孔位置需要面心或平面上的坐标点。", command_id=command_id)
+    raise ValidationError(message="孔位置需要面心或目标面上的坐标点。", command_id=command_id)
 
 
 def _hole_position_offset(value: object, face: Face, command_id: str) -> tuple[float, float, float]:
     point = _parse_hole_position(value, command_id)
     if point is None:
+        if face.geom_type == GeomType.CYLINDER:
+            raise ValidationError(
+                message="圆柱侧面上的径向孔需要显式 point 定位。", command_id=command_id
+            )
         return (0.0, 0.0, 0.0)
     center = face.center()
-    normal = face.normal_at(center)
     offset = (point[0] - center.X, point[1] - center.Y, point[2] - center.Z)
+    normal = face.normal_at(center)
     distance = offset[0] * normal.X + offset[1] * normal.Y + offset[2] * normal.Z
-    if abs(distance) > 1e-5 or not face.is_inside(point, tolerance=1e-5):
+    if (face.geom_type == GeomType.PLANE and abs(distance) > 1e-5) or not face.is_inside(
+        point, tolerance=1e-5
+    ):
         raise GeometryBuildError(
             message="孔定位点不在当前目标面的有效区域，请重新选择。", command_id=command_id
         )
@@ -1015,12 +1054,12 @@ def _hole_position_offset(value: object, face: Face, command_id: str) -> tuple[f
 def _resolve_hole_target_face(
     part: Part | None, selector: FaceSelector | Mapping[str, object], command_id: str
 ) -> Face:
-    """Resolve the target face and pin it to a plane (holes need a flat datum)."""
+    """Resolve the target face; a radial hole can use a cylindrical datum."""
 
     face = resolve_face(selector, part, command_id)
-    if face.geom_type != GeomType.PLANE:
+    if face.geom_type not in (GeomType.PLANE, GeomType.CYLINDER):
         msg = (
-            f"reason=target-not-plane: hole target face must be planar, "
+            f"reason=unsupported-hole-face: hole target must be planar or cylindrical, "
             f"got {face.geom_type.name}; descriptor={_descriptor_json(selector)}"
         )
         raise TopologyReferenceError(message=msg, command_id=command_id)
@@ -1041,7 +1080,7 @@ def _hole_cutter(
 ) -> Part:
     """Build one hole cutter along the target face's outward normal.
 
-    The hole axis is the outward normal at the face center (fixed rule).
+    The hole axis is the outward normal at the chosen position.
     ``blind`` extends ``blind_value`` into the material — the opposite
     direction of the outward normal — with a tiny outward overshoot so the
     cutter mouth is never coincident with the datum face. ``through_all``
@@ -1053,7 +1092,7 @@ def _hole_cutter(
     px = center.X + offset[0]
     py = center.Y + offset[1]
     pz = center.Z + offset[2]
-    normal = face.normal_at(center)
+    normal = face.normal_at((px, py, pz))
     n = (normal.X, normal.Y, normal.Z)
     if depth_kind == "through_all":
         bb = part.bounding_box()
@@ -1084,8 +1123,13 @@ def _subtract_all(existing: Part, cutters: list[Part], command_id: str) -> Part 
     return normalize_result(result)
 
 
-def _hole(existing: Part | None, command_id: str, params: Mapping[str, object]) -> Part | None:
-    """feature.hole: drill a predicate-located hole at the target face center."""
+def _hole(
+    existing: Part | None,
+    command_id: str,
+    params: Mapping[str, object],
+    evolution_callback: Callable[[TopologyEvolution], None] | None = None,
+) -> Part | None:
+    """feature.hole: drill normal to the selected face at the chosen position."""
 
     reject_unknown_keys(params, _HOLE_KEYS, command_id)
     selector, diameter, depth_kind, blind_value = _parse_hole_fields(params, command_id)
@@ -1097,7 +1141,27 @@ def _hole(existing: Part | None, command_id: str, params: Mapping[str, object]) 
         raise GeometryBuildError(message=msg, command_id=command_id)
     offset = _hole_position_offset(params["position"], face, command_id)
     cutter = _hole_cutter(existing, face, diameter, depth_kind, blind_value, command_id, offset)
+    if evolution_callback is not None:
+        result, evolution = boolean_with_evolution("cut", [existing], [cutter])
+        evolution_callback(evolution)
+        return result
     return _subtract_all(existing, [cutter], command_id)
+
+
+def apply_bound_hole(
+    existing: Part,
+    face: Face,
+    point: tuple[float, float, float],
+    params: Mapping[str, object],
+) -> tuple[Part | None, TopologyEvolution]:
+    """Drill on an already lineage-resolved plane; history params stay unchanged."""
+    command_id = "feature.hole"
+    reject_unknown_keys(params, _HOLE_KEYS, command_id)
+    diameter = parse_positive(params, "diameter", command_id)
+    depth_kind, blind_value = _parse_hole_depth(params["depth"], command_id)
+    offset = _hole_position_offset({"kind": "point", "point": list(point)}, face, command_id)
+    cutter = _hole_cutter(existing, face, diameter, depth_kind, blind_value, command_id, offset)
+    return boolean_with_evolution("cut", [existing], [cutter])
 
 
 _SKETCH_HOLE_KEYS = frozenset({"profile", "target_face", "depth"})
@@ -1107,6 +1171,8 @@ def apply_sketch_hole(
     existing: Part | None,
     sketches: Mapping[str, SketchValue],
     params: Mapping[str, object],
+    *,
+    evolution_callback: Callable[[TopologyEvolution], None] | None = None,
 ) -> Part | None:
     """Execute ``feature.hole@2`` from circle entities on a selected planar face."""
     command_id = "feature.hole"
@@ -1180,6 +1246,10 @@ def apply_sketch_hole(
                 offset,
             )
         )
+    if evolution_callback is not None:
+        result, evolution = boolean_with_evolution("cut", [existing], cutters)
+        evolution_callback(evolution)
+        return result
     return _subtract_all(existing, cutters, command_id)
 
 

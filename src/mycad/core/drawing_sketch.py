@@ -18,6 +18,7 @@ from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -26,6 +27,8 @@ from mycad.core.sketch import (
 
 
 def _curves(entity: SketchEntity) -> tuple[CurveGeometry, ...]:
+    if isinstance(entity, PointEntity):
+        return ()
     if isinstance(entity, LineEntity):
         return (LineCurve(entity.start_mm, entity.end_mm),)
     if isinstance(entity, CircleEntity):

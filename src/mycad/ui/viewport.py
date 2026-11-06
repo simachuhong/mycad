@@ -28,11 +28,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from math import atan, cos, radians, sin, tan
+from math import atan, cos, dist, radians, sin, tan
 from time import monotonic
-from typing import TYPE_CHECKING, Literal, cast, override
+from typing import TYPE_CHECKING, Literal, Protocol, cast, override
 
 import numpy as np
+from pyqtgraph import Vector
 from pyqtgraph.opengl import (
     GLLinePlotItem,
     GLMeshItem,
@@ -42,21 +43,36 @@ from pyqtgraph.opengl import (
     MeshData,
 )
 from pyqtgraph.opengl.shaders import FragmentShader, ShaderProgram, VertexShader
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
+    QColor,
     QFont,
+    QFontMetrics,
     QKeyEvent,
     QMatrix4x4,
     QMouseEvent,
+    QPainter,
     QPaintEvent,
+    QPen,
+    QQuaternion,
     QVector3D,
+    QVector4D,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QRubberBand
 
 from mycad.core.identity import BodyId, TopologyId
 from mycad.core.signals import SignalName
-from mycad.core.viewport_protocol import PlanarFaceFrame, Point3
+from mycad.core.sketch import WorkPlaneFrame
+from mycad.core.spatial_frames import RigidFrame
+from mycad.core.spatial_positioning import intersect_plane
+from mycad.core.spatial_references import SpatialReference
+from mycad.core.viewport_protocol import (
+    PlanarFaceFrame,
+    Point3,
+    SpatialDatumPort,
+    ViewportSketchRegion,
+)
 from mycad.ui.body_display import visible_body_snapshot
 from mycad.ui.coordinate_indicator import CoordinateIndicator
 from mycad.ui.extrude_manipulator import ExtrudeManipulator
@@ -79,6 +95,15 @@ class ViewportViewState:
     selection: SelectionState | None
     selection_filter: SelectionKind
     hidden_bodies: tuple[BodyId, ...]
+    rotation: tuple[float, float, float, float] | None = None
+    hidden_datums: tuple[SpatialReference, ...] = ()
+
+
+@dataclass(frozen=True)
+class DraftRelationAnnotation:
+    constraint_id: str
+    position: Point3
+    text: str
 
 
 SelectionKind = Literal["body", "face", "edge", "vertex"]
@@ -88,12 +113,17 @@ if TYPE_CHECKING:
     from mycad.core.geometry_types import Tessellation
     from mycad.core.persistence import LoadedDocument
     from mycad.core.viewport_protocol import (
+        CandidateInteractionScene,
         ViewportBoundaryEdge,
         ViewportData,
+        ViewportDatum,
         ViewportPort,
         ViewportSketchData,
+        ViewportSketchDimension,
+        ViewportSnapAnchor,
         ViewportVertex,
     )
+    from mycad.ui.part_sketch_dimensions import DraftDimensionLeader
 
 #: Phase 2 light canvas. setBackgroundColor uses Qt colours (not GL floats).
 #: Hex preserves opaque alpha; mesh/edge colours below use GL's 0..1 range.
@@ -118,6 +148,11 @@ REFRESH_SIGNALS: tuple[SignalName, ...] = (
     "post_command",
     "geometry_rebuilt",
     "command_amended",
+)
+SOURCE_IDENTITY_SIGNALS: tuple[SignalName, ...] = (
+    "metadata_changed",
+    "named_group_added",
+    "named_group_removed",
 )
 
 
@@ -312,6 +347,19 @@ def camera_basis(
     )
 
 
+def view_camera_basis(matrix: QMatrix4x4) -> tuple[Point3, Point3, Point3, Point3]:
+    """Read the rendered world-space camera axes, including free-view roll."""
+    right = matrix.row(0)
+    up = matrix.row(1)
+    eye = matrix.row(2)
+    return (
+        (eye.x(), eye.y(), eye.z()),
+        (right.x(), right.y(), right.z()),
+        (up.x(), up.y(), up.z()),
+        (-eye.x(), -eye.y(), -eye.z()),
+    )
+
+
 def point_segment_distance_2d(
     point: tuple[float, float],
     start: tuple[float, float],
@@ -408,6 +456,33 @@ class SelectionState:
             raise ValueError("topology selection needs one owning body per topology identity")
 
 
+class _ScatterInitializer(Protocol):
+    def initializeGL(self) -> None: ...  # noqa: N802
+
+
+class _ContextScatterPlotItem(GLScatterPlotItem):
+    """Keep the point-sprite shader local to this item's OpenGL context."""
+
+    def initializeGL(self) -> None:  # noqa: N802
+        if cast("object", self.shader) is not None:
+            return
+        cast("_ScatterInitializer", super()).initializeGL()
+        self.shader = ShaderProgram(
+            "mycad-point-sprite",
+            [
+                VertexShader(
+                    """
+                    void main() {
+                        gl_FrontColor = gl_Color;
+                        gl_PointSize = gl_Normal.x;
+                        gl_Position = ftransform();
+                    }
+                    """
+                )
+            ],
+        )
+
+
 class _DepthBiasedLinePlotItem(GLLinePlotItem):
     """Keep display polylines fractionally in front of coincident mesh faces."""
 
@@ -434,30 +509,27 @@ class _DepthBiasedLinePlotItem(GLLinePlotItem):
     def paint(self) -> None:
         """Apply a small camera-facing draw offset to avoid depth-buffer flicker."""
         view = self.view()
-        view_options = cast("dict[str, object]", {} if view is None else view.opts)
-        elevation_value = view_options.get("elevation", 30.0)
-        azimuth_value = view_options.get("azimuth", 45.0)
-        if (
-            self._base_positions.size
-            and isinstance(elevation_value, int | float)
-            and not isinstance(elevation_value, bool)
-            and isinstance(azimuth_value, int | float)
-            and not isinstance(azimuth_value, bool)
-        ):
-            elevation = radians(float(elevation_value))
-            azimuth = radians(float(azimuth_value))
-            camera_direction = np.asarray(
-                (
-                    cos(elevation) * cos(azimuth),
-                    cos(elevation) * sin(azimuth),
-                    sin(elevation),
-                ),
-                dtype=np.float32,
-            )
+        if self._base_positions.size and view is not None:
+            camera_direction = np.asarray(view_camera_basis(view.viewMatrix())[0], dtype=np.float32)
             span = float(np.ptp(self._base_positions, axis=0).max())
             offset = max(0.01, span * 1e-4)
             self.pos = self._base_positions + camera_direction * offset
         super().paint()
+
+
+class _SketchOverlayLinePlotItem(_DepthBiasedLinePlotItem):
+    """Draw the active sketch after the model, including inside solid geometry."""
+
+    def __init__(
+        self,
+        positions: Sequence[tuple[float, float, float]],
+        *,
+        color: tuple[float, float, float, float],
+    ) -> None:
+        super().__init__(positions, color=color)
+        # OpenGL GL_DEPTH_TEST and GL_BLEND: show the exact sketch color over the model.
+        self.setGLOptions({0x0B71: False, 0x0BE2: False})
+        self.setDepthValue(10)
 
 
 class GLViewport(GLViewWidget):
@@ -477,6 +549,7 @@ class GLViewport(GLViewWidget):
 
     # Click on the current model result; False means selection was cleared.
     current_entity_picked = Signal(bool)
+    datum_selection_changed = Signal(object)
     # Full transient identity state, shared with status and structure panel.
     selection_changed = Signal(object)
     current_snapshot_changed = Signal(object)
@@ -513,16 +586,22 @@ class GLViewport(GLViewWidget):
         self._fillet_interaction_active = False
         self._fillet_radius_input_valid = True
         self._placement_context_active = False
+        self._face_origin_snap_enabled = False
         self._selection: SelectionState | None = None
         self._preselection: SelectionState | None = None
         self._rubber_start: tuple[float, float] | None = None
         self._rubber_crossing = False
-        self._coordinate_axes_visible = False
+        self._coordinate_axes_visible = True
         self._xy_grid_visible = False
+        self._workplane_grid: GLScatterPlotItem | None = None
+        self._position_marker: GLScatterPlotItem | None = None
+        self._origin_hotspot: Point3 | None = None
+        self._position_projection_line: GLLinePlotItem | None = None
+        self._position_points: tuple[Point3, ...] = ()
         self.coordinate_indicator = CoordinateIndicator(
             self, self.viewMatrix, lambda: self.project_world_point((0.0, 0.0, 0.0))
         )
-        self._xy_grid = GLScatterPlotItem(
+        self._xy_grid = _ContextScatterPlotItem(
             pos=np.array(
                 [(x, y, 0.0) for x in range(-100, 101, 10) for y in range(-100, 101, 10)],
                 dtype=np.float32,
@@ -540,6 +619,21 @@ class GLViewport(GLViewWidget):
         self._edge_item: GLLinePlotItem | None = None
         self._mesh_edge_item: GLLinePlotItem | None = None
         self._sketch_items: list[_DepthBiasedLinePlotItem] = []
+        self._sketch_point_items: list[GLScatterPlotItem] = []
+        self._draft_sketch_items: list[_DepthBiasedLinePlotItem] = []
+        self._draft_points: tuple[tuple[str, Point3], ...] = ()
+        self._draft_point_item: GLScatterPlotItem | None = None
+        self._draft_controls: tuple[Point3, ...] = ()
+        self._draft_control_item: GLScatterPlotItem | None = None
+        self._draft_regions: tuple[ViewportSketchRegion, ...] = ()
+        self._draft_region_items: list[GLMeshItem] = []
+        self._draft_relation_items: list[GLTextItem] = []
+        self._draft_relation_texts: tuple[str, ...] = ()
+        self._draft_relations: tuple[DraftRelationAnnotation, ...] = ()
+        self._draft_dimension_items: list[GLTextItem] = []
+        self._draft_dimensions: tuple[ViewportSketchDimension, ...] = ()
+        self._draft_dimension_leader_items: list[_SketchOverlayLinePlotItem] = []
+        self._active_draft_sketch_id: str | None = None
         self._sketch_dimension_items: list[GLTextItem] = []
         self._sketch_dimension_label_count = 0
         self._mesh: Tessellation | None = None
@@ -551,6 +645,16 @@ class GLViewport(GLViewWidget):
         self._history_state_ids: tuple[str, ...] = ()
         self._preview_snapshot: ViewportData | None = None
         self._candidate_snapshot: ViewportData | None = None
+        self._interaction_scene: CandidateInteractionScene | None = None
+        self._interaction_guard: Callable[[], bool] | None = None
+        self._datum_items: list[GLLinePlotItem | GLTextItem] = []
+        self._hidden_datums: set[SpatialReference] = set()
+        self._datum_pick_filter: frozenset[SpatialReference] | None = None
+        self._selected_datum: SpatialReference | None = None
+        self._preselected_datum: SpatialReference | None = None
+        self._datum_cycle: tuple[SpatialReference, ...] = ()
+        self._datum_cycle_position: tuple[float, float] | None = None
+        self._datum_cycle_index = 0
         self._candidate_sketches: tuple[ViewportSketchData, ...] | None = None
         self._candidate_camera_state: tuple[float, tuple[float, float, float]] | None = None
         self._candidate_preserve_view = False
@@ -572,6 +676,7 @@ class GLViewport(GLViewWidget):
         # Snapshot state IDs map to their producing command ordinal only for
         # explicit history preview. Current entity selection never uses it.
         self._document: Document | None = None
+        self._source_revision: int | None = None
         self._ordinal_of_state: dict[str, int] = {}
         self._current_state_id: str | None = None
         self._preview_state_id: str | None = None
@@ -583,6 +688,9 @@ class GLViewport(GLViewWidget):
         self._right_press_started = 0.0
         self._modeling_navigation_pos: tuple[float, float] | None = None
         self._last_face_hit: tuple[TopologyId, Point3] | None = None
+        self._last_face_screen: tuple[float, float] | None = None
+        self._last_face_snap_bypassed = False
+        self._last_face_origin_snapped = False
         self.extrude_manipulator = ExtrudeManipulator(
             self, self.project_world_point, self.camera_ray
         )
@@ -596,6 +704,7 @@ class GLViewport(GLViewWidget):
 
     def capture_view(self) -> ViewportViewState:
         distance, center = self.camera_state()
+        rotation: QQuaternion = self.opts["rotation"]
         return ViewportViewState(
             distance,
             float(self.opts["elevation"]),
@@ -606,6 +715,10 @@ class GLViewport(GLViewWidget):
             self.selection(),
             self._selection_filter,
             self.hidden_body_ids(),
+            (rotation.scalar(), rotation.x(), rotation.y(), rotation.z())
+            if self.opts["rotationMethod"] == "quaternion"
+            else None,
+            tuple(sorted(self._hidden_datums, key=lambda item: item.source_instance_id or "")),
         )
 
     def restore_view(self, state: ViewportViewState) -> None:
@@ -617,9 +730,13 @@ class GLViewport(GLViewWidget):
             elevation=state.elevation,
             azimuth=state.azimuth,
         )
+        if state.rotation is not None:
+            self.setCameraPosition(rotation=QQuaternion(*state.rotation))
+        self._hidden_datums = set(state.hidden_datums)
         self.set_selection_filter(state.selection_filter)
         for identity in state.hidden_bodies:
             self.set_body_visible(identity, False)
+        self._render_active_state()
         snapshot = self._current_snapshot()
         if (
             snapshot is not None
@@ -632,16 +749,23 @@ class GLViewport(GLViewWidget):
         """Subscribe the refresh union to ``loaded`` and render it once."""
         self.extrude_manipulator.clear()
         self._last_face_hit = None
+        self._last_face_screen = None
+        self._last_face_origin_snapped = False
         was_selected = self._selection is not None or self._current_entity_selected
         was_previewing = self._preview_state_id is not None
         self._document = loaded.document
         self._hidden_body_ids.clear()
+        self._hidden_datums.clear()
+        self._selected_datum = None
+        self._preselected_datum = None
         self._visibility_source = None
         self._visible_snapshot_cache = None
         self._binding_id += 1
         self._preview_state_id = None
         self._preview_snapshot = None
         self._candidate_snapshot = None
+        self._interaction_scene = None
+        self._interaction_guard = None
         self._candidate_camera_state = None
         self._candidate_preserve_view = False
         self._current_entity_selected = False
@@ -649,7 +773,7 @@ class GLViewport(GLViewWidget):
         self._preselection = None
         self._adapters.clear()
         events = loaded.document.events
-        for name in REFRESH_SIGNALS:
+        for name in (*REFRESH_SIGNALS, *SOURCE_IDENTITY_SIGNALS):
             adapter = partial(self._queue_refresh_signal, self._binding_id, name)
             self._adapters.append(adapter)
             events.subscribe(name, adapter)
@@ -671,6 +795,13 @@ class GLViewport(GLViewWidget):
     ) -> None:
         """Handle only the currently bound document on the UI thread."""
         if self._disposed or binding_id != self._binding_id:
+            return
+        if (
+            name in SOURCE_IDENTITY_SIGNALS
+            and not self._refresh_pending
+            and not self._execution_busy
+        ):
+            self._source_revision = self._document.revision if self._document is not None else None
             return
         self._schedule_refresh()
 
@@ -740,9 +871,15 @@ class GLViewport(GLViewWidget):
         self._current_state_id = None
         self._current_entity_selected = False
         self._document = None
+        self._source_revision = None
+        self._interaction_scene = None
+        self._interaction_guard = None
         self._mesh = None
+        self.set_workplane_grid(None, 1.0)
+        self.set_position_markers(None)
         self._clear_items()
         self._clear_sketch_items()
+        self._clear_datum_items()
 
     def refresh(self) -> None:
         """Re-read the current mesh and history IDs, then rebuild the scene."""
@@ -757,8 +894,13 @@ class GLViewport(GLViewWidget):
         self._refresh_pending = False
         self._refresh_after_busy = False
         self._rebuilds += 1
+        revision = self._document.revision if self._document is not None else None
         snapshots = self._port.viewport_data()
         state_ids = self._port.viewport_state_ids()
+        if self._document is not None and self._document.revision != revision:
+            self._schedule_refresh()
+            return
+        self._source_revision = revision
         had_selection = self._selection is not None or self._current_entity_selected
         previous_preview = self._preview_state_id
         self._snapshots = snapshots
@@ -779,6 +921,9 @@ class GLViewport(GLViewWidget):
         self._preview_snapshot = None
         self._candidate_snapshot = None
         self._candidate_camera_state = None
+        if self._interaction_scene is not None and not self._interaction_scene_current():
+            self._interaction_scene = None
+            self._interaction_guard = None
         self._render_active_state()
         self.current_snapshot_changed.emit(snapshots[-1] if snapshots else None)
         if had_selection:
@@ -798,6 +943,264 @@ class GLViewport(GLViewWidget):
     def sketch_item_count(self) -> int:
         """Number of currently rendered non-pickable sketch curves."""
         return len(self._sketch_items)
+
+    def set_draft_sketch_control_points(self, points: tuple[Point3, ...]) -> None:
+        """Display editable control points for the selected spline."""
+        if not points and self._draft_control_item is not None:
+            self.removeItem(self._draft_control_item)
+            self._draft_control_item = None
+        self._draft_controls = points
+        if points:
+            positions = np.asarray(points, dtype=np.float32)
+            if self._draft_control_item is None:
+                self._draft_control_item = _ContextScatterPlotItem(
+                    pos=positions, color=(1.0, 0.55, 0.05, 1.0), size=9, pxMode=True
+                )
+                self.addItem(self._draft_control_item)
+            else:
+                self._draft_control_item.setData(pos=positions)
+        self.update()
+
+    def draft_sketch_control_points(self) -> tuple[Point3, ...]:
+        return self._draft_controls
+
+    def set_draft_sketch_points(
+        self, points: tuple[tuple[str, Point3], ...], *, selected_id: str | None = None
+    ) -> None:
+        """Display transient sketch points with a fixed logical-pixel size."""
+        if not points and self._draft_point_item is not None:
+            self.removeItem(self._draft_point_item)
+            self._draft_point_item = None
+        self._draft_points = points
+        if points:
+            colors = np.asarray(
+                [
+                    (1.0, 0.55, 0.05, 1.0) if identity == selected_id else (0.1, 0.35, 0.75, 1.0)
+                    for identity, _ in points
+                ],
+                dtype=np.float32,
+            )
+            positions = np.asarray([point for _, point in points], dtype=np.float32)
+            if self._draft_point_item is None:
+                self._draft_point_item = _ContextScatterPlotItem(
+                    pos=positions, color=colors, size=9, pxMode=True
+                )
+                self.addItem(self._draft_point_item)
+            else:
+                self._draft_point_item.setData(pos=positions, color=colors)
+        self.update()
+
+    def draft_sketch_point_at(self, x: float, y: float) -> str | None:
+        """Pick a visible draft point using logical screen pixels."""
+        candidates: list[tuple[float, str]] = []
+        for identity, point in self._draft_points:
+            screen = self.project_world_point(point)
+            if screen is not None:
+                distance = dist((x, y), screen)
+                if distance <= 9:
+                    candidates.append((distance, identity))
+        return min(candidates)[1] if candidates else None
+
+    def set_draft_sketch_regions(
+        self,
+        regions: tuple[ViewportSketchRegion, ...],
+        *,
+        selected: tuple[str, ...] | None = None,
+        hovered: tuple[str, ...] | None = None,
+    ) -> None:
+        """Display the exact candidate meshes used for region picking."""
+        for item in self._draft_region_items:
+            self.removeItem(item)
+        self._draft_region_items.clear()
+        self._draft_regions = regions
+        for region in regions:
+            mesh = MeshData(
+                vertexes=np.asarray(region.mesh.vertices, dtype=np.float32),
+                faces=np.asarray(region.mesh.triangle_indices, dtype=np.int32),
+            )
+            color = (
+                (1.0, 0.55, 0.05, 0.5)
+                if region.boundary_entity_ids == selected
+                else (0.2, 0.65, 0.95, 0.4)
+                if region.boundary_entity_ids == hovered
+                else (0.25, 0.55, 0.85, 0.2)
+            )
+            item = GLMeshItem(meshdata=mesh, color=color, glOptions="translucent", smooth=False)
+            self._draft_region_items.append(item)
+            self.addItem(item)
+        self.update()
+
+    def draft_sketch_region_at(self, x: float, y: float) -> tuple[str, ...] | None:
+        """Return the closest visible draft region under a logical viewport pixel."""
+        ray = self.camera_ray(x, y)
+        if ray is None:
+            return None
+        nearest: tuple[float, tuple[str, ...]] | None = None
+        for region in self._draft_regions:
+            hit = ray_mesh_hit_triangle(ray[0], ray[1], region.mesh)
+            if hit is not None and (nearest is None or hit[1] < nearest[0]):
+                nearest = (hit[1], region.boundary_entity_ids)
+        if nearest is None:
+            return None
+        snapshot = self._current_snapshot()
+        if snapshot is not None:
+            obstruction = ray_mesh_hit_triangle(ray[0], ray[1], snapshot.mesh)
+            if obstruction is not None and obstruction[1] < nearest[0] - 1e-5:
+                return None
+        return nearest[1]
+
+    def set_draft_sketch_curves(
+        self,
+        curves: Sequence[tuple[Point3, ...]],
+        *,
+        selected_index: int | None = None,
+        construction_indices: frozenset[int] = frozenset(),
+    ) -> None:
+        """Display transient part-sketch geometry without altering the model scene."""
+        for item in self._draft_sketch_items:
+            self.removeItem(item)
+        self._draft_sketch_items.clear()
+
+        def interpolate(start: Point3, end: Point3, factor: float) -> Point3:
+            return (
+                start[0] + (end[0] - start[0]) * factor,
+                start[1] + (end[1] - start[1]) * factor,
+                start[2] + (end[2] - start[2]) * factor,
+            )
+
+        for index, curve in enumerate(curves):
+            segments = tuple(zip(curve, curve[1:], strict=False))
+            if index in construction_indices and len(segments) > 10:
+                segments = segments[::2]
+            elif index in construction_indices:
+                segments = tuple(
+                    (
+                        interpolate(start, end, step / 12),
+                        interpolate(start, end, (step + 1) / 12),
+                    )
+                    for start, end in segments
+                    for step in range(0, 12, 2)
+                )
+            positions = tuple(point for start, end in segments for point in (start, end))
+            if positions:
+                color = (
+                    (1.0, 0.55, 0.05, 1.0)
+                    if index == selected_index
+                    else (0.45, 0.52, 0.58, 1.0)
+                    if index in construction_indices
+                    else (0.1, 0.35, 0.75, 1.0)
+                )
+                item = _SketchOverlayLinePlotItem(positions, color=color)
+                self._draft_sketch_items.append(item)
+                self.addItem(item)
+        self.update()
+
+    def draft_sketch_curve_count(self) -> int:
+        """Return the number of transient sketch curves currently displayed."""
+        return len(self._draft_sketch_items)
+
+    def set_draft_relation_labels(self, labels: tuple[tuple[Point3, str], ...]) -> None:
+        """Display transient relation symbols for the active sketch draft."""
+        self._draft_relations = ()
+        for item in self._draft_relation_items:
+            self.removeItem(item)
+        self._draft_relation_items.clear()
+        self._draft_relation_texts = tuple(text for _, text in labels)
+        for point, text in labels:
+            item = GLTextItem(pos=point, text=text, color=(30, 116, 65, 255))
+            self._draft_relation_items.append(item)
+            self.addItem(item)
+        self.update()
+
+    def draft_relation_labels(self) -> tuple[str, ...]:
+        """Return relation symbols currently displayed for the draft."""
+        return self._draft_relation_texts
+
+    def set_draft_relation_annotations(
+        self, annotations: tuple[DraftRelationAnnotation, ...]
+    ) -> None:
+        """Display relation symbols with the corresponding stable constraint IDs."""
+        self.set_draft_relation_labels(tuple((item.position, item.text) for item in annotations))
+        self._draft_relations = annotations
+
+    def draft_relation_annotations(self) -> tuple[DraftRelationAnnotation, ...]:
+        return self._draft_relations
+
+    def draft_relations_at(self, x: float, y: float) -> tuple[str, ...]:
+        candidates: list[tuple[float, str]] = []
+        for annotation in self._draft_relations:
+            point = self.project_world_point(annotation.position)
+            if point is not None and abs(point[0] - x) <= 12 and abs(point[1] - y) <= 12:
+                candidates.append(
+                    ((point[0] - x) ** 2 + (point[1] - y) ** 2, annotation.constraint_id)
+                )
+        return tuple(identity for _, identity in sorted(candidates))
+
+    def set_draft_sketch_dimensions(self, dimensions: tuple[ViewportSketchDimension, ...]) -> None:
+        """Display identifiable dimensions belonging to the active sketch draft."""
+        for item in self._draft_dimension_items:
+            self.removeItem(item)
+        self._draft_dimension_items.clear()
+        self._draft_dimensions = dimensions
+        if not dimensions:
+            self.set_draft_dimension_leaders(())
+        for dimension in dimensions:
+            font = QFont("Sans Serif")
+            font.setPointSizeF(max(8.0, min(24.0, 10.0 * dimension.scale**0.5)))
+            item = GLTextItem(
+                pos=dimension.position,
+                text=dimension.text,
+                color=(*dimension.color_rgb, 255),
+                font=font,
+                glOptions="translucent",
+            )
+            self._draft_dimension_items.append(item)
+            self.addItem(item)
+        self.update()
+
+    def draft_sketch_dimensions(self) -> tuple[ViewportSketchDimension, ...]:
+        """Return currently displayed draft dimensions with stable identities."""
+        return self._draft_dimensions
+
+    def set_draft_dimension_leaders(self, leaders: tuple[DraftDimensionLeader, ...]) -> None:
+        """Display transient lines connecting dimension labels to geometry."""
+        for item in self._draft_dimension_leader_items:
+            self.removeItem(item)
+        self._draft_dimension_leader_items.clear()
+        for leader in leaders:
+            positions = tuple(point for segment in leader.segments for point in segment)
+            red, green, blue = leader.color_rgb
+            item = _SketchOverlayLinePlotItem(
+                positions, color=(red / 255.0, green / 255.0, blue / 255.0, 1.0)
+            )
+            self._draft_dimension_leader_items.append(item)
+            self.addItem(item)
+        self.update()
+
+    def draft_dimensions_at(self, x: float, y: float) -> tuple[str, ...]:
+        """Find visible draft dimension labels at a screen position."""
+        candidates: list[tuple[float, str]] = []
+        for dimension in self._draft_dimensions:
+            point = self.project_world_point(dimension.position)
+            if point is None:
+                continue
+            font = QFont("Sans Serif")
+            font.setPointSizeF(max(8.0, min(24.0, 10.0 * dimension.scale**0.5)))
+            metrics = QFontMetrics(font)
+            if (
+                point[0] - 5 <= x <= point[0] + metrics.horizontalAdvance(dimension.text) + 5
+                and point[1] - metrics.height() - 5 <= y <= point[1] + 5
+            ):
+                candidates.append(
+                    ((x - point[0]) ** 2 + (y - point[1]) ** 2, dimension.constraint_id)
+                )
+        return tuple(identity for _, identity in sorted(candidates))
+
+    def set_active_draft_sketch(self, sketch_id: str | None) -> None:
+        """Suppress committed labels for the sketch currently being edited."""
+        if self._active_draft_sketch_id != sketch_id:
+            self._active_draft_sketch_id = sketch_id
+            self._render_active_state()
 
     def sketch_dimension_label_count(self) -> int:
         """Number of visible dimension labels overlaid with sketch geometry."""
@@ -842,10 +1245,7 @@ class GLViewport(GLViewWidget):
         width, height = float(self.width()), float(self.height())
         if width <= 0.0 or height <= 0.0 or distance <= 0.0:
             return None
-        camera_direction, right, up, forward = camera_basis(
-            float(self.opts["elevation"]),
-            float(self.opts["azimuth"]),
-        )
+        camera_direction, right, up, forward = view_camera_basis(self.viewMatrix())
         camera_vector = np.asarray(camera_direction, dtype=np.float64)
         right_vector = np.asarray(right, dtype=np.float64)
         up_vector = np.asarray(up, dtype=np.float64)
@@ -888,6 +1288,20 @@ class GLViewport(GLViewWidget):
             0.0,
         )
 
+    def world_origin_hit(self, x: float, y: float) -> bool:
+        """Test the visible world origin in logical pixels."""
+        origin = self.project_world_point((0.0, 0.0, 0.0))
+        return self._coordinate_axes_visible and origin is not None and dist((x, y), origin) <= 12
+
+    def placement_point_at(
+        self, x: float, y: float, *, bypass_snap: bool = False
+    ) -> tuple[float, float, float] | None:
+        """Locate on XY, snapping the pointer to the visible world origin."""
+        point = self.xy_workplane_point_at(x, y)
+        if point is not None and not bypass_snap and self.world_origin_hit(x, y):
+            return (0.0, 0.0, 0.0)
+        return point
+
     def project_world_point(self, point: tuple[float, float, float]) -> tuple[float, float] | None:
         """Project one world-space point into logical widget coordinates."""
         width, height = float(self.width()), float(self.height())
@@ -895,9 +1309,7 @@ class GLViewport(GLViewWidget):
         if width <= 0.0 or height <= 0.0 or distance <= 0.0:
             return None
         center: QVector3D = self.opts["center"]
-        _, right, up, forward = camera_basis(
-            float(self.opts["elevation"]), float(self.opts["azimuth"])
-        )
+        _, right, up, forward = view_camera_basis(self.viewMatrix())
         relative = np.asarray(
             (point[0] - center.x(), point[1] - center.y(), point[2] - center.z()),
             dtype=np.float64,
@@ -929,14 +1341,19 @@ class GLViewport(GLViewWidget):
         kind: SelectionKind,
     ) -> SelectionState | None:
         """Resolve one body, face, edge or vertex at a logical pointer point."""
-        snapshot = self._current_snapshot()
+        scene = self._interaction_scene
+        if scene is not None:
+            if not self._interaction_scene_current():
+                return None
+            snapshot = scene.viewport
+        else:
+            if not self._source_scene_current():
+                return None
+            snapshot = self._current_snapshot()
         if (
             snapshot is None
             or self._preview_state_id is not None
-            or (
-                self._candidate_snapshot is not None
-                and not (self._modeling_context_active or self._fillet_interaction_active)
-            )
+            or (self._candidate_snapshot is not None and scene is None)
         ):
             return None
         if kind in ("body", "face"):
@@ -995,7 +1412,12 @@ class GLViewport(GLViewWidget):
         self, origin: tuple[float, float, float], direction: tuple[float, float, float]
     ) -> bool:
         """Whether the ray hits the current whole-model result."""
-        if self._preview_state_id is not None or self._candidate_snapshot is not None:
+        if (
+            self._preview_state_id is not None
+            or self._candidate_snapshot is not None
+            or self._interaction_scene is not None
+            or not self._source_scene_current()
+        ):
             return False
         snapshot = self._current_snapshot()
         if snapshot is None or not snapshot.mesh.triangle_indices:
@@ -1003,7 +1425,9 @@ class GLViewport(GLViewWidget):
         hit = ray_mesh_hit(origin, direction, snapshot.mesh)
         return hit is not None
 
-    def pick_at(self, x: float, y: float, *, toggle: bool = False) -> bool:
+    def pick_at(
+        self, x: float, y: float, *, toggle: bool = False, bypass_origin_snap: bool = False
+    ) -> bool:
         """Select the filtered current topology under the pointer."""
         target = self.selection_target_at(x, y, self._selection_filter)
         if target is None:
@@ -1011,7 +1435,7 @@ class GLViewport(GLViewWidget):
                 self.clear_selection()
             return self.selection() is not None
         if target.kind == "face":
-            snapshot = self._current_snapshot()
+            snapshot = self._interaction_snapshot()
             ray = self.camera_ray(x, y)
             if snapshot is not None and ray is not None:
                 hit = ray_mesh_hit_triangle(ray[0], ray[1], snapshot.mesh)
@@ -1023,6 +1447,8 @@ class GLViewport(GLViewWidget):
                         origin[2] + direction[2] * hit[1],
                     )
                     self._last_face_hit = (target.topology_ids[0], point)
+                    self._last_face_screen = (x, y)
+                    self._last_face_snap_bypassed = bypass_origin_snap
         self._selection = self._combine_selection_target(self._selection, target, toggle)
         self._current_entity_selected = self._selection is not None
         self._preselection = None
@@ -1080,7 +1506,7 @@ class GLViewport(GLViewWidget):
         crossing: bool,
     ) -> tuple[SelectionState, ...]:
         """Return filtered topology contained by or crossed by a screen box."""
-        snapshot = self._current_snapshot()
+        snapshot = self._current_snapshot() if self._source_scene_current() else None
         if (
             snapshot is None
             or self._preview_state_id is not None
@@ -1275,6 +1701,77 @@ class GLViewport(GLViewWidget):
         self.coordinate_indicator.sync_scene()
         super().paintEvent(event)
 
+    @override
+    def paintGL(  # noqa: N802
+        self,
+        region: tuple[int, int, int, int] | None = None,
+        viewport: tuple[int, int, int, int] | None = None,
+        useItemNames: bool = False,  # noqa: N803
+    ) -> None:
+        """Keep datum outlines legible even when the GL driver alters line colors."""
+        super().paintGL(region=region, viewport=viewport, useItemNames=useItemNames)
+        if region is not None or viewport is not None or useItemNames:
+            return
+        painter = QPainter(self)
+        for datum in self._visible_datums():
+            frame = datum.frame
+            selected = datum.reference == self._selected_datum
+            hovered = datum.reference == self._preselected_datum
+            emphasis = (
+                QColor(235, 135, 10) if selected else QColor(35, 120, 210) if hovered else None
+            )
+
+            def line(
+                start: Point3, end: Point3, color: QColor, highlight: QColor | None = emphasis
+            ) -> None:
+                a, b = self.project_world_point(start), self.project_world_point(end)
+                if a is not None and b is not None:
+                    painter.setPen(QPen(highlight or color, 2))
+                    painter.drawLine(QPointF(*a), QPointF(*b))
+
+            if isinstance(frame, RigidFrame):
+                for axis, side, color in zip(
+                    (frame.x_axis, frame.y_axis, frame.z_axis),
+                    (frame.y_axis, frame.x_axis, frame.x_axis),
+                    (QColor(190, 35, 35), QColor(30, 145, 55), QColor(35, 75, 210)),
+                    strict=True,
+                ):
+                    origin = frame.origin_mm
+                    end = tuple(origin[i] + 20.0 * axis[i] for i in range(3))
+                    target: Point3 = (end[0], end[1], end[2])
+                    line(origin, target, color)
+                    for sign in (-1.0, 1.0):
+                        tip = tuple(end[i] - 3.0 * axis[i] + sign * 1.5 * side[i] for i in range(3))
+                        line(target, (tip[0], tip[1], tip[2]), color)
+            else:
+                corners = tuple(
+                    frame.local_to_world(point)
+                    for point in ((-25, -25), (25, -25), (25, 25), (-25, 25), (-25, -25))
+                )
+                for a, b in zip(corners, corners[1:], strict=False):
+                    line(a, b, QColor(45, 90, 170))
+                for axis in (frame.u_axis, frame.v_axis, frame.normal):
+                    end = tuple(frame.origin_mm[i] + 12.0 * axis[i] for i in range(3))
+                    line(frame.origin_mm, (end[0], end[1], end[2]), QColor(45, 90, 170))
+        if self._origin_hotspot is not None:
+            point = self.project_world_point(self._origin_hotspot)
+            if point is not None:
+                painter.setPen(QPen(QColor(240, 110, 0), 3))
+                painter.setBrush(QColor(255, 255, 255))
+                painter.drawEllipse(QPointF(*point), 7, 7)
+        for index, world in enumerate(self._position_points):
+            point = self.project_world_point(world)
+            if point is not None:
+                painter.setPen(QPen(QColor(225, 90, 0) if index == 0 else QColor(35, 100, 210), 3))
+                painter.setBrush(QColor(255, 255, 255))
+                painter.drawRect(round(point[0]) - 5, round(point[1]) - 5, 10, 10)
+        painter.end()
+
+    def set_origin_hotspot(self, point: Point3 | None) -> None:
+        """Show the transient coordinate-origin handle in logical pixels."""
+        self._origin_hotspot = point
+        self.update()
+
     def initializeGL(self) -> None:  # noqa: N802
         """A recreated widget context needs fresh compiled shader state too."""
         self._workbench_shader = build_workbench_shader()
@@ -1295,9 +1792,41 @@ class GLViewport(GLViewWidget):
     def orientation(self) -> ViewOrientation | None:
         return self._orientation
 
+    def setCameraPosition(  # noqa: N802
+        self,
+        pos: QVector3D | None = None,
+        distance: float | None = None,
+        elevation: float | None = None,
+        azimuth: float | None = None,
+        rotation: QQuaternion | None = None,
+    ) -> None:
+        """Keep named Euler views exact and preserve full free-view rotations."""
+        if rotation is not None:
+            if elevation is not None or azimuth is not None:
+                raise ValueError("cannot set both rotation and Euler angles")
+            self.opts["rotationMethod"] = "quaternion"
+            rotation = rotation.normalized()
+        elif elevation is not None or azimuth is not None:
+            self.opts["rotationMethod"] = "euler"
+        super().setCameraPosition(
+            pos=pos, distance=distance, elevation=elevation, azimuth=azimuth, rotation=rotation
+        )
+
+    def cameraPosition(self) -> Vector:  # noqa: N802
+        """Derive the eye from the same rotation used by rendering and picking."""
+        direction = view_camera_basis(self.viewMatrix())[0]
+        center: QVector3D = self.opts["center"]
+        return Vector(center + QVector3D(*direction) * float(self.opts["distance"]))
+
     def orbit(self, azim: float, elev: float) -> None:
-        """A free rotation leaves the named view; keep its UI indicator truthful."""
-        super().orbit(azim, elev)
+        """Rotate around screen axes without a world-up lock or pole clamp."""
+        rotation: QQuaternion = (
+            self.opts["rotation"]
+            if self.opts["rotationMethod"] == "quaternion"
+            else QQuaternion.fromRotationMatrix(self.viewMatrix().normalMatrix())
+        )
+        delta = QQuaternion.fromEulerAngles(elev, -azim, 0.0)
+        self.setCameraPosition(rotation=(delta * rotation).normalized())
         self._orientation = None
         self.camera_changed.emit()
 
@@ -1330,6 +1859,10 @@ class GLViewport(GLViewWidget):
 
     def select_body(self, body_id: BodyId) -> bool:
         """Select a current runtime body requested by the structure tree."""
+        if self._candidate_snapshot is not None or self._interaction_scene is not None:
+            return False
+        if not self._source_scene_current():
+            return False
         snapshot = self._current_snapshot()
         if snapshot is None or body_id not in snapshot.triangle_body_ids:
             return False
@@ -1346,6 +1879,8 @@ class GLViewport(GLViewWidget):
         """Route viewport right-click/Escape to an active modeling operation."""
         self._modeling_context_active = active
         if not active:
+            self._face_origin_snap_enabled = False
+            self.coordinate_indicator.set_origin_snap_active(False)
             self.extrude_manipulator.clear()
             self._modeling_interaction_locked = False
             self._modeling_navigation_pos = None
@@ -1368,10 +1903,25 @@ class GLViewport(GLViewWidget):
         frame = self.picked_face_frame(frame) if use_face_hit else frame
         self.extrude_manipulator.configure(frame, distance, self._model_bound_corners())
 
-    def picked_face_frame(self, frame: PlanarFaceFrame) -> PlanarFaceFrame:
+    def picked_face_frame(
+        self, frame: PlanarFaceFrame, *, snap_world_origin: bool = False
+    ) -> PlanarFaceFrame:
         hit = self._last_face_hit
         selection = self.selection()
+        self._last_face_origin_snapped = False
         if hit is not None and selection is not None and hit[0] in selection.topology_ids:
+            if (
+                snap_world_origin
+                and not self._last_face_snap_bypassed
+                and self._last_face_screen is not None
+                and self.world_origin_hit(*self._last_face_screen)
+            ):
+                offset = sum(frame.origin[i] * frame.normal[i] for i in range(3))
+                self._last_face_origin_snapped = True
+                return PlanarFaceFrame(
+                    (offset * frame.normal[0], offset * frame.normal[1], offset * frame.normal[2]),
+                    frame.normal,
+                )
             offset = sum((hit[1][i] - frame.origin[i]) * frame.normal[i] for i in range(3))
             origin: Point3 = (
                 hit[1][0] - offset * frame.normal[0],
@@ -1381,12 +1931,16 @@ class GLViewport(GLViewWidget):
             return PlanarFaceFrame(origin, frame.normal)
         return frame
 
+    def face_origin_snapped(self) -> bool:
+        """Whether the most recently resolved face point used world-origin alignment."""
+        return self._last_face_origin_snapped
+
     def configure_dimension_handle(self, spec: DimensionHandle, value: float) -> None:
         self.extrude_manipulator.configure_dimension(spec, value, self._model_bound_corners())
 
     def selected_edge_frame(self) -> PlanarFaceFrame | None:
         """Anchor a radius control on the selected source edge's sampled curve."""
-        snapshot, selection = self._current_snapshot(), self.selection()
+        snapshot, selection = self._interaction_snapshot(), self.selection()
         if snapshot is None or selection is None or selection.kind != "edge":
             return None
         for edge in snapshot.boundary_edges:
@@ -1426,10 +1980,18 @@ class GLViewport(GLViewWidget):
     def set_placement_context_active(self, active: bool) -> None:
         """Use a click on the global XY work plane to place a new primitive."""
         self._placement_context_active = active
+        if not active:
+            self.coordinate_indicator.set_origin_snap_active(False)
+
+    def set_face_origin_snap_enabled(self, enabled: bool) -> None:
+        """Enable origin feedback while choosing a hole's supporting face."""
+        self._face_origin_snap_enabled = enabled
+        if not enabled:
+            self.coordinate_indicator.set_origin_snap_active(False)
 
     def selection(self) -> SelectionState | None:
         """Current selection if it still belongs to this geometry revision."""
-        snapshot = self._current_snapshot()
+        snapshot = self._interaction_snapshot()
         if snapshot is None or self._selection is None:
             return None
         if self._selection.geometry_revision != snapshot.geometry_revision:
@@ -1446,7 +2008,7 @@ class GLViewport(GLViewWidget):
 
     def preselection(self) -> SelectionState | None:
         """Current hover candidate, if any."""
-        snapshot = self._current_snapshot()
+        snapshot = self._interaction_snapshot()
         if snapshot is None or self._preselection is None:
             return None
         if self._preselection.geometry_revision != snapshot.geometry_revision:
@@ -1469,6 +2031,8 @@ class GLViewport(GLViewWidget):
             return
         self._coordinate_axes_visible = visible
         self.coordinate_indicator.set_origin_visible(visible)
+        if not visible:
+            self.coordinate_indicator.set_origin_snap_active(False)
 
     def coordinate_axes_visible(self) -> bool:
         return self._coordinate_axes_visible
@@ -1564,6 +2128,8 @@ class GLViewport(GLViewWidget):
         self._preview_state_id = None
         self._preview_snapshot = None
         self._candidate_snapshot = None
+        self._interaction_scene = None
+        self._interaction_guard = None
         self._candidate_camera_state = None
         had_selection = self._selection is not None
         self._current_entity_selected = False
@@ -1582,6 +2148,67 @@ class GLViewport(GLViewWidget):
         if was_previewing:
             self.history_preview_changed.emit(False)
 
+    def _interaction_scene_current(self) -> bool:
+        scene = self._interaction_scene
+        document = self._document
+        return bool(
+            scene is not None
+            and document is not None
+            and document.document_id == scene.document_id
+            and document.file_id == scene.file_id
+            and document.revision == scene.revision
+            and not self._execution_busy
+            and self._interaction_guard is not None
+            and self._interaction_guard()
+        )
+
+    def _source_scene_current(self) -> bool:
+        return bool(
+            not self._execution_busy
+            and self._document is not None
+            and self._source_revision == self._document.revision
+        )
+
+    def show_interaction_scene(
+        self,
+        scene: CandidateInteractionScene,
+        *,
+        session_identity: int,
+        is_current: Callable[[], bool],
+    ) -> None:
+        """Display and pick only a source-bound candidate's own scene."""
+        document = self._document
+        if (
+            document is None
+            or not is_current()
+            or document.file_id != scene.file_id
+            or not scene.matches(
+                document.document_id,
+                document.revision,
+                session_identity,
+                scene.candidate_id,
+                scene.generation,
+            )
+        ):
+            raise ValueError("candidate scene does not match the current document")
+        if scene.viewport is not None:
+            self.show_candidate_preview(scene.viewport, preserve_view=True, sketches=scene.sketches)
+        else:
+            self._candidate_snapshot = None
+            self._candidate_sketches = scene.sketches
+            self._selection = None
+            self._preselection = None
+        self._interaction_scene = scene
+        self._interaction_guard = is_current
+        self._preselected_datum = None
+        self._datum_cycle = ()
+        self._datum_cycle_position = None
+        if all(datum.reference != self._selected_datum for datum in scene.datums):
+            self._selected_datum = None
+        self._render_active_state()
+        if self._mesh is None and scene.datums:
+            self.fit_view()
+
     def show_candidate_preview(
         self,
         snapshot: ViewportData,
@@ -1598,6 +2225,8 @@ class GLViewport(GLViewWidget):
         self._preview_state_id = None
         self._preview_snapshot = None
         self._candidate_snapshot = snapshot
+        self._interaction_scene = None
+        self._interaction_guard = None
         self._candidate_sketches = sketches
         if not preserve_view:
             self._selection = None
@@ -1612,10 +2241,12 @@ class GLViewport(GLViewWidget):
 
     def clear_candidate_preview(self) -> None:
         """Restore the committed model after a temporary candidate preview."""
-        if self._candidate_snapshot is None:
+        if self._candidate_snapshot is None and self._interaction_scene is None:
             return
         camera_state = None if self._candidate_preserve_view else self._candidate_camera_state
         self._candidate_snapshot = None
+        self._interaction_scene = None
+        self._interaction_guard = None
         self._candidate_sketches = None
         self._candidate_camera_state = None
         self._candidate_preserve_view = False
@@ -1633,6 +2264,9 @@ class GLViewport(GLViewWidget):
 
     def displayed_snapshot_id(self) -> str | None:
         """Snapshot ID currently rendered in the main viewport scene."""
+        if self._interaction_scene is not None:
+            snapshot = self._interaction_scene.viewport
+            return snapshot.state_id if snapshot is not None else None
         if self._candidate_snapshot is not None:
             return self._candidate_snapshot.state_id
         return self._preview_state_id or self._current_state_id
@@ -1710,17 +2344,48 @@ class GLViewport(GLViewWidget):
             self._visible_snapshot_cache = visible_body_snapshot(raw, self._hidden_body_ids)
         return self._visible_snapshot_cache
 
+    def _interaction_snapshot(self) -> ViewportData | None:
+        scene = self._interaction_scene
+        if scene is not None:
+            if not self._interaction_scene_current() or scene.viewport is None:
+                return None
+            return visible_body_snapshot(
+                scene.viewport, self._candidate_hidden_bodies(scene.viewport)
+            )
+        return self._current_snapshot() if self._source_scene_current() else None
+
+    def _candidate_hidden_bodies(self, candidate: ViewportData) -> set[BodyId]:
+        source = self._snapshots[-1] if self._snapshots else None
+        if source is None:
+            return set()
+        hidden_results = {
+            origin.result
+            for origin in source.body_origins
+            if origin.body_id in self._hidden_body_ids
+        }
+        return {
+            origin.body_id
+            for origin in candidate.body_origins
+            if origin.result in hidden_results or origin.body_id in self._hidden_body_ids
+        }
+
     def _render_active_state(self, *, fit_camera: bool = False) -> None:
         """Render either current state or the explicitly previewed state."""
         self.body_display_changed.emit()
+        self._sync_datum_items()
         self._sync_sketch_items(
             self._candidate_sketches
-            if self._candidate_snapshot is not None and self._candidate_sketches is not None
+            if (self._candidate_snapshot is not None or self._interaction_scene is not None)
+            and self._candidate_sketches is not None
             else self._port.sketch_display_data()
         )
         state_id = self.displayed_snapshot_id()
         snapshot = (
-            self._candidate_snapshot
+            self._interaction_snapshot()
+            if self._interaction_scene is not None and self._interaction_scene_current()
+            else None
+            if self._interaction_scene is not None
+            else self._candidate_snapshot
             if self._candidate_snapshot is not None
             else self._preview_snapshot
             if self._preview_state_id is not None
@@ -1751,12 +2416,12 @@ class GLViewport(GLViewWidget):
         selection = self.selection()
         state = selection or self.preselection()
         overlay_color = HIGHLIGHT_COLOR if selection is not None else PRESELECTION_COLOR
-        snapshot = self._current_snapshot()
+        snapshot = self._interaction_snapshot()
         if (
             state is None
             or snapshot is None
             or self._preview_state_id is not None
-            or (self._candidate_snapshot is not None and not self._candidate_preserve_view)
+            or (self._candidate_snapshot is not None and self._interaction_scene is None)
             or self._mesh is None
         ):
             if self._selection_item is not None:
@@ -1787,9 +2452,7 @@ class GLViewport(GLViewWidget):
             # A selected face is coplanar with the base result. Move only its
             # render overlay slightly toward the camera to avoid depth-buffer
             # ties; the neutral DTO, measurements, and stored geometry stay exact.
-            camera_direction, _, _, _ = camera_basis(
-                float(self.opts["elevation"]), float(self.opts["azimuth"])
-            )
+            camera_direction, _, _, _ = view_camera_basis(self.viewMatrix())
             depth_bias = max(self.camera_distance() * 0.0005, 0.01)
             overlay_vertices = np.asarray(snapshot.mesh.vertices, dtype=np.float32)
             overlay_vertices += np.asarray(camera_direction, dtype=np.float32) * depth_bias
@@ -1980,7 +2643,10 @@ class GLViewport(GLViewWidget):
                     and abs(pos[1] - pressed[1]) <= 5.0
                 ):
                     if self._placement_context_active:
-                        point = self.xy_workplane_point_at(*pos)
+                        point = self.placement_point_at(
+                            *pos,
+                            bypass_snap=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier),
+                        )
                         if point is None:
                             self.workplane_point_rejected.emit()
                         else:
@@ -1994,6 +2660,9 @@ class GLViewport(GLViewWidget):
                             *pos,
                             toggle=self._fillet_interaction_active
                             or bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
+                            bypass_origin_snap=bool(
+                                event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                            ),
                         )
                 event.accept()
                 return
@@ -2036,7 +2705,9 @@ class GLViewport(GLViewWidget):
         if abs(pos[0] - pressed[0]) > 3.0 or abs(pos[1] - pressed[1]) > 3.0:
             return
         if self._placement_context_active:
-            point = self.xy_workplane_point_at(*pos)
+            point = self.placement_point_at(
+                *pos, bypass_snap=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            )
             if point is None:
                 self.workplane_point_rejected.emit()
                 event.accept()
@@ -2044,7 +2715,40 @@ class GLViewport(GLViewWidget):
             self.workplane_point_picked.emit(point, event.globalPosition().toPoint())
             event.accept()
             return
-        if self._preview_state_id is None:
+        hits = self.datum_targets_at(*pos)
+        identities = tuple(hit.reference for hit in hits)
+        if identities:
+            model_hit = (
+                self.selection_target_at(*pos, self._selection_filter)
+                if self._datum_pick_filter is None
+                else None
+            )
+            candidate_count = len(identities) + (1 if model_hit is not None else 0)
+            if (
+                identities == self._datum_cycle
+                and self._datum_cycle_position is not None
+                and dist(pos, self._datum_cycle_position) <= 3.0
+            ):
+                self._datum_cycle_index = (self._datum_cycle_index + 1) % candidate_count
+            else:
+                self._datum_cycle_index = 0
+            self._datum_cycle = identities
+            self._datum_cycle_position = pos
+            if self._datum_cycle_index < len(identities):
+                hit = hits[self._datum_cycle_index]
+                short_id = (hit.reference.source_instance_id or "world")[:8]
+                self.setToolTip(
+                    f"{hit.name} · {hit.reference.kind} · {short_id} "
+                    f"({self._datum_cycle_index + 1}/{candidate_count}，再次点击切换)"
+                )
+                self.select_datum(identities[self._datum_cycle_index])
+            else:
+                self._selected_datum = None
+                self._sync_datum_items()
+                self.pick_at(*pos)
+            event.accept()
+            return
+        if self._preview_state_id is None and self._datum_pick_filter is None:
             self.pick_at(
                 *pos,
                 toggle=bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier),
@@ -2053,13 +2757,28 @@ class GLViewport(GLViewWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Update the rubber band or hover preselection without moving geometry."""
         position = (float(event.position().x()), float(event.position().y()))
+        self.coordinate_indicator.set_origin_snap_active(
+            (
+                self._placement_context_active
+                or (
+                    self._face_origin_snap_enabled
+                    and self._candidate_snapshot is None
+                    and self._interaction_scene is None
+                    and self._preview_state_id is None
+                    and self._source_scene_current()
+                )
+            )
+            and event.buttons() == Qt.MouseButton.NoButton
+            and not bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            and self.world_origin_hit(*position)
+        )
         if self._modeling_navigation_pos is not None:
             previous = self._modeling_navigation_pos
             dx = position[0] - previous[0]
             dy = position[1] - previous[1]
             self._modeling_navigation_pos = position
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                self.pan(dx, dy, 0, relative="view-upright")
+                self.pan(dx, dy, 0, relative="view")
             else:
                 self.orbit(-dx, dy)
             self._sync_selection()
@@ -2101,6 +2820,24 @@ class GLViewport(GLViewWidget):
             # Left-drag never delegates to pyqtgraph's orbit/pan bindings.
             event.accept()
             return
+        if event.buttons() == Qt.MouseButton.NoButton and not self._modeling_context_active:
+            hits = self.datum_targets_at(*position)
+            hovered = hits[0].reference if hits else None
+            if hovered != self._preselected_datum:
+                self._preselected_datum = hovered
+                self.setToolTip(
+                    f"{hits[0].name} · {hits[0].reference.kind} · "
+                    f"{(hits[0].reference.source_instance_id or 'world')[:8]} "
+                    "（重复点击可切换重叠对象）"
+                    if hits
+                    else ""
+                )
+                self._sync_datum_items()
+            if hovered is not None:
+                self._preselection = None
+                self._sync_selection()
+                super().mouseMoveEvent(event)
+                return
         if (
             event.buttons() == Qt.MouseButton.NoButton
             and self._preview_state_id is None
@@ -2117,6 +2854,14 @@ class GLViewport(GLViewWidget):
         super().mouseMoveEvent(event)
         if event.buttons() != Qt.MouseButton.NoButton:
             self._sync_selection()
+
+    @override
+    def leaveEvent(self, event: QEvent) -> None:  # noqa: N802
+        self._preselected_datum = None
+        self.coordinate_indicator.set_origin_snap_active(False)
+        self.setToolTip("")
+        self._sync_datum_items()
+        super().leaveEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Escape cancels a selection box or clears view selection/preselection."""
@@ -2177,6 +2922,317 @@ class GLViewport(GLViewWidget):
     # Scene construction
     # ------------------------------------------------------------------
 
+    def _visible_datums(self) -> tuple[ViewportDatum, ...]:
+        if self._interaction_scene is not None:
+            datums = self._interaction_scene.datums if self._interaction_scene_current() else ()
+        elif (
+            self._preview_state_id is not None
+            or self._candidate_snapshot is not None
+            or not self._source_scene_current()
+            or not isinstance(self._port, SpatialDatumPort)
+        ):
+            datums = ()
+        else:
+            datums = self._port.datum_display_data()
+        return tuple(datum for datum in datums if datum.reference not in self._hidden_datums)
+
+    def interaction_datums(self) -> tuple[ViewportDatum, ...]:
+        """Visible datum anchors in the same active interaction context."""
+        return self._visible_datums()
+
+    def interaction_snap_anchors(self) -> tuple[ViewportSnapAnchor, ...]:
+        """Return exact anchors for the displayed scene, never a hidden source scene."""
+        if self._interaction_scene is not None:
+            if not self._interaction_scene_current():
+                return ()
+            snapshot = self._interaction_scene.viewport
+            hidden: set[BodyId] = (
+                self._candidate_hidden_bodies(snapshot) if snapshot is not None else set()
+            )
+            return tuple(
+                anchor
+                for anchor in self._interaction_scene.snap_anchors
+                if anchor.body_id not in hidden
+            )
+        if self._preview_state_id is not None or not isinstance(self._port, SpatialDatumPort):
+            return ()
+        if not self._source_scene_current():
+            return ()
+        return tuple(
+            anchor
+            for anchor in self._port.snap_anchor_data()
+            if anchor.body_id not in self._hidden_body_ids
+        )
+
+    def set_workplane_grid(self, frame: WorkPlaneFrame | None, spacing: float) -> None:
+        """Show a transient UV grid without changing model or global grid state."""
+        if self._workplane_grid is not None:
+            self.removeItem(self._workplane_grid)
+            self._workplane_grid = None
+        if frame is None:
+            return
+        points = [
+            frame.local_to_world((u * spacing, v * spacing))
+            for u in range(-10, 11)
+            for v in range(-10, 11)
+        ]
+        self._workplane_grid = _ContextScatterPlotItem(
+            pos=np.asarray(points, dtype=np.float32),
+            color=(0.25, 0.35, 0.45, 0.55),
+            size=2.0,
+            pxMode=True,
+            glOptions="translucent",
+        )
+        self.addItem(self._workplane_grid)
+
+    def set_position_markers(self, point: Point3 | None, source: Point3 | None = None) -> None:
+        """Display a transient location and, when projected, its source point."""
+        if point is None:
+            if self._position_marker is not None:
+                self.removeItem(self._position_marker)
+                self._position_marker = None
+            if self._position_projection_line is not None:
+                self.removeItem(self._position_projection_line)
+                self._position_projection_line = None
+            self._position_points = ()
+            return
+        self._position_points = (point,) if source is None else (point, source)
+        positions = np.asarray(self._position_points, dtype=np.float32)
+        colors = np.asarray(
+            ((1.0, 0.55, 0.05, 1.0),)
+            if source is None
+            else ((1.0, 0.55, 0.05, 1.0), (0.2, 0.45, 1.0, 1.0)),
+            dtype=np.float32,
+        )
+        if self._position_marker is None:
+            self._position_marker = _ContextScatterPlotItem(
+                pos=positions, color=colors, size=9, pxMode=True
+            )
+            self.addItem(self._position_marker)
+        else:
+            self._position_marker.setData(pos=positions, color=colors)
+        if source is None:
+            if self._position_projection_line is not None:
+                self.removeItem(self._position_projection_line)
+                self._position_projection_line = None
+        elif self._position_projection_line is None:
+            self._position_projection_line = GLLinePlotItem(
+                pos=positions, color=(0.2, 0.45, 1.0, 1.0), width=1
+            )
+            self.addItem(self._position_projection_line)
+        else:
+            self._position_projection_line.setData(pos=positions)
+
+    def position_marker_points(self) -> tuple[Point3, ...]:
+        return self._position_points
+
+    def look_at_workplane(self, frame: WorkPlaneFrame) -> None:
+        """Orient the camera along the plane normal while leaving its frame untouched."""
+        matrix = QMatrix4x4()
+        matrix.setRow(0, QVector4D(*frame.u_axis, 0))
+        matrix.setRow(1, QVector4D(*frame.v_axis, 0))
+        matrix.setRow(2, QVector4D(*frame.normal, 0))
+        self.setCameraPosition(rotation=QQuaternion.fromRotationMatrix(matrix.normalMatrix()))
+        self._orientation = None
+        self.camera_changed.emit()
+
+    def datum_display_count(self) -> int:
+        """Number of visible datum objects, independent of solid geometry."""
+        return len(self._visible_datums())
+
+    def preselected_datum(self) -> SpatialReference | None:
+        reference = self._preselected_datum
+        return (
+            reference
+            if any(datum.reference == reference for datum in self._visible_datums())
+            else None
+        )
+
+    def hidden_datum_references(self) -> tuple[SpatialReference, ...]:
+        return tuple(self._hidden_datums)
+
+    def set_datum_visible(self, reference: SpatialReference, visible: bool) -> None:
+        if visible:
+            self._hidden_datums.discard(reference)
+        else:
+            self._hidden_datums.add(reference)
+        self._render_active_state()
+
+    def set_datum_pick_filter(self, references: frozenset[SpatialReference] | None) -> None:
+        """Limit parent picks to allowed, already confirmed outputs."""
+        self._datum_pick_filter = references
+        self._preselected_datum = None
+        self._datum_cycle = ()
+        self._sync_datum_items()
+
+    def datum_pick_filter(self) -> frozenset[SpatialReference] | None:
+        return self._datum_pick_filter
+
+    def select_datum(self, reference: SpatialReference) -> None:
+        """Select a datum by stable identity, including a hidden tree object."""
+        if self._datum_pick_filter is not None and reference not in self._datum_pick_filter:
+            return
+        if self._interaction_scene is not None:
+            datums = self._interaction_scene.datums if self._interaction_scene_current() else ()
+        elif self._source_scene_current() and isinstance(self._port, SpatialDatumPort):
+            datums = self._port.datum_display_data()
+        else:
+            datums = ()
+        if all(datum.reference != reference for datum in datums):
+            return
+        if self._selection is not None:
+            self.clear_selection()
+        self._selected_datum = reference
+        self.datum_selection_changed.emit(reference)
+        self._render_active_state()
+
+    def datum_targets_at(self, x: float, y: float) -> tuple[ViewportDatum, ...]:
+        """Return every visible datum hit, with deterministic identity ordering."""
+        ray = self.camera_ray(x, y)
+        hits: list[tuple[float, float, str, ViewportDatum]] = []
+        for datum in self._visible_datums():
+            if (
+                self._datum_pick_filter is not None
+                and datum.reference not in self._datum_pick_filter
+            ):
+                continue
+            if isinstance(datum.frame, RigidFrame):
+                projected = self.project_world_point(datum.frame.origin_mm)
+                screen_distance = dist(projected, (x, y)) if projected is not None else float("inf")
+                if projected is not None:
+                    for axis in (datum.frame.x_axis, datum.frame.y_axis, datum.frame.z_axis):
+                        end = (
+                            datum.frame.origin_mm[0] + 20.0 * axis[0],
+                            datum.frame.origin_mm[1] + 20.0 * axis[1],
+                            datum.frame.origin_mm[2] + 20.0 * axis[2],
+                        )
+                        projected_end = self.project_world_point(end)
+                        if projected_end is None:
+                            continue
+                        dx, dy = projected_end[0] - projected[0], projected_end[1] - projected[1]
+                        length_squared = dx * dx + dy * dy
+                        fraction = (
+                            max(
+                                0.0,
+                                min(
+                                    1.0,
+                                    ((x - projected[0]) * dx + (y - projected[1]) * dy)
+                                    / length_squared,
+                                ),
+                            )
+                            if length_squared
+                            else 0.0
+                        )
+                        screen_distance = min(
+                            screen_distance,
+                            dist(
+                                (x, y), (projected[0] + fraction * dx, projected[1] + fraction * dy)
+                            ),
+                        )
+                if screen_distance <= 12:
+                    depth = dist(ray[0], datum.frame.origin_mm) if ray is not None else 0.0
+                    hits.append(
+                        (
+                            screen_distance,
+                            depth,
+                            datum.reference.source_instance_id or "",
+                            datum,
+                        )
+                    )
+            elif ray is not None:
+                point = intersect_plane(ray[0], ray[1], datum.frame)
+                if point is not None:
+                    u, v = datum.frame.world_to_local(point)
+                    if abs(u) <= 25.0 and abs(v) <= 25.0:
+                        hits.append(
+                            (
+                                0.0,
+                                dist(ray[0], point),
+                                datum.reference.source_instance_id or "",
+                                datum,
+                            )
+                        )
+        return tuple(item[3] for item in sorted(hits, key=lambda item: item[:3]))
+
+    def _clear_datum_items(self) -> None:
+        for item in self._datum_items:
+            self.removeItem(item)
+        self._datum_items.clear()
+
+    def _sync_datum_items(self) -> None:
+        self._clear_datum_items()
+        for datum in self._visible_datums():
+            frame = datum.frame
+            if isinstance(frame, RigidFrame):
+                origin = frame.origin_mm
+                for axis, color, axis_name in zip(
+                    (frame.x_axis, frame.y_axis, frame.z_axis),
+                    ((0.85, 0.2, 0.2, 1.0), (0.2, 0.65, 0.25, 1.0), (0.2, 0.35, 0.9, 1.0)),
+                    ("X", "Y", "Z"),
+                    strict=True,
+                ):
+                    if datum.reference == self._selected_datum:
+                        color = (1.0, 0.65, 0.05, 1.0)
+                    elif datum.reference == self._preselected_datum:
+                        color = (0.35, 0.7, 1.0, 1.0)
+                    end = tuple(origin[i] + 20.0 * axis[i] for i in range(3))
+                    line = GLLinePlotItem(
+                        pos=np.asarray((origin, end), dtype=np.float32),
+                        color=np.asarray((color, color), dtype=np.float32),
+                        width=2,
+                    )
+                    self._datum_items.append(line)
+                    self.addItem(line)
+                    side = frame.y_axis if axis_name == "X" else frame.x_axis
+                    arrow = tuple(
+                        tuple(end[i] - 3.0 * axis[i] + sign * 1.5 * side[i] for i in range(3))
+                        for sign in (-1.0, 1.0)
+                    )
+                    arrow_item = GLLinePlotItem(
+                        pos=np.asarray((arrow[0], end, arrow[1]), dtype=np.float32),
+                        color=np.asarray((color, color, color), dtype=np.float32),
+                        width=2,
+                    )
+                    self._datum_items.append(arrow_item)
+                    self.addItem(arrow_item)
+                    axis_label = GLTextItem(
+                        pos=list(end), text=axis_name, color=tuple(round(c * 255) for c in color)
+                    )
+                    self._datum_items.append(axis_label)
+                    self.addItem(axis_label)
+            else:
+                corners = tuple(
+                    frame.local_to_world(point)
+                    for point in ((-25, -25), (25, -25), (25, 25), (-25, 25), (-25, -25))
+                )
+                line = GLLinePlotItem(
+                    pos=np.asarray(corners, dtype=np.float32),
+                    color=(1.0, 0.65, 0.05, 1.0)
+                    if datum.reference == self._selected_datum
+                    else (0.35, 0.7, 1.0, 1.0)
+                    if datum.reference == self._preselected_datum
+                    else (0.25, 0.5, 0.8, 0.8),
+                    width=2,
+                )
+                self._datum_items.append(line)
+                self.addItem(line)
+                for axis, axis_name in zip(
+                    (frame.u_axis, frame.v_axis, frame.normal), ("U", "V", "N"), strict=True
+                ):
+                    end = tuple(frame.origin_mm[i] + 12.0 * axis[i] for i in range(3))
+                    direction_line = GLLinePlotItem(
+                        pos=np.asarray((frame.origin_mm, end), dtype=np.float32),
+                        color=(0.2, 0.35, 0.7, 1.0),
+                        width=2,
+                    )
+                    axis_label = GLTextItem(pos=list(end), text=axis_name, color=(51, 89, 179, 255))
+                    self._datum_items.extend((direction_line, axis_label))
+                    self.addItem(direction_line)
+                    self.addItem(axis_label)
+            label = GLTextItem(pos=list(frame.origin_mm), text=datum.name, color=(38, 64, 102, 255))
+            self._datum_items.append(label)
+            self.addItem(label)
+
     def _clear_items(self) -> None:
         for item in (
             self._mesh_item,
@@ -2198,6 +3254,9 @@ class GLViewport(GLViewWidget):
         for item in self._sketch_items:
             self.removeItem(item)
         self._sketch_items.clear()
+        for item in self._sketch_point_items:
+            self.removeItem(item)
+        self._sketch_point_items.clear()
         for item in self._sketch_dimension_items:
             self.removeItem(item)
         self._sketch_dimension_items.clear()
@@ -2206,6 +3265,21 @@ class GLViewport(GLViewWidget):
     def _sync_sketch_items(self, sketches: Sequence[ViewportSketchData]) -> None:
         self._clear_sketch_items()
         for sketch in sketches:
+            if sketch.points:
+                item = _ContextScatterPlotItem(
+                    pos=np.asarray([point.point for point in sketch.points], dtype=np.float32),
+                    color=np.asarray(
+                        [
+                            (*[value / 255.0 for value in point.layer.color_rgb], 1.0)
+                            for point in sketch.points
+                        ],
+                        dtype=np.float32,
+                    ),
+                    size=9,
+                    pxMode=True,
+                )
+                self._sketch_point_items.append(item)
+                self.addItem(item)
             for curve in sketch.curves:
                 positions = tuple(
                     point
@@ -2222,7 +3296,14 @@ class GLViewport(GLViewWidget):
                 item = _DepthBiasedLinePlotItem(positions, color=color)
                 self._sketch_items.append(item)
                 self.addItem(item)
-            for dimension in sketch.dimensions:
+            dimensions = sketch.dimensions
+            if (
+                sketch.sketch_id == self._active_draft_sketch_id
+                and self._candidate_snapshot is None
+                and self._interaction_scene is None
+            ):
+                dimensions = ()
+            for dimension in dimensions:
                 red, green, blue = dimension.color_rgb
                 luminance = (2126 * red + 7152 * green + 722 * blue) / 10000.0
                 if luminance >= 190:
@@ -2275,6 +3356,9 @@ class GLViewport(GLViewWidget):
             else:
                 if isinstance(self._edge_item, _DepthBiasedLinePlotItem):
                     self._edge_item.set_positions(segments)
+        elif self._edge_item is not None:
+            self.removeItem(self._edge_item)
+            self._edge_item = None
         if self._render_mode == "mesh-diagnostic":
             diagnostic_segments = self._mesh_edge_segments(mesh)
             if self._mesh_edge_item is None:
@@ -2357,9 +3441,31 @@ class GLViewport(GLViewWidget):
         sphere stays inside both projected axes. Mouse interaction afterwards
         is free — this runs for the first scene and from the fit-view action.
         """
-        if self._mesh is None or not self._mesh.vertices:
+        vertices: list[Point3] = [] if self._mesh is None else list(self._mesh.vertices)
+        for datum in self._visible_datums():
+            frame = datum.frame
+            if isinstance(frame, RigidFrame):
+                vertices.append(frame.origin_mm)
+                for axis in (frame.x_axis, frame.y_axis, frame.z_axis):
+                    vertices.append(
+                        cast("Point3", tuple(frame.origin_mm[i] + 20 * axis[i] for i in range(3)))
+                    )
+            else:
+                vertices.extend(
+                    frame.local_to_world(point)
+                    for point in ((-25, -25), (25, -25), (25, 25), (-25, 25))
+                )
+        if not vertices:
             return
-        points = np.asarray(self._mesh.vertices, dtype=np.float64)
+        self.fit_world_points(vertices)
+
+    def fit_world_points(
+        self, vertices: Sequence[Point3], *, margin: float = FIT_VIEW_MARGIN
+    ) -> None:
+        """Fit a specified set of world points using the active projection."""
+        if not vertices:
+            return
+        points = np.asarray(vertices, dtype=np.float64)
         lower = points.min(axis=0)
         upper = points.max(axis=0)
         center = (lower + upper) / 2.0
@@ -2374,7 +3480,7 @@ class GLViewport(GLViewWidget):
         else:
             half_vertical_fov = atan(tan(half_horizontal_fov) / aspect)
             distance = radius / sin(min(half_horizontal_fov, half_vertical_fov))
-        distance *= FIT_VIEW_MARGIN
+        distance *= margin
         self.setCameraPosition(
             pos=QVector3D(float(center[0]), float(center[1]), float(center[2])),
             distance=distance,

@@ -18,6 +18,7 @@ from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
     LineEntity,
+    PointEntity,
     PolylineEntity,
     RectangleEntity,
     Sketch,
@@ -30,6 +31,15 @@ from mycad.formats.providers.dxf_provider import read_sketch_dxf, write_sketch_d
 from mycad.geom.kernel import BuildKernel
 
 SKETCH_ID = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
+
+
+def test_point_dxf_round_trip_preserves_position_and_identity(tmp_path: Path) -> None:
+    point = PointEntity("a1" * 16, (2.5, -3.75), construction=True)
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (point,))
+    path = tmp_path / "point.dxf"
+    write_sketch_dxf(sketch, path)
+    imported = read_sketch_dxf(path)
+    assert imported.sketch.entities == (point,)
 
 
 @pytest.mark.parametrize("axis", ["aligned", "horizontal", "vertical", "ordinate_x", "ordinate_y"])

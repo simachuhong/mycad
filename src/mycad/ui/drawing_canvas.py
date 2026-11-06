@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import override
 from uuid import UUID
 
@@ -64,6 +65,7 @@ class DrawingCanvas(QGraphicsView):
         self.placing = False
         self._needs_fit = True
         self.selected_view: UUID | None = None
+        self.view_selection_guard: Callable[[UUID | None], bool] | None = None
         self.view_statuses: dict[UUID, str] = {}
         self.alignable_views: set[UUID] = set()
         self.deletion_preview: set[UUID] = set()
@@ -306,6 +308,13 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.view_selection_guard is not None
+            and not self.view_selection_guard(None)
+        ):
+            event.accept()
+            return
         if self.note_mode and event.button() == Qt.MouseButton.LeftButton:
             self.paper_clicked.emit(self.paper_point(event.position()))
             event.accept()
@@ -474,6 +483,13 @@ class DrawingCanvas(QGraphicsView):
 
     @override
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.view_selection_guard is not None
+            and not self.view_selection_guard(None)
+        ):
+            event.accept()
+            return
         if self.note_mode or self.annotation_mode or self.placing:
             event.accept()
             return

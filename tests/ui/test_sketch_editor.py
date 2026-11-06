@@ -95,25 +95,22 @@ def test_selected_model_face_starts_and_replays_an_attached_sketch(
     assert window.viewport.pick_at(window.viewport.width() / 2, window.viewport.height() / 2)
 
     window.act_sketch.trigger()
-    dialog = window.active_sketch_dialog()
-    assert dialog is not None
-    assert dialog.plane_combo.currentText() == "所选面"
-    dialog.canvas.set_snapping_enabled(False)
-    dialog.canvas.add_coordinate_point((0.0, 0.0))
-    dialog.canvas.add_coordinate_point((10.0, 0.0))
-    dialog.finish_button.click()
-    unit = window.execution_unit
-    assert unit is not None
-    qtbot.waitUntil(
-        lambda: (
-            not unit.is_busy
-            and (
-                loaded.document.commands[-1].id == "sketch.create"
-                or "失败" in window.status_command.text()
-            )
-        ),
-        timeout=5000,
-    )
+    task = window.part_sketch_task
+    assert task is not None
+    assert task.plane_combo.currentText() == "所选模型平面（查询）"
+    task.lock_plane()
+    task.select_tool("line")
+    for point in ((0.0, 0.0, 4.0), (10.0, 0.0, 4.0)):
+        screen = window.viewport.project_world_point(point)
+        assert screen is not None
+        QTest.mouseClick(
+            window.viewport,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(round(screen[0]), round(screen[1])),
+        )
+    task.preview()
+    assert task.confirm_button.isEnabled(), task.status_label.text()
+    task.confirm()
     assert len(services.kernel.sketches) == 1, window.status_command.text()
 
     sketch = services.kernel.sketches[0]
@@ -432,6 +429,44 @@ def test_sketch_editor_exposes_required_draw_tools_and_coordinate_entry(qtbot: Q
     )
     assert dialog.coordinate_add_button.text() == "按坐标点"
     assert dialog.construction_check.text() == "构造几何"
+
+
+def test_drawing_circular_array_keeps_original_and_undoes(qtbot: QtBot) -> None:
+    dialog = SketchEditorDialog()
+    qtbot.addWidget(dialog)
+    dialog.resize(1100, 760)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    dialog.canvas.set_snapping_enabled(False)
+    dialog.canvas.set_tool("圆")
+    dialog.canvas.add_coordinate_point((25.0, 0.0))
+    dialog.canvas.add_coordinate_point((28.0, 0.0))
+    original = dialog.canvas.entities[0]
+    dialog.tool_combo.setCurrentText("选择元素")
+    QTest.mouseClick(
+        dialog.canvas, Qt.MouseButton.LeftButton, pos=dialog.canvas.local_to_screen((28.0, 0.0))
+    )
+    assert dialog.canvas.selected_entity_ids == {original.entity_id}
+    dialog.center_u_field.setValue(0.0)
+    dialog.center_v_field.setValue(0.0)
+    dialog.pattern_angle_field.setValue(360.0)
+    dialog.count_field.setValue(4)
+    dialog.transform_buttons["circular_array"].click()
+    circles = dialog.canvas.entities
+    assert len(circles) == 4
+    typed_circles = [circle for circle in circles if isinstance(circle, CircleEntity)]
+    assert len(typed_circles) == 4
+    assert {
+        (round(circle.center_mm[0]), round(circle.center_mm[1])) for circle in typed_circles
+    } == {
+        (25, 0),
+        (0, 25),
+        (-25, 0),
+        (0, -25),
+    }
+    assert len({circle.entity_id for circle in circles}) == 4
+    dialog.undo_entity_button.click()
+    assert tuple(dialog.canvas.entities) == (original,)
 
 
 def test_sketch_selection_supports_move_copy_and_linear_array_in_the_draft(qtbot: QtBot) -> None:
@@ -1471,7 +1506,7 @@ def test_sketch_editor_can_undo_last_draft_entity(qtbot: QtBot) -> None:
 
 def test_main_window_sketch_finish_submits_one_replayable_command(qtbot: QtBot) -> None:
     services = build_app(discoverers=())
-    loaded = new_document(services)
+    loaded = new_document(services, document_type="drawing2d")
     window = MainWindow(services=services)
     qtbot.addWidget(window)
     window.bind_document(loaded)
@@ -1518,7 +1553,7 @@ def test_main_window_sketch_finish_submits_one_replayable_command(qtbot: QtBot) 
 
 def test_main_window_sketch_cancel_writes_nothing(qtbot: QtBot) -> None:
     services = build_app(discoverers=())
-    loaded = new_document(services)
+    loaded = new_document(services, document_type="drawing2d")
     window = MainWindow(services=services)
     qtbot.addWidget(window)
     window.bind_document(loaded)

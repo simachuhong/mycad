@@ -524,6 +524,172 @@ def make_two_cylinder_doc_bus() -> tuple[CommandBus, Document, FakeKernel]:
     return CommandBus(doc, reg, fake, handlers), doc, fake
 
 
+def test_operation_undo_restores_revision_and_redo_keeps_original_audit() -> None:
+    bus, doc, fake = make_two_cylinder_doc_bus()
+    before = doc.commands
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    amended = doc.commands
+    revision = doc.revision
+    doc.mark_clean()
+
+    bus.undo_operation()
+
+    assert doc.commands == before
+    assert fake.applied[0][1]["radius"] == 1.0
+    assert doc.is_dirty
+    assert doc.revision == revision + 1
+    bus.redo_operation()
+    assert doc.commands == amended
+    assert fake.applied[0][1]["radius"] == 3.0
+    assert doc.revision == revision + 2
+
+
+def test_operation_order_crosses_loaded_history_and_redoes_in_order() -> None:
+    bus, doc, _fake = make_two_cylinder_doc_bus()
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    bus.execute("feature.cylinder", {"radius": 4.0, "height": 2.0})
+    final = doc.commands
+    bus.undo_operation()
+    bus.undo_operation()
+    bus.undo_operation()
+    assert len(doc.commands) == 1
+    assert doc.commands[0].params["radius"] == 1.0
+    bus.redo_operation()
+    bus.redo_operation()
+    bus.redo_operation()
+    assert doc.commands == final
+
+
+def test_operation_undo_refuses_stale_document_revision() -> None:
+    bus, doc, _fake = make_two_cylinder_doc_bus()
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    doc.set_metadata("part_name", "preserve me")
+    before = doc.commands
+    with pytest.raises(InvalidHistoryError):
+        bus.undo_operation()
+    assert doc.commands == before
+    assert doc.metadata["part_name"] == "preserve me"
+
+
+def test_identity_only_session_replacement_preserves_operation_undo() -> None:
+    bus, doc, _fake = make_two_cylinder_doc_bus()
+    original = doc.commands
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    registry, _handlers, _kernel = make_assembly()
+    replacement = Document(registry, commands=doc.commands)
+    replacement_bus = bus.copy_for_document(replacement)
+
+    replacement_bus.undo_operation()
+
+    assert replacement.commands == original
+    assert doc.commands[0].params["radius"] == 3.0
+
+
+def test_gui_redo_accepts_existing_legacy_redo_after_command_level_undo() -> None:
+    bus, doc, _fake = make_two_cylinder_doc_bus()
+    original = doc.commands
+    bus.undo()
+
+    bus.redo_operation()
+
+    assert doc.commands == original
+    bus.undo_operation()
+    assert len(doc.commands) == 1
+
+
+def test_failed_operation_undo_rolls_back_and_can_be_retried() -> None:
+    bus, doc, fake = make_two_cylinder_doc_bus()
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    amended = doc.commands
+    doc.mark_clean()
+    revision = doc.revision
+    fake.fail_when = lambda _n, _cid, params: (
+        GeometryBuildError("restore failed") if params.get("radius") == 1.0 else None
+    )
+
+    with pytest.raises(GeometryBuildError):
+        bus.undo_operation()
+
+    assert doc.commands == amended
+    assert not doc.is_dirty
+    assert doc.revision == revision
+    assert fake.applied[0][1]["radius"] == 3.0
+    fake.fail_when = None
+    bus.undo_operation()
+    assert doc.commands[0].params["radius"] == 1.0
+
+
+def test_operation_undo_recovery_failure_marks_bus_unhealthy() -> None:
+    bus, doc, fake = make_two_cylinder_doc_bus()
+    bus.edit_and_replay(0, {"radius": 3.0, "height": 2.0}, "tester", "revision")
+    amended = doc.commands
+    fake.fail_when = lambda _n, _cid, _params: GeometryBuildError("kernel unavailable")
+
+    with pytest.raises(ReplayDuringRollbackError):
+        bus.undo_operation()
+
+    assert doc.commands == amended
+    assert not bus.is_healthy
+    with pytest.raises(ReplayDuringRollbackError):
+        bus.redo_operation()
+
+
+def test_operation_redo_history_limit_does_not_discard_recoverable_steps() -> None:
+    bus, doc, _fake = make_bus()
+    for _ in range(101):
+        bus.execute("demo.ping", {})
+    for _ in range(100):
+        bus.undo_operation()
+    before = doc.commands
+
+    with pytest.raises(InvalidHistoryError):
+        bus.undo_operation()
+
+    assert doc.commands == before
+    for _ in range(100):
+        bus.redo_operation()
+    assert len(doc.commands) == 101
+
+
+def test_command_submitted_by_commit_listener_keeps_operation_order() -> None:
+    bus, doc, _fake = make_bus()
+
+    def submit_followup(payload: Mapping[str, object]) -> None:
+        if payload.get("command_id") == "demo.a":
+            bus.execute("demo.b", {})
+
+    doc.events.subscribe("post_command", submit_followup)
+    bus.execute("demo.a", {})
+    assert [command.id for command in doc.commands] == ["demo.a", "demo.b"]
+
+    bus.undo_operation()
+    assert [command.id for command in doc.commands] == ["demo.a"]
+    bus.undo_operation()
+    assert not doc.commands
+
+
+def test_command_submitted_by_undo_listener_follows_undone_operation() -> None:
+    bus, doc, _fake = make_bus()
+    bus.execute("demo.a", {})
+    triggered = False
+
+    def submit_followup(_payload: Mapping[str, object]) -> None:
+        nonlocal triggered
+        if not triggered:
+            triggered = True
+            bus.execute("demo.b", {})
+
+    doc.events.subscribe("geometry_rebuilt", submit_followup)
+    bus.undo_operation()
+    assert [command.id for command in doc.commands] == ["demo.b"]
+    bus.undo_operation()
+    assert not doc.commands
+    bus.redo_operation()
+    assert [command.id for command in doc.commands] == ["demo.b"]
+    with pytest.raises(InvalidHistoryError):
+        bus.redo_operation()
+
+
 def test_edit_and_replay_success_amends_and_rebuilds() -> None:
     bus, doc, fake = make_two_cylinder_doc_bus()
     amended_events: list[object] = []
@@ -647,6 +813,22 @@ def make_step(cid: str, params: dict[str, object]) -> PlannedCommand:
     return PlannedCommand(
         id=cid, version=1, params=params, summary_en=cid, affected_object="box_body"
     )
+
+
+def test_confirmed_batch_is_one_undoable_operation(monkeypatch: pytest.MonkeyPatch) -> None:
+    add_demo_plan_keys(monkeypatch)
+    bus, doc, _fake = make_bus()
+    bus.execute("demo.ping", {})
+    plan = Plan(steps=[make_step("demo.a", {}), make_step("demo.b", {})])
+    bus.confirm_plan(plan, "tester", scope="cli")
+    bus.execute_batch(plan, scope="cli")
+    final = doc.commands
+
+    bus.undo_operation()
+
+    assert [command.id for command in doc.commands] == ["demo.ping"]
+    bus.redo_operation()
+    assert doc.commands == final
 
 
 @pytest.mark.parametrize("actor", ["cli-local", "acceptance-test"])

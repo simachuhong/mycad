@@ -116,6 +116,7 @@ def apply_theme(app: QApplication, theme: ThemeName) -> None:
         QToolBar {{ background: {tokens.secondary_panel}; border: 0; border-bottom: 1px solid {tokens.divider}; spacing: 4px; padding: 4px; }}
         QToolButton, QPushButton {{ border: 1px solid transparent; border-radius: 4px; padding: 5px 7px; }}
         QToolButton:hover, QPushButton:hover {{ background: {tokens.active}; border-color: {tokens.divider}; }}
+        QPushButton[sketchTool="true"]:checked {{ background: {tokens.active}; border-color: {tokens.focus}; }}
         QToolButton:focus, QPushButton:focus, QLineEdit:focus, QComboBox:focus,
         QSpinBox:focus, QDoubleSpinBox:focus, QTabBar::tab:focus,
         QTreeView:focus, QTableView:focus {{ border: 1px solid {tokens.focus}; }}

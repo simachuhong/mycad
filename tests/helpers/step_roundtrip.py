@@ -11,6 +11,7 @@ ADR-005); this exists solely for export->readback roundtrip asserts.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -23,12 +24,47 @@ from build123d import Compound, GeomType
 _read_step = cast(Callable[[Path], Compound], build123d.import_step)
 
 
+@dataclass(frozen=True, slots=True)
+class StepGeometry:
+    """Geometric invariants read back from a STEP exchange file."""
+
+    is_valid: bool
+    solid_count: int
+    volume_mm3: float
+    bbox_size_mm: tuple[float, float, float]
+    bbox_center_mm: tuple[float, float, float]
+    cylindrical_face_diameters_mm: tuple[float, ...]
+
+
 def read_step(path: Path) -> tuple[int, float]:
     """Read ``path`` back; return ``(solid count, volume in mm^3)``."""
 
     compound = _read_step(path)
     solids = compound.solids()
     return len(solids), sum(solid.volume for solid in solids)
+
+
+def read_step_geometry(path: Path) -> StepGeometry:
+    """Read validity, bounds, volume and exact cylindrical-face diameters."""
+
+    compound = _read_step(path)
+    solids = compound.solids()
+    bounds = compound.bounding_box()
+    diameters = {
+        round(2.0 * float(face.radius), 7)
+        for face in compound.faces().filter_by(GeomType.CYLINDER)
+        if face.radius is not None
+    }
+    size = bounds.size
+    center = bounds.center()
+    return StepGeometry(
+        is_valid=compound.is_valid,
+        solid_count=len(solids),
+        volume_mm3=sum(solid.volume for solid in solids),
+        bbox_size_mm=(float(size.X), float(size.Y), float(size.Z)),
+        bbox_center_mm=(float(center.X), float(center.Y), float(center.Z)),
+        cylindrical_face_diameters_mm=tuple(sorted(diameters)),
+    )
 
 
 def planar_openings(path: Path) -> tuple[int, ...]:
