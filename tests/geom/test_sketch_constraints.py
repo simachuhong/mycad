@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 
-from mycad.app import build_app, new_document, open_app_document
+from mycad.app import build_app, commit_new_sketch, new_document, open_app_document
 from mycad.core.exceptions import GeometryBuildError, ValidationError
 from mycad.core.persistence import save_document
 from mycad.core.sketch import (
@@ -53,6 +53,141 @@ OTHER_LINE_ID = "5f5f5f5f-5f5f-4f5f-8f5f-5f5f5f5f5f5f"
 CIRCLE_ID = "6a6a6a6a-6a6a-4a6a-8a6a-6a6a6a6a6a6a"
 OTHER_CIRCLE_ID = "7b7b7b7b-7b7b-4b7b-8b7b-7b7b7b7b7b7b"
 ARC_ID = "8c8c8c8c-8c8c-4c8c-8c8c-8c8c8c8c8c8c"
+
+
+def test_initial_sketch_persists_only_satisfied_inferred_tangency(tmp_path: Path) -> None:
+    line = LineEntity(LINE_ID, (-5.0, 0.0), (0.0, 0.0))
+    arc = ArcEntity(ARC_ID, (0.0, 2.0), 2.0, 180.0, 90.0)
+    tangent = SketchConstraint(
+        HORIZONTAL_ID,
+        "tangent",
+        (SketchGeometryReference(LINE_ID, "geometry"), SketchGeometryReference(ARC_ID, "geometry")),
+        source="inferred",
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, arc), (tangent,))
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    target = tmp_path / "tangent.mc.json"
+    save_document(loaded.document, target)
+    reopened = open_app_document(services, target)
+    assert reopened.document.commands == loaded.document.commands
+    bad_arc = replace(arc, center_mm=(0.0, 3.0))
+    invalid = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, bad_arc), (tangent,))
+    other = new_document(services)
+    with pytest.raises(ValidationError):
+        commit_new_sketch(services, other, invalid, session_identity=1)
+
+
+@pytest.mark.parametrize("valid", [False, True])
+@pytest.mark.parametrize("curved", [False, True])
+def test_initial_inferred_tangency_accepts_only_valid_polyline_segment(
+    tmp_path: Path, valid: bool, curved: bool
+) -> None:
+    polyline = PolylineEntity(
+        LINE_ID, ((0, 0), (10, 0), (10, -5)), bulges=(0, 0.5) if curved else ()
+    )
+    arc = ArcEntity(ARC_ID, (8, 2 if valid else 3), 2, 270, 90)
+    relation = SketchConstraint(
+        HORIZONTAL_ID,
+        "tangent",
+        (
+            SketchGeometryReference(LINE_ID, "segment", 0),
+            SketchGeometryReference(ARC_ID, "geometry"),
+        ),
+        source="inferred",
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (polyline, arc), (relation,))
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    if not valid:
+        with pytest.raises(ValidationError):
+            commit_new_sketch(services, loaded, sketch, session_identity=1)
+        assert not loaded.document.commands
+        return
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    target = tmp_path / "inferred-segment.mc.json"
+    save_document(loaded.document, target)
+    reopened = open_app_document(services, target)
+    assert reopened.document.commands == loaded.document.commands
+    assert services.kernel.sketches[0].constraints == (relation,)
+
+
+def test_initial_inferred_tangency_rejects_wrong_polyline_segment() -> None:
+    polyline = PolylineEntity(LINE_ID, ((0, 0), (10, 0), (10, -5)))
+    arc = ArcEntity(ARC_ID, (8, 2), 2, 270, 90)
+    relation = SketchConstraint(
+        HORIZONTAL_ID,
+        "tangent",
+        (
+            SketchGeometryReference(LINE_ID, "segment", 1),
+            SketchGeometryReference(ARC_ID, "geometry"),
+        ),
+        source="inferred",
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (polyline, arc), (relation,))
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    with pytest.raises(ValidationError):
+        commit_new_sketch(services, loaded, sketch, session_identity=1)
+    assert not loaded.document.commands
+
+
+def test_fillet_inferred_tangencies_and_endpoints_survive_radius_solve() -> None:
+    from mycad.core.line_fillet import line_fillet
+
+    first = LineEntity(LINE_ID, (0.0, 0.0), (10.0, 0.0))
+    second = LineEntity(OTHER_LINE_ID, (0.0, 0.0), (0.0, 10.0))
+    a, b, arc = line_fillet(first, second, (8.0, 0.0), (0.0, 8.0), 2.0, ARC_ID)
+    constraints = (
+        SketchConstraint(
+            HORIZONTAL_ID,
+            "tangent",
+            (
+                SketchGeometryReference(LINE_ID, "geometry"),
+                SketchGeometryReference(ARC_ID, "geometry"),
+            ),
+            source="inferred",
+        ),
+        SketchConstraint(
+            VERTICAL_ID,
+            "tangent",
+            (
+                SketchGeometryReference(OTHER_LINE_ID, "geometry"),
+                SketchGeometryReference(ARC_ID, "geometry"),
+            ),
+            source="inferred",
+        ),
+        SketchConstraint(
+            LENGTH_ID,
+            "coincident",
+            (SketchGeometryReference(LINE_ID, "start"), SketchGeometryReference(ARC_ID, "start")),
+            source="inferred",
+        ),
+        SketchConstraint(
+            CIRCLE_ID,
+            "coincident",
+            (
+                SketchGeometryReference(OTHER_LINE_ID, "start"),
+                SketchGeometryReference(ARC_ID, "end"),
+            ),
+            source="inferred",
+        ),
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (a, b, arc), constraints)
+    radius = SketchConstraint(
+        OTHER_CIRCLE_ID,
+        "radius",
+        (SketchGeometryReference(ARC_ID, "geometry"),),
+        value=3.0,
+        unit="mm",
+    )
+    result = solve_sketch_constraint(sketch, radius)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    assert len(result.sketch.constraints) == 5
 
 
 def _line_sketch() -> Sketch:
@@ -148,6 +283,653 @@ def test_driving_length_preview_moves_line_and_returns_replay_values() -> None:
     source_line = sketch.entities[0]
     assert isinstance(source_line, LineEntity)
     assert source_line.end_mm == (12.0, 6.0)
+
+
+def test_unrelated_curved_polyline_survives_line_constraint_and_drag() -> None:
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, curved))
+    constraint = _constraint(LENGTH_ID, "length", value=20, unit="mm")
+    result = solve_sketch_constraint(sketch, constraint)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    assert result.sketch.entities[1] == curved
+    assert result.degrees_of_freedom == 10
+    dragged = solve_sketch_drag(result.sketch, SketchGeometryReference(LINE_ID, "end"), (12, 16))
+    assert dragged.status == "success", dragged.message
+    assert dragged.sketch is not None and dragged.sketch.entities[1] == curved
+    moved_line = dragged.sketch.entities[0]
+    assert isinstance(moved_line, LineEntity)
+    assert moved_line.end_mm == pytest.approx((12, 16))
+
+
+def test_curved_polyline_constraints_and_invalid_drag_are_still_rejected() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    constraint = SketchConstraint(
+        HORIZONTAL_ID,
+        "horizontal",
+        (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),),
+    )
+    assert solve_sketch_constraint(sketch, constraint).status == "invalid"
+    result = solve_sketch_drag(sketch, SketchGeometryReference(OTHER_LINE_ID, "segment", 0), (1, 1))
+    assert result.status == "invalid"
+    other = LineEntity(LINE_ID, (0, 0), (10, 0))
+    existing = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (other, curved), (constraint,))
+    assert (
+        solve_sketch_constraint(
+            existing, _constraint(LENGTH_ID, "length", value=20, unit="mm")
+        ).status
+        == "invalid"
+    )
+    assert (
+        solve_sketch_drag(existing, SketchGeometryReference(LINE_ID, "end"), (20, 0)).status
+        == "invalid"
+    )
+
+
+@pytest.mark.parametrize("bulge", [0.5, -0.5])
+@pytest.mark.parametrize("kind", ["horizontal", "vertical", "length"])
+def test_curved_polyline_straight_segment_constraints_preserve_arc_branch(
+    bulge: float, kind: ConstraintKind
+) -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 2), (9, 3)), bulges=(bulge, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    reference = SketchGeometryReference(OTHER_LINE_ID, "segment", 1)
+    constraint = SketchConstraint(
+        HORIZONTAL_ID,
+        kind,
+        (reference,),
+        8 if kind == "length" else None,
+        "mm" if kind == "length" else None,
+    )
+    result = solve_sketch_constraint(sketch, constraint)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    solved = result.sketch.entities[0]
+    assert isinstance(solved, PolylineEntity)
+    assert solved.bulges == curved.bulges
+    start, end = solved.points_mm[1:]
+    if kind == "horizontal":
+        assert start[1] == pytest.approx(end[1])
+    elif kind == "vertical":
+        assert start[0] == pytest.approx(end[0])
+    else:
+        assert math.dist(start, end) == pytest.approx(8)
+
+
+@pytest.mark.parametrize("kind", ["parallel", "perpendicular", "angle"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_curved_polyline_straight_segment_relates_to_line(
+    kind: ConstraintKind, reverse: bool
+) -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 2), (9, 3)), bulges=(0.5, 0))
+    line = LineEntity(LINE_ID, (20, 0), (25, 4))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved, line))
+    references = (
+        SketchGeometryReference(OTHER_LINE_ID, "segment", 1),
+        SketchGeometryReference(LINE_ID, "geometry"),
+    )
+    if reverse:
+        references = references[::-1]
+    constraint = SketchConstraint(
+        HORIZONTAL_ID,
+        kind,
+        references,
+        45 if kind == "angle" else None,
+        "deg" if kind == "angle" else None,
+    )
+    result = solve_sketch_constraint(sketch, constraint)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    solved, solved_line = result.sketch.entities
+    assert isinstance(solved, PolylineEntity) and solved.bulges == curved.bulges
+    assert isinstance(solved_line, LineEntity)
+    a = (
+        solved.points_mm[2][0] - solved.points_mm[1][0],
+        solved.points_mm[2][1] - solved.points_mm[1][1],
+    )
+    b = (
+        solved_line.end_mm[0] - solved_line.start_mm[0],
+        solved_line.end_mm[1] - solved_line.start_mm[1],
+    )
+    dot = a[0] * b[0] + a[1] * b[1]
+    cross = a[0] * b[1] - a[1] * b[0]
+    if kind == "parallel":
+        assert cross == pytest.approx(0, abs=1e-6)
+    elif kind == "perpendicular":
+        assert dot == pytest.approx(0, abs=1e-6)
+    else:
+        assert abs(math.degrees(math.atan2(cross, dot))) == pytest.approx(45, abs=1e-5)
+
+
+def test_curved_polyline_straight_constraint_replays_and_reopens(tmp_path: Path) -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 2), (9, 3)), bulges=(0.5, 0))
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    current = services.kernel.sketches[0]
+    constraint = SketchConstraint(
+        HORIZONTAL_ID, "horizontal", (SketchGeometryReference(OTHER_LINE_ID, "segment", 1),)
+    )
+    result = solve_sketch_constraint(current, constraint)
+    assert result.status == "success", result.message
+    loaded.bus.execute(
+        "sketch.constraint.add", result.command_params(current, constraint), confirmed_by="local"
+    )
+    after = services.kernel.sketches
+    path = tmp_path / "curved-straight-constraint.my2d"
+    save_document(loaded.document, path)
+    reopened = open_app_document(services, path)
+    assert services.kernel.sketches == after
+    reopened.bus.undo()
+    assert services.kernel.sketches == (sketch,)
+    reopened.bus.redo()
+    assert services.kernel.sketches == after
+
+
+def test_curved_polyline_straight_constraint_keeps_driving_arc_radius() -> None:
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 2), (9, 3)), bulges=(0.5, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    radius = SketchConstraint(
+        LENGTH_ID,
+        "radius",
+        (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),),
+        polyline_arc_segment(curved, 0).radius_mm,
+        "mm",
+    )
+    first = solve_sketch_constraint(sketch, radius)
+    if first.status == "unavailable":
+        pytest.skip(first.message or "PlaneGCS is unavailable")
+    assert first.status == "success", first.message
+    assert first.sketch is not None
+    horizontal = SketchConstraint(
+        HORIZONTAL_ID, "horizontal", (SketchGeometryReference(OTHER_LINE_ID, "segment", 1),)
+    )
+    result = solve_sketch_constraint(first.sketch, horizontal)
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    solved = result.sketch.entities[0]
+    assert isinstance(solved, PolylineEntity)
+    assert solved.points_mm[1][1] == pytest.approx(solved.points_mm[2][1])
+    assert polyline_arc_segment(solved, 0).radius_mm == pytest.approx(radius.value)
+
+
+@pytest.mark.parametrize("bulge", (0.5, -0.5, 2.0, -2.0))
+@pytest.mark.parametrize("kind", ("radius", "diameter", "arc_length"))
+def test_curved_polyline_arc_segment_reference_measurement(bulge: float, kind: str) -> None:
+    from mycad.core.polyline_curves import bulge_arc
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(bulge, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    dimension = SketchConstraint(
+        LENGTH_ID,
+        cast("ConstraintKind", kind),
+        (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),),
+        None,
+        "mm",
+        False,
+    )
+    result = solve_sketch_constraint(sketch, dimension)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    arc = bulge_arc(curved.points_mm[0], curved.points_mm[1], bulge, curved.entity_id)
+    expected = arc.radius_mm * (2 if kind == "diameter" else 1)
+    if kind == "arc_length":
+        expected = arc.radius_mm * abs(math.radians(arc.sweep_angle_deg))
+    assert result.sketch.constraints[0].value == pytest.approx(expected)
+    assert result.sketch.entities == (curved,)
+
+
+@pytest.mark.parametrize("bulge", (0.5, -0.5, 2.0, -2.0))
+def test_curved_polyline_arc_segment_driving_radius_with_fixed_endpoints(bulge: float) -> None:
+    from mycad.core.polyline_curves import bulge_arc
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(bulge, 0))
+    fixed = tuple(
+        SketchConstraint(
+            identity, "fixed", (SketchGeometryReference(OTHER_LINE_ID, "vertex", index),)
+        )
+        for index, identity in enumerate((HORIZONTAL_ID, VERTICAL_ID))
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), fixed)
+    radius = SketchConstraint(
+        LENGTH_ID, "radius", (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),), 7.5, "mm"
+    )
+    result = solve_sketch_constraint(sketch, radius)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    assert result.degrees_of_freedom == 2
+    solved = result.sketch.entities[0]
+    assert isinstance(solved, PolylineEntity)
+    assert solved.points_mm[0] == pytest.approx(curved.points_mm[0])
+    assert solved.points_mm[1] == pytest.approx(curved.points_mm[1])
+    assert solved.bulges[0] * bulge > 0
+    assert (abs(solved.bulges[0]) > 1) == (abs(bulge) > 1)
+    assert solved.bulges[1] == 0
+    arc = bulge_arc(solved.points_mm[0], solved.points_mm[1], solved.bulges[0], solved.entity_id)
+    assert arc.radius_mm == pytest.approx(7.5, abs=1e-7)
+
+
+@pytest.mark.parametrize("reverse", (False, True))
+def test_curved_polyline_arc_segment_tangent_to_line(reverse: bool) -> None:
+    from mycad.core.fillet_curves import tangent_on_curves
+    from mycad.core.polyline_curves import bulge_arc
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(1, 0))
+    line = LineEntity(LINE_ID, (-5, -6), (15, -6))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved, line))
+    arc_ref = SketchGeometryReference(OTHER_LINE_ID, "segment", 0)
+    line_ref = SketchGeometryReference(LINE_ID, "geometry")
+    tangent = SketchConstraint(
+        HORIZONTAL_ID, "tangent", (line_ref, arc_ref) if reverse else (arc_ref, line_ref)
+    )
+    result = solve_sketch_constraint(sketch, tangent)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved_curve, moved_line = result.sketch.entities
+    assert isinstance(moved_curve, PolylineEntity) and isinstance(moved_line, LineEntity)
+    arc = bulge_arc(
+        moved_curve.points_mm[0],
+        moved_curve.points_mm[1],
+        moved_curve.bulges[0],
+        moved_curve.entity_id,
+    )
+    assert tangent_on_curves(moved_line, arc)
+    assert moved_curve.bulges[0] > 0 and moved_curve.bulges[1] == 0
+
+
+@pytest.mark.parametrize("kind", ("circle", "arc"))
+def test_curved_polyline_arc_segment_tangent_to_circular_curve(kind: str) -> None:
+    from mycad.core.fillet_curves import tangent_on_curves
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(1, 0))
+    other = (
+        CircleEntity(CIRCLE_ID, (5, -7), 2)
+        if kind == "circle"
+        else ArcEntity(ARC_ID, (5, -7), 2, 0, 180)
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved, other))
+    relation = SketchConstraint(
+        HORIZONTAL_ID,
+        "tangent",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "segment", 0),
+            SketchGeometryReference(other.entity_id, "geometry"),
+        ),
+    )
+    result = solve_sketch_constraint(sketch, relation)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved, solved_other = result.sketch.entities
+    assert isinstance(moved, PolylineEntity) and isinstance(solved_other, CircleEntity | ArcEntity)
+    assert tangent_on_curves(polyline_arc_segment(moved, 0), solved_other)
+
+
+@pytest.mark.parametrize("bulge", (0.5, -0.5))
+@pytest.mark.parametrize("kind", ("diameter", "arc_length"))
+def test_curved_polyline_arc_segment_driving_dimensions(bulge: float, kind: str) -> None:
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(bulge, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    dimension = SketchConstraint(
+        LENGTH_ID,
+        cast("ConstraintKind", kind),
+        (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),),
+        10.0,
+        "mm",
+    )
+    result = solve_sketch_constraint(sketch, dimension)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved = result.sketch.entities[0]
+    assert isinstance(moved, PolylineEntity)
+    arc = polyline_arc_segment(moved, 0)
+    measured = (
+        2 * arc.radius_mm
+        if kind == "diameter"
+        else arc.radius_mm * abs(math.radians(arc.sweep_angle_deg))
+    )
+    assert measured == pytest.approx(10, abs=1e-7)
+    assert moved.bulges[0] * bulge > 0
+
+
+def test_clockwise_arc_driving_length_preserves_signed_sweep() -> None:
+    arc = ArcEntity(ARC_ID, (0, 0), 5, 90, -90)
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (arc,))
+    dimension = SketchConstraint(
+        LENGTH_ID, "arc_length", (SketchGeometryReference(ARC_ID, "geometry"),), 10, "mm"
+    )
+    result = solve_sketch_constraint(sketch, dimension)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    solved = result.sketch.entities[0]
+    assert isinstance(solved, ArcEntity)
+    assert solved.sweep_angle_deg < 0
+    assert solved.radius_mm * abs(math.radians(solved.sweep_angle_deg)) == pytest.approx(10)
+
+
+def test_curved_polyline_arc_radius_rejects_impossible_fixed_endpoints() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(0.5, 0))
+    fixed = tuple(
+        SketchConstraint(
+            identity, "fixed", (SketchGeometryReference(OTHER_LINE_ID, "vertex", index),)
+        )
+        for index, identity in enumerate((HORIZONTAL_ID, VERTICAL_ID))
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), fixed)
+    radius = SketchConstraint(
+        LENGTH_ID, "radius", (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),), 4, "mm"
+    )
+    result = solve_sketch_constraint(sketch, radius)
+    assert result.status in ("invalid", "failed")
+    assert sketch.entities == (curved,) and sketch.constraints == fixed
+
+
+def test_curved_polyline_arc_radius_replays_and_reopens(tmp_path: Path) -> None:
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(0.5, 0))
+    fixed = tuple(
+        SketchConstraint(
+            identity, "fixed", (SketchGeometryReference(OTHER_LINE_ID, "vertex", index),)
+        )
+        for index, identity in enumerate((HORIZONTAL_ID, VERTICAL_ID))
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), fixed)
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    current = services.kernel.sketches[0]
+    radius = SketchConstraint(
+        LENGTH_ID, "radius", (SketchGeometryReference(OTHER_LINE_ID, "segment", 0),), 7.5, "mm"
+    )
+    result = solve_sketch_constraint(current, radius)
+    assert result.status == "success", result.message
+    loaded.bus.execute(
+        "sketch.constraint.add", result.command_params(current, radius), confirmed_by="local"
+    )
+    after = services.kernel.sketches
+    actual = after[0].entities[0]
+    assert isinstance(actual, PolylineEntity)
+    assert polyline_arc_segment(actual, 0).radius_mm == pytest.approx(7.5)
+    path = tmp_path / "polyline-radius.my2d"
+    save_document(loaded.document, path)
+    reopened = open_app_document(services, path)
+    assert services.kernel.sketches == after
+    reopened.bus.undo()
+    assert services.kernel.sketches == (sketch,)
+    reopened.bus.redo()
+    assert services.kernel.sketches == after
+
+
+@pytest.mark.parametrize("kind", ("concentric", "equal"))
+def test_curved_polyline_arc_segment_circle_relation(kind: str) -> None:
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (10, 0), (10, 5)), bulges=(0.5, 0))
+    circle = CircleEntity(CIRCLE_ID, (5, 4), 8)
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved, circle))
+    relation = SketchConstraint(
+        HORIZONTAL_ID,
+        cast("ConstraintKind", kind),
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "segment", 0),
+            SketchGeometryReference(CIRCLE_ID, "geometry"),
+        ),
+    )
+    result = solve_sketch_constraint(sketch, relation)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved, solved_circle = result.sketch.entities
+    assert isinstance(moved, PolylineEntity) and isinstance(solved_circle, CircleEntity)
+    arc = polyline_arc_segment(moved, 0)
+    if kind == "concentric":
+        assert arc.center_mm == pytest.approx(solved_circle.center_mm, abs=1e-7)
+    else:
+        assert arc.radius_mm == pytest.approx(solved_circle.radius_mm, abs=1e-7)
+
+
+def test_curved_polyline_vertex_fixed_and_coincident_drag() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
+    line = LineEntity(LINE_ID, (22, 0), (30, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved, line))
+    fixed = SketchConstraint(
+        HORIZONTAL_ID, "fixed", (SketchGeometryReference(OTHER_LINE_ID, "vertex", 0),)
+    )
+    first = solve_sketch_constraint(sketch, fixed)
+    if first.status == "unavailable":
+        pytest.skip(first.message or "PlaneGCS is unavailable")
+    assert first.status == "success", first.message
+    assert first.sketch is not None
+    assert first.degrees_of_freedom == 9
+    coincident = SketchConstraint(
+        VERTICAL_ID,
+        "coincident",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 1),
+            SketchGeometryReference(LINE_ID, "start"),
+        ),
+    )
+    result = solve_sketch_constraint(first.sketch, coincident)
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    dragged = solve_sketch_drag(result.sketch, SketchGeometryReference(LINE_ID, "start"), (24, 1))
+    assert dragged.status == "success", dragged.message
+    assert dragged.sketch is not None
+    moved, moved_line = dragged.sketch.entities
+    assert isinstance(moved, PolylineEntity) and isinstance(moved_line, LineEntity)
+    assert moved.points_mm[0] == pytest.approx((20, 0))
+    assert moved.points_mm[1] == pytest.approx((24, 1))
+    assert moved_line.start_mm == pytest.approx((24, 1))
+    assert moved.bulges == curved.bulges
+    assert (
+        solve_sketch_drag(
+            result.sketch, SketchGeometryReference(OTHER_LINE_ID, "vertex", 0), (19, 1)
+        ).status
+        == "failed"
+    )
+
+
+def test_curved_polyline_vertex_distance_constraint() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 0), (3, 2)), bulges=(0.5, -0.25))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    distance = SketchConstraint(
+        LENGTH_ID,
+        "distance",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 0),
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 1),
+        ),
+        5,
+        "mm",
+    )
+    result = solve_sketch_constraint(sketch, distance)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved = result.sketch.entities[0]
+    assert isinstance(moved, PolylineEntity)
+    assert math.dist(moved.points_mm[0], moved.points_mm[1]) == pytest.approx(5)
+    assert moved.bulges == curved.bulges
+
+
+def test_curved_polyline_vertex_constraints_reject_locked_and_degenerate_edits() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 0), (3, 2)), bulges=(0.5, 0))
+    fixed = SketchConstraint(
+        HORIZONTAL_ID, "fixed", (SketchGeometryReference(OTHER_LINE_ID, "vertex", 0),)
+    )
+    locked = Sketch(
+        SKETCH_ID,
+        WorkPlaneFrame.xy(),
+        (curved,),
+        layers=SketchLayerTable((SketchLayer("0", locked=True),)),
+    )
+    assert solve_sketch_constraint(locked, fixed).status == "invalid"
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), (fixed,))
+    result = solve_sketch_drag(sketch, SketchGeometryReference(OTHER_LINE_ID, "vertex", 1), (0, 0))
+    assert result.status in ("invalid", "failed")
+    assert sketch.entities == (curved,) and sketch.constraints == (fixed,)
+
+
+def test_curved_polyline_vertex_reference_distance_refreshes_on_drag() -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 0), (3, 2)), bulges=(0.5, 0))
+    reference = SketchConstraint(
+        LENGTH_ID,
+        "distance",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 0),
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 1),
+        ),
+        3,
+        "mm",
+        False,
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), (reference,))
+    result = solve_sketch_drag(sketch, SketchGeometryReference(OTHER_LINE_ID, "vertex", 1), (4, 0))
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    assert result.sketch.constraints[0].value == pytest.approx(4)
+    moved = result.sketch.entities[0]
+    assert isinstance(moved, PolylineEntity) and moved.bulges == curved.bulges
+
+
+def test_curved_polyline_vertex_constraint_replays_and_reopens(tmp_path: Path) -> None:
+    curved = PolylineEntity(OTHER_LINE_ID, ((0, 0), (3, 0), (3, 2)), bulges=(0.5, -0.25))
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    current = services.kernel.sketches[0]
+    distance = SketchConstraint(
+        LENGTH_ID,
+        "distance",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 0),
+            SketchGeometryReference(OTHER_LINE_ID, "vertex", 1),
+        ),
+        5,
+        "mm",
+    )
+    result = solve_sketch_constraint(current, distance)
+    assert result.status == "success", result.message
+    loaded.bus.execute(
+        "sketch.constraint.add", result.command_params(current, distance), confirmed_by="local"
+    )
+    after = services.kernel.sketches
+    assert after[0].constraints == (distance,)
+    path = tmp_path / "curved-vertex.my2d"
+    save_document(loaded.document, path)
+    reopened = open_app_document(services, path)
+    assert services.kernel.sketches == after
+    reopened.bus.undo()
+    assert services.kernel.sketches == (sketch,)
+    reopened.bus.redo()
+    assert services.kernel.sketches == after
+
+
+def test_unconstrained_curved_polyline_vertex_drag_preserves_bulges_and_other_constraints() -> None:
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
+    fixed = SketchConstraint(HORIZONTAL_ID, "fixed", (SketchGeometryReference(LINE_ID, "start"),))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, curved), (fixed,))
+    result = solve_sketch_drag(sketch, SketchGeometryReference(OTHER_LINE_ID, "vertex", 1), (24, 1))
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved = result.sketch.entities[1]
+    assert isinstance(moved, PolylineEntity)
+    assert moved.points_mm == ((20, 0), (24, 1), (22, 2))
+    assert moved.bulges == curved.bulges
+    assert result.sketch.entities[0] == line
+    assert result.sketch.constraints == (fixed,)
+    assert sketch.entities == (line, curved)
+
+
+def test_curved_polyline_vertex_drag_rejects_degenerate_target_and_locked_layer() -> None:
+    layers = SketchLayerTable().add(SketchLayer("curve", locked=True))
+    curved = PolylineEntity(
+        OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), layer_name="curve", bulges=(1, 0)
+    )
+    locked = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,), layers=layers)
+    ref = SketchGeometryReference(OTHER_LINE_ID, "vertex", 1)
+    assert solve_sketch_drag(locked, ref, (24, 1)).status == "invalid"
+    unlocked = replace(locked, layers=SketchLayerTable().add(SketchLayer("curve")))
+    result = solve_sketch_drag(unlocked, ref, (20, 0))
+    assert result.status in ("invalid", "failed")
+    assert unlocked.entities == (curved,)
+
+
+@pytest.mark.parametrize("curve_locked", [False, True])
+def test_reference_dimension_with_unrelated_curved_polyline(curve_locked: bool) -> None:
+    layers = SketchLayerTable().add(SketchLayer("curves", locked=curve_locked))
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    curved = PolylineEntity(
+        OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), layer_name="curves", bulges=(1, 0)
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, curved), layers=layers)
+    constraint = SketchConstraint(
+        LENGTH_ID, "length", (SketchGeometryReference(LINE_ID, "geometry"),), 10, "mm", False
+    )
+    result = solve_sketch_constraint(sketch, constraint)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None and result.sketch.entities == sketch.entities
+    assert result.degrees_of_freedom == (4 if curve_locked else 11)
+
+
+def test_unrelated_curved_polyline_constraint_replays_and_reopens(tmp_path: Path) -> None:
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, curved))
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    current = services.kernel.sketches[0]
+    constraint = _constraint(LENGTH_ID, "length", value=20, unit="mm")
+    result = solve_sketch_constraint(current, constraint)
+    assert result.status == "success", result.message
+    loaded.bus.execute(
+        "sketch.constraint.add", result.command_params(current, constraint), confirmed_by="local"
+    )
+    assert services.kernel.sketches[0].entities[1] == curved
+    path = tmp_path / "curved-unrelated-constraint.mc.json"
+    save_document(loaded.document, path)
+    reopened = open_app_document(services, path)
+    assert services.kernel.sketches[0].entities[1] == curved
+    reopened.bus.undo()
+    assert services.kernel.sketches[0].entities == (line, curved)
+    reopened.bus.redo()
+    assert services.kernel.sketches[0].entities[1] == curved
+    assert services.kernel.sketches[0].constraints == (constraint,)
 
 
 def test_constrained_endpoint_drag_preserves_fixed_anchor_and_length() -> None:
@@ -1354,3 +2136,321 @@ def test_all_locked_entity_parameters_are_constants(locked: SketchEntity) -> Non
     assert result.sketch is not None
     assert result.sketch.entities[0] == locked
     assert result.degrees_of_freedom == 3
+
+
+@pytest.mark.parametrize("reverse_arc", [False, True])
+@pytest.mark.parametrize("polyline_line", [False, True])
+def test_local_fillet_endpoints_follow_source_radius_dimension(
+    reverse_arc: bool, polyline_line: bool
+) -> None:
+    from uuid import uuid4
+
+    x = -math.sqrt(7)
+    line = (
+        PolylineEntity(LINE_ID, ((-20, 0), (x, 0)))
+        if polyline_line
+        else LineEntity(LINE_ID, (-20, 0), (x, 0))
+    )
+    circle = CircleEntity(CIRCLE_ID, (0, 5), 2)
+    arc = ArcEntity(
+        ARC_ID,
+        (x, 2),
+        2,
+        48.59037789072914 if reverse_arc else -90,
+        -138.59037789072914 if reverse_arc else 138.59037789072914,
+    )
+    line_tangent = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (
+            SketchGeometryReference(
+                line.entity_id,
+                "segment" if polyline_line else "geometry",
+                0 if polyline_line else None,
+            ),
+            SketchGeometryReference(arc.entity_id, "geometry"),
+        ),
+        source="inferred",
+        first_endpoint="end",
+        second_endpoint="end" if reverse_arc else "start",
+    )
+    circle_tangent = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (
+            SketchGeometryReference(circle.entity_id, "geometry"),
+            SketchGeometryReference(arc.entity_id, "geometry"),
+        ),
+        source="inferred",
+        second_endpoint="start" if reverse_arc else "end",
+    )
+    coincident = SketchConstraint(
+        uuid4().hex,
+        "coincident",
+        (
+            SketchGeometryReference(
+                line.entity_id, "vertex" if polyline_line else "end", 1 if polyline_line else None
+            ),
+            SketchGeometryReference(arc.entity_id, "end" if reverse_arc else "start"),
+        ),
+        source="inferred",
+    )
+    sketch = Sketch(
+        uuid4().hex,
+        WorkPlaneFrame.xy(),
+        (line, circle, arc),
+        (line_tangent, circle_tangent, coincident),
+    )
+    dimension = SketchConstraint(
+        uuid4().hex, "radius", (SketchGeometryReference(circle.entity_id, "geometry"),), 2.5, "mm"
+    )
+    result = solve_sketch_constraint(sketch, dimension)
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    from mycad.geom.sketch_constraints import validate_sketch_revision_geometry
+
+    validate_sketch_revision_geometry(sketch, result.sketch)
+    new_line, new_circle, new_arc = result.sketch.entities
+    assert (
+        isinstance(new_line, LineEntity | PolylineEntity)
+        and isinstance(new_circle, CircleEntity)
+        and isinstance(new_arc, ArcEntity)
+    )
+    assert new_circle.radius_mm == pytest.approx(2.5)
+    angle = math.radians(new_arc.start_angle_deg + (new_arc.sweep_angle_deg if reverse_arc else 0))
+    line_end = new_line.end_mm if isinstance(new_line, LineEntity) else new_line.points_mm[-1]
+    assert line_end == pytest.approx(
+        (
+            new_arc.center_mm[0] + new_arc.radius_mm * math.cos(angle),
+            new_arc.center_mm[1] + new_arc.radius_mm * math.sin(angle),
+        )
+    )
+    dragged = solve_sketch_drag(
+        sketch, SketchGeometryReference(circle.entity_id, "center"), (0, 5.4)
+    )
+    assert dragged.status == "success", dragged.message
+    assert dragged.sketch is not None
+    validate_sketch_revision_geometry(sketch, dragged.sketch)
+    if not reverse_arc and not polyline_line:
+        fixed_circle = SketchConstraint(
+            uuid4().hex, "fixed", (SketchGeometryReference(circle.entity_id, "center"),)
+        )
+        fixed_arc = SketchConstraint(
+            uuid4().hex, "fixed", (SketchGeometryReference(arc.entity_id, "center"),)
+        )
+        fixed_radius = SketchConstraint(
+            uuid4().hex,
+            "radius",
+            (SketchGeometryReference(arc.entity_id, "geometry"),),
+            2,
+            "mm",
+        )
+        blocked = replace(
+            sketch, constraints=(*sketch.constraints, fixed_circle, fixed_arc, fixed_radius)
+        )
+        result = solve_sketch_constraint(blocked, dimension)
+        assert result.status != "success"
+        assert blocked.entities == sketch.entities
+
+
+@pytest.mark.parametrize("valid", [False, True])
+def test_initial_local_endpoint_tangency_validates_declared_contact(
+    tmp_path: Path, valid: bool
+) -> None:
+    line = LineEntity(LINE_ID, (-10, 0), (0, 0))
+    arc = ArcEntity(ARC_ID, (0, 2), 2, -90, 90)
+    relation = SketchConstraint(
+        HORIZONTAL_ID,
+        "tangent",
+        (SketchGeometryReference(LINE_ID, "geometry"), SketchGeometryReference(ARC_ID, "geometry")),
+        source="inferred",
+        first_endpoint="end",
+        second_endpoint="start" if valid else "end",
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, arc), (relation,))
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    if not valid:
+        with pytest.raises(ValidationError):
+            commit_new_sketch(services, loaded, sketch, session_identity=1)
+        assert not loaded.document.commands
+        return
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    assert loaded.document.commands[-1].version == 13
+    path = tmp_path / "local-fillet.mc.json"
+    save_document(loaded.document, path)
+    open_app_document(services, path)
+    assert services.kernel.sketches[0].constraints == (relation,)
+
+
+def test_endpoint_constraint_replay_rejects_tampered_solved_geometry() -> None:
+    from copy import deepcopy
+    from uuid import uuid4
+
+    line = LineEntity(LINE_ID, (-10, 0), (0, 0))
+    arc = ArcEntity(ARC_ID, (0, 2), 2, -90, 90)
+    relation = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (SketchGeometryReference(LINE_ID, "geometry"), SketchGeometryReference(ARC_ID, "geometry")),
+        source="inferred",
+        first_endpoint="end",
+        second_endpoint="start",
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, arc), (relation,))
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    commit_new_sketch(services, loaded, sketch, session_identity=0)
+    source = services.kernel.sketches[0]
+    dimension = SketchConstraint(
+        uuid4().hex, "radius", (SketchGeometryReference(ARC_ID, "geometry"),), 3, "mm"
+    )
+    preview = services.kernel.preview_sketch_constraint(source, dimension)
+    assert preview.status == "success", preview.message
+    params = deepcopy(preview.command_params(source, dimension))
+    entities = cast("list[dict[str, object]]", params["solution_entities"])
+    arc_data = next(item for item in entities if item["entity_id"] == ARC_ID)
+    arc_data["start_angle_deg"] = 0
+    before = tuple(loaded.document.commands)
+    with pytest.raises(ValidationError):
+        loaded.bus.execute("sketch.constraint.add", params, "local", version=3)
+    assert tuple(loaded.document.commands) == before
+    assert services.kernel.sketches == (source,)
+
+
+def test_explicit_local_endpoint_tangency_add_replays_through_bus(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    line = LineEntity(LINE_ID, (-10, 0), (0, 0))
+    arc = ArcEntity(ARC_ID, (0, 2), 2, -90, 90)
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, arc))
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    # An initial connected relation upgrades the document to archive version 6.
+    initial = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (SketchGeometryReference(LINE_ID, "geometry"), SketchGeometryReference(ARC_ID, "geometry")),
+        source="inferred",
+        first_endpoint="end",
+        second_endpoint="start",
+    )
+    # Use a separate endpoint-free sketch to avoid duplicating the new relation.
+    commit_new_sketch(services, loaded, replace(sketch, constraints=(initial,)), session_identity=0)
+    loaded.bus.undo()
+    assert not services.kernel.sketches
+    commit_new_sketch(services, loaded, sketch, session_identity=0)
+    source = services.kernel.sketches[0]
+    relation = replace(initial, source="user")
+    result = services.kernel.preview_sketch_constraint(source, relation)
+    assert result.status == "success", result.message
+    loaded.bus.execute(
+        "sketch.constraint.add",
+        result.command_params(source, relation, local_frame=True),
+        "local",
+        version=5,
+    )
+    assert services.kernel.sketches[0].constraints == (relation,)
+    loaded.bus.undo()
+    assert services.kernel.sketches[0] == source
+    loaded.bus.redo()
+    path = tmp_path / "local-tangent-add.my2d"
+    save_document(loaded.document, path)
+    open_app_document(services, path)
+    assert services.kernel.sketches[0].constraints == (relation,)
+
+
+def test_single_sketch_revision_can_add_inferred_endpoint_fillet() -> None:
+    from uuid import uuid4
+
+    from mycad.core.line_fillet import line_fillet
+
+    first = LineEntity(LINE_ID, (0, 0), (10, 0))
+    second = LineEntity(OTHER_LINE_ID, (0, 0), (0, 10))
+    before = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (first, second))
+    first_result, second_result, arc = line_fillet(first, second, (8, 0), (0, 8), 2, ARC_ID)
+    first_relation = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (SketchGeometryReference(LINE_ID, "geometry"), SketchGeometryReference(ARC_ID, "geometry")),
+        source="inferred",
+        first_endpoint="start",
+        second_endpoint="start",
+    )
+    second_relation = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (
+            SketchGeometryReference(OTHER_LINE_ID, "geometry"),
+            SketchGeometryReference(ARC_ID, "geometry"),
+        ),
+        source="inferred",
+        first_endpoint="start",
+        second_endpoint="end",
+    )
+    after = replace(
+        before,
+        entities=(first_result, second_result, arc),
+        constraints=(first_relation, second_relation),
+    )
+    state = after.to_state_mapping()
+    revision: dict[str, object] = {
+        "sketch_id": before.sketch_id,
+        "base_state_sha256": before.local_state_digest(),
+        "entities": state["entities"],
+        "constraints": state["constraints"],
+    }
+    services = build_app(discoverers=[])
+    loaded = new_document(services, document_type="drawing2d")
+    commit_new_sketch(services, loaded, before, session_identity=0)
+    from mycad import app
+    from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet
+
+    candidate = app.create_replay_candidate(services, loaded, session_identity=0)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            (ReplayAppend("sketch.revise", 4, revision, "local"),),
+            False,
+            target_archive_version=6,
+        ),
+        current_session_identity=0,
+    )
+    preview = candidate.preview(current_session_identity=0)
+    assert preview.state == "succeeded", preview.failure
+    candidate.commit(
+        candidate.authorize_commit(current_session_identity=0), current_session_identity=0
+    )
+    assert services.kernel.sketches == (after,)
+    loaded.bus.undo()
+    assert services.kernel.sketches == (before,)
+    loaded.bus.redo()
+    assert services.kernel.sketches == (after,)
+
+
+def test_rectangle_segment_tangent_constraint_solves() -> None:
+    from uuid import uuid4
+
+    from mycad.core.cross_sketch_tangency import tangent_entity_curve
+    from mycad.core.fillet_curves import tangent_on_curves
+    from mycad.core.sketch import RectangleEntity
+
+    rectangle = RectangleEntity(uuid4().hex, (-10, 0), (10, -10))
+    circle = CircleEntity(uuid4().hex, (0, 3), 2)
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (rectangle, circle))
+    tangent = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (
+            SketchGeometryReference(rectangle.entity_id, "segment", 0),
+            SketchGeometryReference(circle.entity_id, "geometry"),
+        ),
+    )
+    result = solve_sketch_constraint(sketch, tangent)
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    moved_rectangle, moved_circle = result.sketch.entities
+    assert isinstance(moved_rectangle, RectangleEntity) and isinstance(moved_circle, CircleEntity)
+    assert tangent_on_curves(tangent_entity_curve(moved_rectangle, 0), moved_circle)

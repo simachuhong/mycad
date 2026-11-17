@@ -68,3 +68,38 @@ def test_ribbon_page_change_does_not_create_or_switch_document(qtbot: QtBot) -> 
     assert session.documents == (part,)
     assert session.active is part
     assert window.loaded_document() is part.loaded
+
+
+def test_session_document_actions_follow_open_and_close(qtbot: QtBot) -> None:
+    from mycad.app import build_app
+    from mycad.ui.document_session import DocumentSession
+    from mycad.ui.main_window import MainWindow
+
+    session = DocumentSession()
+    window = MainWindow(services=build_app(discoverers=[]), document_session=session)
+    qtbot.addWidget(window)
+    actions = tuple(
+        window.action_catalog.get(identity)
+        for identity in (
+            "file.close",
+            "file.save",
+            "file.save-as",
+            "file.save-all",
+            "file.import",
+            "file.export",
+            "edit.undo",
+            "edit.redo",
+        )
+    )
+    assert all(not action.isEnabled() for action in actions)
+    assert not window.action_catalog.get("feature.box").isEnabled()
+    part = window.new_session_document("part")
+    assert all(action.isEnabled() for action in actions)
+    assert window.action_catalog.get("feature.box").isEnabled()
+    window.show_start_page()
+    assert session.active is part
+    assert all(action.isEnabled() for action in actions)
+    window.close_active_document()
+    assert not session.documents
+    assert all(not action.isEnabled() for action in actions)
+    assert not window.action_catalog.get("feature.box").isEnabled()

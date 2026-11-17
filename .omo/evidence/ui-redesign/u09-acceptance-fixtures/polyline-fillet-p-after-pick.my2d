@@ -1,0 +1,384 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "d0bab77233a54e508460f050f665e4eb",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "563f66d1564841dab509a1bd354afded",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "polyline",
+            "points_mm": [
+              [
+                -2.0,
+                0.0
+              ],
+              [
+                10.0,
+                0.0
+              ],
+              [
+                10.0,
+                10.0
+              ],
+              [
+                0.0,
+                10.0
+              ],
+              [
+                0.0,
+                -2.0
+              ]
+            ],
+            "closed": false
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-09T12:24:15.525806+00:00",
+      "confirmed_by": "local",
+      "instance_id": "d6879f9061a44756972d62eeb05ded98"
+    },
+    {
+      "id": "drawing.fillet_radius.set",
+      "version": 1,
+      "params": {
+        "radius": 2.0
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-10T00:50:46.455083+00:00",
+      "confirmed_by": "local",
+      "instance_id": "8f66c3d826c94e2ab93e9f6e8f559a40"
+    },
+    {
+      "id": "sketch.revise",
+      "version": 3,
+      "params": {
+        "sketch_id": "d0bab77233a54e508460f050f665e4eb",
+        "base_state_sha256": "15358c3d1630d1a1ae422186b6fee1dce5188ec03e70bf010d90514d449f1ccd",
+        "entities": [
+          {
+            "entity_id": "563f66d1564841dab509a1bd354afded",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "polyline",
+            "points_mm": [
+              [
+                -2.0,
+                0.0
+              ],
+              [
+                10.0,
+                0.0
+              ],
+              [
+                10.0,
+                10.0
+              ],
+              [
+                2.0000000000000004,
+                10.0
+              ],
+              [
+                0.0,
+                8.0
+              ],
+              [
+                0.0,
+                -2.0
+              ]
+            ],
+            "closed": false,
+            "bulges": [
+              0.0,
+              0.0,
+              0.0,
+              0.41421356237309503,
+              0.0
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-10T00:51:13.833848+00:00",
+      "confirmed_by": "local",
+      "instance_id": "529f03c473554d7d8790c60ac0616dc3"
+    },
+    {
+      "id": "sketch.revise",
+      "version": 3,
+      "params": {
+        "sketch_id": "d0bab77233a54e508460f050f665e4eb",
+        "base_state_sha256": "d389c1fbfbff9989019b7be00c93feecc6f6bb6068801fb9816b317b860bc7fe",
+        "entities": [
+          {
+            "entity_id": "563f66d1564841dab509a1bd354afded",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "polyline",
+            "points_mm": [
+              [
+                -2.0,
+                0.0
+              ],
+              [
+                10.0,
+                0.0
+              ],
+              [
+                10.0,
+                8.0
+              ],
+              [
+                8.0,
+                10.0
+              ],
+              [
+                2.0000000000000004,
+                10.0
+              ],
+              [
+                0.0,
+                8.0
+              ],
+              [
+                0.0,
+                -2.0
+              ]
+            ],
+            "closed": false,
+            "bulges": [
+              0.0,
+              0.0,
+              0.41421356237309503,
+              0.0,
+              0.41421356237309503,
+              0.0
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-10T00:51:54.054973+00:00",
+      "confirmed_by": "local",
+      "instance_id": "b5625122aacc406ca3dc5e5b8c654b2a"
+    },
+    {
+      "id": "sketch.create",
+      "version": 9,
+      "params": {
+        "sketch_id": "604ffa974a624aaba92b9e4289b675d4",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "1b5d8e71301a452da57fdd5a35db7b09",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -10.395276774733816,
+              22.082095411084794
+            ],
+            "radius_mm": 7.337698978301276,
+            "start_angle_deg": 209.67532462261227,
+            "sweep_angle_deg": 85.0724108349811
+          },
+          {
+            "entity_id": "3e521f37ea4149049b93f149a494cbfd",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              5.646743476736806,
+              21.39705424363035
+            ],
+            "end_mm": [
+              -8.395589457799407,
+              14.924123038008918
+            ]
+          },
+          {
+            "entity_id": "b14590c6164e4be3a9eb95723f3499f2",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -20.53516366959974,
+              25.05590905944628
+            ],
+            "end_mm": [
+              -16.13864346078105,
+              17.34026955726531
+            ]
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "5b44aa58b69a43aa9d8ceea839a5c88e",
+            "kind": "tangent",
+            "references": [
+              {
+                "entity_id": "1b5d8e71301a452da57fdd5a35db7b09",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "b14590c6164e4be3a9eb95723f3499f2",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user"
+          },
+          {
+            "constraint_id": "ae2d086a27ed4ae78a19eea45f7a9a79",
+            "kind": "tangent",
+            "references": [
+              {
+                "entity_id": "1b5d8e71301a452da57fdd5a35db7b09",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "3e521f37ea4149049b93f149a494cbfd",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user"
+          }
+        ]
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-10T01:36:05.450344+00:00",
+      "confirmed_by": "local",
+      "instance_id": "e80c6b25c22e4e04bb18d99c731e6dff"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "bd9acd9e003f4736af8bebcd0e9afcdb",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

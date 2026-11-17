@@ -62,6 +62,11 @@ def _arrow(point: Point2, toward: Point2) -> tuple[LineCurve, ...]:
     )
 
 
+def _nonzero_line(start: Point2, end: Point2) -> tuple[LineCurve, ...]:
+    """Omit an extension or leader when its endpoints coincide on paper."""
+    return (LineCurve(start, end),) if math.dist(start, end) >= 1e-12 else ()
+
+
 def resolve_annotation(
     annotation: DrawingAnnotation, projection: ProjectionResult, view: SceneView
 ) -> SceneAnnotation:
@@ -128,7 +133,13 @@ def _layout(
         if value <= 1e-9:
             raise ValueError("不能标注零投影长度")
         lines.extend(
-            (LineCurve(a, x), LineCurve(b, y), LineCurve(x, y), *_arrow(x, y), *_arrow(y, x))
+            (
+                *_nonzero_line(a, x),
+                *_nonzero_line(b, y),
+                LineCurve(x, y),
+                *_arrow(x, y),
+                *_arrow(y, x),
+            )
         )
     elif kind in ("radius", "diameter", "center"):
         if len(selected) != 1:
@@ -168,7 +179,7 @@ def _layout(
                 angle = math.radians(angle_deg)
                 rim = (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle))
                 lines.extend(
-                    (LineCurve(center, rim), LineCurve(rim, position), *_arrow(rim, center))
+                    (LineCurve(center, rim), *_nonzero_line(rim, position), *_arrow(rim, center))
                 )
     else:
         if len(selected) != 2 or not all(isinstance(c, LineCurve) for c in selected):
@@ -201,14 +212,16 @@ def _layout(
             center[0] + radius * math.cos(math.radians(end)),
             center[1] + radius * math.sin(math.radians(end)),
         )
+        start_tangent = (a[0] - math.sin(math.radians(start)), a[1] + math.cos(math.radians(start)))
+        end_tangent = (b[0] + math.sin(math.radians(end)), b[1] - math.cos(math.radians(end)))
         anchors = (center,)
         lines.extend(
             (
                 ArcCurve(center, radius, start, value),
                 LineCurve(center, a),
                 LineCurve(center, b),
-                *_arrow(a, b),
-                *_arrow(b, a),
+                *_arrow(a, start_tangent),
+                *_arrow(b, end_tangent),
             )
         )
         suffix = "°" if suffix == " mm" else suffix

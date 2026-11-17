@@ -19,7 +19,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsTextItem
 
 from mycad.core.drawing_curves import cubic_segments
-from mycad.core.drawing_paper import PaperText, paper_texts, sheet_frame
+from mycad.core.drawing_paper import (
+    PaperText,
+    detail_marker_curves,
+    paper_texts,
+    section_marker_lines,
+    sheet_frame,
+)
 from mycad.core.drawing_projection import CurveGeometry, DrawingScene, LineCurve
 
 
@@ -153,10 +159,19 @@ def paint_drawing(painter: QPainter, scene: DrawingScene) -> None:
     painter.setPen(paper_pen("FRAME"))
     for line in sheet_frame(scene):
         painter.drawPath(curve_path(line))
+    painter.setPen(paper_pen("SECTION"))
+    for line in section_marker_lines(scene):
+        painter.drawPath(curve_path(line))
+    painter.setPen(paper_pen("DETAIL"))
+    for curve in detail_marker_curves(scene):
+        painter.drawPath(curve_path(curve))
     for view in scene.views:
         painter.save()
         painter.translate(view.anchor_mm[0], -view.anchor_mm[1])
         painter.scale(view.scale, view.scale)
+        painter.setPen(paper_pen("HATCH", view.scale))
+        for hatch in view.hatch:
+            painter.drawPath(curve_path(hatch))
         for curve in view.curves:
             painter.setPen(paper_pen(curve.visibility.upper(), view.scale))
             painter.drawPath(curve_path(curve.geometry, tolerance=0.01 / view.scale))

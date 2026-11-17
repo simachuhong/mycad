@@ -63,7 +63,7 @@ def test_drawing2d_explains_model_requirement_in_visible_page(qtbot: QtBot) -> N
     services = build_app(discoverers=[])
     window = MainWindow(services=services)
     qtbot.addWidget(window)
-    window.bind_document(new_document(services, document_type="drawing2d"))
+    window.bind_document(new_workspace_document(services, kind="sketch"))
     window.show()
     window.workspace_tabs.activate("drawing")
     bench = window.drawing_workbench

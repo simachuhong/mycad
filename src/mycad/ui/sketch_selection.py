@@ -4,6 +4,7 @@
 
 import math
 
+from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
@@ -33,6 +34,16 @@ def entity_in_selection_box(
 
     if isinstance(entity, PointEntity):
         return contains(entity.position_mm)
+
+    if isinstance(entity, PolylineEntity) and entity.bulges:
+        segments = polyline_curve_segments(
+            entity.points_mm, entity.bulges, entity.closed, entity.entity_id
+        )
+        matches = (
+            entity_in_selection_box(segment, first, second, crossing=crossing)
+            for segment in segments
+        )
+        return any(matches) if crossing else all(matches)
 
     if isinstance(entity, CircleEntity | ArcEntity):
 

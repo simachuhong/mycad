@@ -8,8 +8,10 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from uuid import UUID
 
+from mycad.core.drawing_detail import DetailRegion
 from mycad.core.drawing_projection import Point2, ViewBasis, ViewDirection, finite, projected_basis
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.core.drawing_section import SectionLine
 from mycad.core.drawing_templates import PAPER_SIZES, DrawingTemplate
 
 ProjectionAngle = Literal["first", "third"]
@@ -104,6 +106,8 @@ class DrawingView:
     hidden_lines: bool = True
     tangent_lines: bool = False
     inherit_display: bool = True
+    section: SectionLine | None = None
+    detail: DetailRegion | None = None
 
     def __post_init__(self) -> None:
         _identity(self.view_id)
@@ -114,6 +118,19 @@ class DrawingView:
             self.parent_id is not None or self.direction != "front"
         ):
             raise ValueError("sketch views are independent planar views")
+        if self.section is not None and (
+            self.parent_id is None
+            or self.source.kind != "current_part"
+            or self.direction != "front"
+        ):
+            raise ValueError("section views require a solid parent view")
+        if self.detail is not None and (
+            self.parent_id is None
+            or self.source.kind != "current_part"
+            or self.direction != "front"
+            or self.section is not None
+        ):
+            raise ValueError("detail views require a solid parent view")
         finite((*self.anchor_mm, *self.offset_mm), "view position")
         finite((self.scale,), "view scale")
         if self.scale <= 0:
@@ -195,6 +212,10 @@ class DrawingState:
                     raise ValueError("view parent cycle")
                 visited.add(current.parent_id)
                 current = self.view(current.parent_id)
+                if current.section is not None or current.detail is not None:
+                    raise ValueError(
+                        "projected children of section or detail views are not supported"
+                    )
                 if current.source != view.source or current.source.kind == "sketch":
                     raise ValueError("projected views require the same solid source")
                 if current.sheet_id != view.sheet_id:
@@ -219,6 +240,10 @@ class DrawingState:
     def effective_basis(self, identity: UUID) -> ViewBasis:
         view = self.view(identity)
         if view.parent_id is not None:
+            if view.section is not None:
+                return view.section.plane(self.effective_basis(view.parent_id)).basis
+            if view.detail is not None:
+                return self.effective_basis(view.parent_id)
             return projected_basis(self.effective_basis(view.parent_id), view.direction)
         return view.basis
 

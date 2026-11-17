@@ -1,0 +1,443 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.dimension_styles.set",
+      "version": 8,
+      "params": {
+        "styles": [
+          {
+            "name": "半径-圆心标记",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "open",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "mark",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "半径-中心线",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "open",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "line",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "半径-隐藏尺寸线",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "open",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "mark",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": true,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "直径-不同箭头",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "mark",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "直径-隐藏第一侧",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "mark",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": true,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "直径-隐藏第二侧",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "mark",
+            "center_size": 2.0,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": true
+          }
+        ],
+        "current": "半径-圆心标记"
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-16T16:19:45.759371+00:00",
+      "confirmed_by": "local",
+      "instance_id": "4588b7166871410fbfb7b9993ec878be"
+    },
+    {
+      "id": "sketch.create",
+      "version": 32,
+      "params": {
+        "sketch_id": "e3652ab1aa9240dba028e8cc7a5bc76c",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "0f5955f3deeb4dccbd3973809df6ee8c",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              0.0,
+              60.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "b37e38a3780f4fa38861b975a3d97b7f",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              70.0,
+              60.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "e9eaa91ab0454e5da43c145691bf4ebf",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              140.0,
+              60.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "ef712dac4e0d443d897f000f5515bcbe",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              0.0,
+              0.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "81b20010a1034744baf4d363352589ed",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              70.0,
+              0.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "fd6b6627d6984720bc57c36f3670a9b6",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              140.0,
+              0.0
+            ],
+            "radius_mm": 10.0
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "b52fe48ad7fc4f939864e1f7aeaf6c5d",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "0f5955f3deeb4dccbd3973809df6ee8c",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 10,
+            "position_mm": [
+              22.0,
+              63.0
+            ],
+            "style_name": "半径-圆心标记"
+          },
+          {
+            "constraint_id": "114a186f26554402b714c9d914ca8d01",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "b37e38a3780f4fa38861b975a3d97b7f",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 10,
+            "position_mm": [
+              92.0,
+              63.0
+            ],
+            "style_name": "半径-中心线"
+          },
+          {
+            "constraint_id": "45178746fafa4191beef2f8d8906cdf2",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "e9eaa91ab0454e5da43c145691bf4ebf",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 10,
+            "position_mm": [
+              162.0,
+              63.0
+            ],
+            "style_name": "半径-隐藏尺寸线"
+          },
+          {
+            "constraint_id": "df6ef8efc6974d599ade6c7d635a05d9",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "ef712dac4e0d443d897f000f5515bcbe",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 20,
+            "position_mm": [
+              22.0,
+              3.0
+            ],
+            "style_name": "直径-不同箭头"
+          },
+          {
+            "constraint_id": "ea3e01527fd44b7a9db76e867387a437",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "81b20010a1034744baf4d363352589ed",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 20,
+            "position_mm": [
+              92.0,
+              3.0
+            ],
+            "style_name": "直径-隐藏第一侧"
+          },
+          {
+            "constraint_id": "861880e372db4b76b7dc8681267da3fa",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "fd6b6627d6984720bc57c36f3670a9b6",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "mm",
+            "value": 20,
+            "position_mm": [
+              162.0,
+              3.0
+            ],
+            "style_name": "直径-隐藏第二侧"
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-16T16:19:45.761130+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6d2e9875337b485e9bdef6916d90bfb8"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "6ebeadcb9f4846698524c115b45a4204",
+  "document_kind": "drawing",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

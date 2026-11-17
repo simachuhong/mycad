@@ -42,10 +42,10 @@ class DocumentReference:
             raise ValidationError("reference: invalid fields")
         archive = value["archive"]
         if not isinstance(archive, dict):
-            raise ValidationError("reference source must use archive v4, v5 or v6")
+            raise ValidationError("reference source must use archive v4 through v8")
         archive = cast("dict[str, object]", archive)
-        if archive.get("version") not in (4, 5, 6):
-            raise ValidationError("reference source must use archive v4, v5 or v6")
+        if archive.get("version") not in (4, 5, 6, 7, 8):
+            raise ValidationError("reference source must use archive v4 through v8")
         validate_versioned_archive(archive)
         archive = deepcopy(archive)
         if value["file_id"] != archive["file_id"] or value["kind"] != archive["document_kind"]:

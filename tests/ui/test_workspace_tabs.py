@@ -816,6 +816,58 @@ def test_switch_hides_floating_drafting_dock(qtbot: QtBot) -> None:
     assert draft.parameter_dock.isVisible()
 
 
+def test_drawing_workspace_roundtrip_preserves_layer_ucs_and_command_history(qtbot: QtBot) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch_layers import SketchLayer
+
+    services = build_app(discoverers=[])
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    loaded = new_document(services, document_type="drawing2d")
+    window.bind_document(loaded)
+    window.show()
+    window.workspace_tabs.activate("sketch")
+    draft = window.active_sketch_dialog()
+    assert draft is not None
+    layers = draft.layer_table.add(SketchLayer("detail"))
+    draft.request_layer_update(layers, draft.dimension_layer)
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: not unit.is_busy and draft.layer_table == layers, timeout=10000)
+    draft.layer_combo.setCurrentText("detail")
+    draft.origin_fields["X"].setValue(10)
+    bar = draft.drawing_command_bar
+    for value in ("L", "2,3", "6,3"):
+        bar.input.setText(value)
+        QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    QTest.keyClick(bar.input, Qt.Key.Key_Escape)
+    original = tuple(draft.canvas.entities)
+    assert len(original) == 1
+    draft.canvas.selected_entity_ids.add(original[0].entity_id)
+    commands = tuple(loaded.document.commands)
+
+    window.workspace_tabs.activate("drawing")
+    window.workspace_tabs.activate("model")
+    window.workspace_tabs.activate("sketch")
+
+    assert window.active_sketch_dialog() is draft
+    assert draft.origin_fields["X"].value() == 10
+    assert draft.canvas.layer_table == layers
+    assert draft.canvas.active_layer_name == "detail"
+    assert tuple(draft.canvas.entities) == original
+    assert draft.canvas.selected_entity_ids == {original[0].entity_id}
+    assert tuple(loaded.document.commands) == commands
+    for value in ("", "@1,0", "@2,0"):
+        bar.input.setText(value)
+        QTest.keyClick(bar.input, Qt.Key.Key_Return)
+    result = draft.canvas.entities[-1]
+    assert isinstance(result, LineEntity)
+    assert result.start_mm == (7, 3) and result.end_mm == (9, 3)
+    assert result.layer_name == "detail"
+
+
 def test_drawing2d_does_not_offer_solid_projection(qtbot: QtBot) -> None:
     services = build_app(discoverers=[])
     window = MainWindow(services=services)

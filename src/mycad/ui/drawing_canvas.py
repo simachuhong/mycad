@@ -27,7 +27,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mycad.core.drawing_paper import PaperText, paper_texts, sheet_frame
+from mycad.core.drawing_paper import (
+    PaperText,
+    detail_marker_curves,
+    paper_texts,
+    section_marker_lines,
+    sheet_frame,
+)
 from mycad.core.drawing_projection import (
     DrawingScene,
     Point2,
@@ -133,10 +139,23 @@ class DrawingCanvas(QGraphicsView):
         paper.setZValue(-10)
         for line in sheet_frame(scene):
             graphics.addPath(curve_path(line), paper_pen("FRAME"))
+        for line in section_marker_lines(scene):
+            graphics.addPath(curve_path(line), paper_pen("SECTION"))
+        for curve in detail_marker_curves(scene):
+            graphics.addPath(curve_path(curve), paper_pen("DETAIL"))
         for text in paper_texts(scene):
-            if text.layer == "FRAME":
+            if text.layer in ("FRAME", "SECTION", "DETAIL"):
                 add_paper_text(graphics, text)
         for view in scene.views:
+            for hatch in view.hatch:
+                pen = paper_pen("HATCH", view.scale)
+                status = self.view_statuses.get(view.view_id, "clean")
+                if status != "clean":
+                    pen.setColor(QColor("#b77512" if status != "failed" else "#bc3540"))
+                item = graphics.addPath(curve_path(hatch), pen)
+                item.setPos(view.anchor_mm[0], -view.anchor_mm[1])
+                item.setScale(view.scale)
+                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             for curve in view.curves:
                 pen = paper_pen(curve.visibility.upper(), view.scale)
                 status = self.view_statuses.get(view.view_id, "clean")
@@ -313,6 +332,15 @@ class DrawingCanvas(QGraphicsView):
             and self.view_selection_guard is not None
             and not self.view_selection_guard(None)
         ):
+            event.accept()
+            return
+        if (
+            self.placing
+            and not self.annotation_mode
+            and not self.note_mode
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self.paper_clicked.emit(self.paper_point(event.position()))
             event.accept()
             return
         if self.note_mode and event.button() == Qt.MouseButton.LeftButton:

@@ -29,7 +29,9 @@ def window_with_session(qtbot: QtBot) -> MainWindow:
     return window
 
 
-def test_overlapping_save_request_notifies_caller_of_rejection(qtbot: QtBot) -> None:
+def test_overlapping_save_request_notifies_caller_of_rejection(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
     from collections.abc import Callable
 
     from mycad.ui.document_save import DocumentSaveController
@@ -42,7 +44,7 @@ def test_overlapping_save_request_notifies_caller_of_rejection(qtbot: QtBot) -> 
     controller = DocumentSaveController(
         session,
         prepare=lambda _entry, done: pending.append(done),
-        choose_path=lambda _entry: None,
+        choose_path=lambda _entry: tmp_path / "part.my3d",
         changed=lambda: None,
         report=lambda _results: None,
     )
@@ -264,7 +266,8 @@ def test_save_all_does_not_prepare_inactive_document_when_switch_is_blocked(
     saver = window.document_saver
     assert saver is not None
     qtbot.waitUntil(lambda: not saver.running, timeout=10000)
-    assert not writes
+    assert writes == [part.path]
+    assert not part.loaded.document.is_dirty
     assert session.active is part
     assert tuple(draft.canvas.entities) == original
     assert not sketch.loaded.document.commands
@@ -304,7 +307,9 @@ def test_close_discards_are_deferred_until_all_save_decisions_succeed(
     assert model.document.is_dirty
     assert window.document_session is not None
     assert len(window.document_session.documents) == 2
-    assert len(sketch.document.commands) == 1
+    assert not sketch.document.commands
+    draft = window.active_sketch_dialog()
+    assert draft is not None and len(draft.canvas.entities) == 1
 
 
 def test_save_all_reports_partial_failure_and_keeps_unsaved_changes(

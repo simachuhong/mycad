@@ -14,6 +14,7 @@ from mycad.core.drawing_projection import (
     SplineCurve,
 )
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
@@ -38,6 +39,20 @@ def _curves(entity: SketchEntity) -> tuple[CurveGeometry, ...]:
             ArcCurve(
                 entity.center_mm, entity.radius_mm, entity.start_angle_deg, entity.sweep_angle_deg
             ),
+        )
+    if isinstance(entity, PolylineEntity) and entity.bulges:
+        return tuple(
+            ArcCurve(
+                segment.center_mm,
+                segment.radius_mm,
+                segment.start_angle_deg,
+                segment.sweep_angle_deg,
+            )
+            if isinstance(segment, ArcEntity)
+            else LineCurve(segment.start_mm, segment.end_mm)
+            for segment in polyline_curve_segments(
+                entity.points_mm, entity.bulges, entity.closed, entity.entity_id
+            )
         )
     if isinstance(entity, RectangleEntity | PolylineEntity):
         if isinstance(entity, RectangleEntity):
@@ -81,5 +96,9 @@ def project_sketch(sketch: Sketch, request: DrawingProjectionRequest) -> Project
             )
             curves.append(ProjectedCurve(f"{entity.entity_id}:{index}", geometry, source=source))
     return ProjectionResult(
-        request.view_id, request.source_fingerprint, request.generation, tuple(curves)
+        request.view_id,
+        request.source_fingerprint,
+        request.generation,
+        tuple(curves),
+        () if curves else ("草图没有可显示的非构造曲线，请检查图元与图层可见性",),
     )

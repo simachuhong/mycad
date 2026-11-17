@@ -24,6 +24,7 @@ KIND_ROLE = int(Qt.ItemDataRole.UserRole)
 ID_ROLE = KIND_ROLE + 1
 
 _ENTITY_NAMES = {
+    "PointEntity": "点",
     "LineEntity": "直线",
     "CircleEntity": "圆",
     "ArcEntity": "圆弧",

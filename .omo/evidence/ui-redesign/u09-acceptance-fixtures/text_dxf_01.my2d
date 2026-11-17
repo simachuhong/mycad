@@ -1,0 +1,602 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "6ff86229841a402e9c4ee3b175ce25f4",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "3682f0ed15ae41d4b4d06f38d25f7844",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -75.0,
+              30.0
+            ],
+            "radius_mm": 15.0
+          },
+          {
+            "entity_id": "84f31daeec114ea4af554744db15c395",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -75.0,
+              30.0
+            ],
+            "radius_mm": 25.0,
+            "start_angle_deg": 47.598055432095805,
+            "sweep_angle_deg": 129.07793723904592
+          },
+          {
+            "entity_id": "62b5a0ec0aad4553b7815394f84c1963",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -110.0,
+              -40.0
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "0827ac94ae2a4c11b69dcbb80a85f59f",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -110.0,
+              -40.0
+            ],
+            "radius_mm": 30.0,
+            "start_angle_deg": 123.63956834946549,
+            "sweep_angle_deg": 191.23081044441398
+          },
+          {
+            "entity_id": "6f1f25b3d6bd4d58b18b2115f0ebe0de",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              20.0,
+              -10.0
+            ],
+            "radius_mm": 25.0
+          },
+          {
+            "entity_id": "05f2fefc34af4ef9811c32a6335d8251",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              20.0,
+              -10.0
+            ],
+            "radius_mm": 40.0,
+            "start_angle_deg": 244.11156755700534,
+            "sweep_angle_deg": 217.520734310791
+          },
+          {
+            "entity_id": "ec767318f156474ab61ab06d4af92833",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -4.195617780007268,
+              107.53540777248273
+            ],
+            "radius_mm": 80.0,
+            "start_angle_deg": 227.59805543209578,
+            "sweep_angle_deg": 54.03424643570051
+          },
+          {
+            "entity_id": "2ca485545fd34e40971b1638c514c267",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -32.394419918460216,
+              -117.95751368667241
+            ],
+            "radius_mm": 80.0,
+            "start_angle_deg": 134.87037879387947,
+            "sweep_angle_deg": -70.75881123687414
+          },
+          {
+            "entity_id": "4d042dbd5c804c679fda533f5a4e1c86",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -159.85699678629192,
+              34.92849839314597
+            ],
+            "radius_mm": 60.0,
+            "start_angle_deg": 303.63956834946543,
+            "sweep_angle_deg": 53.03642432167629
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "e2d3dd60b04a452b8e89a897ce8035e1",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "62b5a0ec0aad4553b7815394f84c1963",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 20.0,
+            "position_mm": [
+              -86.28722334374993,
+              -18.303350406249987
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "000a4d28d5554444aa6b3aca5e4026c7",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "3682f0ed15ae41d4b4d06f38d25f7844",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 30.0,
+            "position_mm": [
+              -54.50777978124996,
+              3.419307218749997
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "16f5d49f5c7742158c20b04d66d46e74",
+            "kind": "diameter",
+            "references": [
+              {
+                "entity_id": "6f1f25b3d6bd4d58b18b2115f0ebe0de",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 50.0,
+            "position_mm": [
+              -16.694264656249985,
+              -9.453378781249992
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "ccf18184bac0483a8aaa2816c2e809be",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "0827ac94ae2a4c11b69dcbb80a85f59f",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 30.0,
+            "position_mm": [
+              -160.70743928124986,
+              -16.694264656249985
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "4b2639011bd4432bb50d8edcc41f3650",
+            "kind": "radius",
+            "references": [
+              {
+                "entity_id": "2ca485545fd34e40971b1638c514c267",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 80.0,
+            "position_mm": [
+              -46.864622468749964,
+              -55.71459409374995
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "bf3bb607b3a9460e8a8c0501bfa56c38",
+            "kind": "distance",
+            "references": [
+              {
+                "entity_id": "62b5a0ec0aad4553b7815394f84c1963",
+                "kind": "center"
+              },
+              {
+                "entity_id": "6f1f25b3d6bd4d58b18b2115f0ebe0de",
+                "kind": "center"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 130.0,
+            "position_mm": [
+              3.8215786562499967,
+              -94.33265209374993
+            ],
+            "axis": "horizontal",
+            "layer_name": "DIM"
+          }
+        ]
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-10T08:59:16.241645+00:00",
+      "confirmed_by": "local",
+      "instance_id": "0856dce1dbde42978bb18faebcf6daff"
+    },
+    {
+      "id": "sketch.constraint.add",
+      "version": 3,
+      "params": {
+        "sketch_id": "6ff86229841a402e9c4ee3b175ce25f4",
+        "base_state_sha256": "0ccd27ff5b0a2a2f71ae6b5fca28863929d154ee7adcdce8d3c60f96d03c892f",
+        "constraint": {
+          "constraint_id": "2822b7ab60f942ff809dfcf0c79f2936",
+          "kind": "distance",
+          "references": [
+            {
+              "entity_id": "3682f0ed15ae41d4b4d06f38d25f7844",
+              "kind": "center"
+            },
+            {
+              "entity_id": "62b5a0ec0aad4553b7815394f84c1963",
+              "kind": "center"
+            }
+          ],
+          "driving": true,
+          "source": "user",
+          "unit": "mm",
+          "value": 78.2624,
+          "position_mm": [
+            -180.32254437499984,
+            17.83986374999998
+          ],
+          "layer_name": "DIM"
+        },
+        "solver_id": "planegcs",
+        "solver_version": "0.9.6",
+        "degrees_of_freedom": 26,
+        "solution_entities": [
+          {
+            "entity_id": "3682f0ed15ae41d4b4d06f38d25f7844",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -75.0,
+              30.0
+            ],
+            "radius_mm": 15.0
+          },
+          {
+            "entity_id": "84f31daeec114ea4af554744db15c395",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -75.0,
+              30.0
+            ],
+            "radius_mm": 25.0,
+            "start_angle_deg": 47.598055432095805,
+            "sweep_angle_deg": 129.07793723904592
+          },
+          {
+            "entity_id": "62b5a0ec0aad4553b7815394f84c1963",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -110.0,
+              -40.00002324113978
+            ],
+            "radius_mm": 10.0
+          },
+          {
+            "entity_id": "0827ac94ae2a4c11b69dcbb80a85f59f",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -110.0,
+              -40.0
+            ],
+            "radius_mm": 30.0,
+            "start_angle_deg": 123.63956834946549,
+            "sweep_angle_deg": 191.23081044441395
+          },
+          {
+            "entity_id": "6f1f25b3d6bd4d58b18b2115f0ebe0de",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              20.0,
+              -10.0
+            ],
+            "radius_mm": 25.0
+          },
+          {
+            "entity_id": "05f2fefc34af4ef9811c32a6335d8251",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              20.0,
+              -10.0
+            ],
+            "radius_mm": 40.0,
+            "start_angle_deg": 244.11156755700534,
+            "sweep_angle_deg": 217.520734310791
+          },
+          {
+            "entity_id": "ec767318f156474ab61ab06d4af92833",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -4.195617780007268,
+              107.53540777248273
+            ],
+            "radius_mm": 80.0,
+            "start_angle_deg": 227.5980554320958,
+            "sweep_angle_deg": 54.03424643570049
+          },
+          {
+            "entity_id": "2ca485545fd34e40971b1638c514c267",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -32.394419918460216,
+              -117.95751368667241
+            ],
+            "radius_mm": 80.0,
+            "start_angle_deg": 134.87037879387947,
+            "sweep_angle_deg": -70.75881123687414
+          },
+          {
+            "entity_id": "4d042dbd5c804c679fda533f5a4e1c86",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -159.85699678629192,
+              34.92849839314597
+            ],
+            "radius_mm": 60.0,
+            "start_angle_deg": 303.63956834946543,
+            "sweep_angle_deg": 53.03642432167633
+          }
+        ],
+        "rebuild_consumers": true
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-10T09:09:44.371827+00:00",
+      "confirmed_by": "local",
+      "instance_id": "4c71b1dfe9454fd280f352acfef3be8d"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              53,
+              132,
+              228
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-10T09:10:47.456476+00:00",
+      "confirmed_by": "local",
+      "instance_id": "08f951786f3c4541a2c4088599ef360f"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              53,
+              132,
+              228
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "0",
+        "assignments": []
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-10T09:12:20.653332+00:00",
+      "confirmed_by": "local",
+      "instance_id": "997134ac5dd94b5d86dbabe712f29dfb"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              53,
+              132,
+              228
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-10T09:12:46.501336+00:00",
+      "confirmed_by": "local",
+      "instance_id": "d570becf1124482cb8df80d7b4f2f3d9"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "a9f70eb68a5643d58d8937f71d3259e3",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

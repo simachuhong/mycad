@@ -1,0 +1,217 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "5c57a00b679a4452bc5908338643b7d5",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "0d3342e9a65e4704854ce1b538104844",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "polyline",
+            "points_mm": [
+              [
+                0.0,
+                -5.0
+              ],
+              [
+                0.0,
+                0.0
+              ],
+              [
+                10.0,
+                0.0
+              ],
+              [
+                10.0,
+                10.0
+              ]
+            ],
+            "closed": false
+          },
+          {
+            "entity_id": "cd29e7bcfe7c44eab4c8257a6a443120",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              8.0,
+              -4.0
+            ],
+            "end_mm": [
+              8.0,
+              4.0
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-10T01:56:16.691720+00:00",
+      "confirmed_by": "local",
+      "instance_id": "da114264ddc5484db43d6adfadc12418"
+    },
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "5558c4732d9d493cb377403b08020432",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "a4a82a6fc2ea4d19903dbadcb4adb3ae",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              5.0,
+              2.0
+            ],
+            "radius_mm": 2.0
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-10T01:56:16.692990+00:00",
+      "confirmed_by": "local",
+      "instance_id": "3242192abdde45519aec1e348aac6dfb"
+    },
+    {
+      "id": "drawing.tangency.add",
+      "version": 3,
+      "params": {
+        "relation": {
+          "relation_id": "4b82ec1944b842ada3b2c0ea66d2280f",
+          "first": {
+            "sketch_id": "5c57a00b679a4452bc5908338643b7d5",
+            "entity_id": "0d3342e9a65e4704854ce1b538104844",
+            "segment_index": 1
+          },
+          "second": {
+            "sketch_id": "5558c4732d9d493cb377403b08020432",
+            "entity_id": "a4a82a6fc2ea4d19903dbadcb4adb3ae"
+          },
+          "branch": "line_left"
+        },
+        "revisions": []
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-10T01:56:16.716008+00:00",
+      "confirmed_by": "local",
+      "instance_id": "95aa3a60a49749ec9b38043562a58acc"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "d0a3be8ed78c4b1684cb7c5ac8338050",
+  "document_kind": "drawing",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

@@ -10,6 +10,7 @@ in T6b (see the placeholder at the end of this file).
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import Mapping
 from copy import deepcopy
@@ -167,6 +168,8 @@ class Document:
         file_id: str | None = None,
         migration_origin: Mapping[str, object] | None = None,
         reference_locations: Mapping[str, str] | None = None,
+        drawing_fillet_baseline: float = 1.0,
+        drawing_chamfer_angle_baseline: float = 45.0,
     ) -> None:
         from mycad.core.exceptions import ValidationError
         from mycad.core.signals import SignalBus
@@ -188,6 +191,37 @@ class Document:
         if document_type_value == "drawing2d" and version_value < 3:
             raise ValidationError("drawing2d documents require archive_version 3 or later")
         self._document_type: DocumentType = document_type
+        raw_baseline = cast("object", drawing_fillet_baseline)
+        try:
+            valid_baseline = (
+                not isinstance(raw_baseline, bool)
+                and isinstance(raw_baseline, int | float)
+                and math.isfinite(raw_baseline)
+                and raw_baseline >= 0
+            )
+        except OverflowError:
+            valid_baseline = False
+        if not valid_baseline or (
+            (version_value < 7 or document_type != "drawing2d") and drawing_fillet_baseline != 1
+        ):
+            raise ValidationError("invalid drawing fillet baseline for archive version")
+        self._drawing_fillet_baseline = float(drawing_fillet_baseline)
+        raw_angle = cast("object", drawing_chamfer_angle_baseline)
+        try:
+            valid_angle = (
+                not isinstance(raw_angle, bool)
+                and isinstance(raw_angle, int | float)
+                and math.isfinite(raw_angle)
+                and 0 <= raw_angle < 180
+            )
+        except OverflowError:
+            valid_angle = False
+        if not valid_angle or (
+            (version_value < 8 or document_type != "drawing2d")
+            and drawing_chamfer_angle_baseline != 45
+        ):
+            raise ValidationError("invalid drawing chamfer angle baseline for archive version")
+        self._drawing_chamfer_angle_baseline = float(drawing_chamfer_angle_baseline)
         kind = document_kind or ("part" if document_type == "part" else "sketch")
         if kind not in ("part", "sketch", "drawing") or (kind == "part") != (
             document_type == "part"
@@ -245,6 +279,16 @@ class Document:
     @property
     def document_kind(self) -> DocumentKind:
         return self._document_kind
+
+    @property
+    def drawing_fillet_baseline(self) -> float:
+        """Initial drawing radius before replaying document commands."""
+        return self._drawing_fillet_baseline
+
+    @property
+    def drawing_chamfer_angle_baseline(self) -> float:
+        """Initial drawing chamfer angle before replaying commands."""
+        return self._drawing_chamfer_angle_baseline
 
     @property
     def migration_origin(self) -> dict[str, object] | None:
@@ -353,6 +397,11 @@ class Document:
         can change the stored history and trigger geometry/dirty updates.
         """
         return deepcopy(tuple(self._commands))
+
+    @property
+    def command_count(self) -> int:
+        """Return the history length without copying command parameters."""
+        return len(self._commands)
 
     def replace_command_params(
         self,
@@ -479,7 +528,12 @@ class Document:
         """Bus-only upgrade after a validated candidate is confirmed."""
         from mycad.core.exceptions import ValidationError
 
-        if type(version) is not int or version != 6 or self._archive_version < 5:
+        if (
+            type(version) is not int
+            or version not in (6, 7, 8)
+            or self._archive_version < 5
+            or version <= self._archive_version
+        ):
             raise ValidationError("invalid archive upgrade")
         self._archive_version = version
         self._dirty = True

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from mycad import app
+from mycad.core.document import Document
 from mycad.core.drawing import DrawingView, SourceBinding
 from mycad.core.drawing_codec import drawing_object_mapping
 from mycad.core.persistence import document_payload, save_document
@@ -43,9 +44,9 @@ def test_legacy_mixed_archive_migrates_without_touching_original(tmp_path: Path)
 
 def test_legacy_standalone_drawing_keeps_its_kind(tmp_path: Path) -> None:
     services = app.build_app(discoverers=[])
-    loaded = app.new_document(services, document_type="drawing2d")
+    legacy = Document(services.registry, archive_version=3, document_type="drawing2d")
     target = tmp_path / "old.my2d"
-    save_document(loaded.document, target)
+    save_document(legacy, target)
     candidates = app.open_session_documents(services, target)
     assert len(candidates) == 1
     assert candidates[0][1].document.document_kind == "sketch"
@@ -53,7 +54,10 @@ def test_legacy_standalone_drawing_keeps_its_kind(tmp_path: Path) -> None:
 
 def test_legacy_sketch_views_preserve_dashed_source_identities(tmp_path: Path) -> None:
     services = app.build_app(discoverers=[])
-    loaded = app.new_document(services, document_type="drawing2d")
+    legacy = Document(services.registry, archive_version=3, document_type="drawing2d")
+    legacy_path = tmp_path / "legacy.my2d"
+    save_document(legacy, legacy_path)
+    loaded = app.open_app_document(services, legacy_path)
     sketch = Sketch(str(uuid4()), WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
     loaded.bus.execute("sketch.create", sketch.to_mapping(version=3), "local")
     sheet = uuid4()

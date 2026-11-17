@@ -28,6 +28,44 @@ def managed_window(qtbot: QtBot) -> MainWindow:
     return window
 
 
+def test_v8_sketch_attachment_upgrades_part_and_reopens(qtbot: QtBot, tmp_path: Path) -> None:
+    from mycad.core.persistence import save_document
+    from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet
+    from mycad.core.sketch import CircleEntity, Sketch, WorkPlaneFrame
+
+    window = managed_window(qtbot)
+    window.show()
+    source = window.new_session_document("sketch")
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (CircleEntity(uuid4().hex, (0, 0), 5),))
+    app.commit_new_sketch(source.services, source.loaded, sketch, session_identity=0)
+    candidate = app.create_replay_candidate(source.services, source.loaded, session_identity=0)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            (ReplayAppend("drawing.fillet_radius.set", 1, {"radius": 0}, "local"),),
+            False,
+            target_archive_version=8,
+        ),
+        current_session_identity=0,
+    )
+    preview = candidate.preview(current_session_identity=0)
+    assert preview.state == "succeeded", preview.failure
+    grant = candidate.authorize_commit(current_session_identity=0)
+    candidate.commit(grant, current_session_identity=0)
+    target = window.new_session_document("part")
+    unit = window.execution_unit
+    assert unit is not None
+    window.attach_session_source(source.loaded.document.document_id, object_id=sketch.sketch_id)
+    qtbot.waitUntil(lambda: not unit.is_busy and not unit.is_delivering_result, timeout=10000)
+    assert target.loaded.document.archive_version == 8, window.status_command.text()
+    assert len(target.services.kernel.sketches) == 1
+    path = tmp_path / "part.my3d"
+    save_document(target.loaded.document, path)
+    restored = app.fork_app_services(target.services)
+    app.open_app_document(restored, path)
+    assert len(restored.kernel.sketches) == 1
+
+
 def test_workspaces_have_independent_history_and_keep_draft(qtbot: QtBot) -> None:
     window = managed_window(qtbot)
     model = window.loaded_document()
@@ -828,3 +866,67 @@ def test_internal_sketch_can_be_separated_without_changing_model(qtbot: QtBot) -
     assert separated.services.kernel.sketches[0].entities == sketch.entities
     assert model.loaded.document.commands == original
     assert len(model.services.kernel.body_ids) == 1
+
+
+@pytest.mark.parametrize("cancel_sketch", [False, True])
+def test_engineering_source_selects_one_of_multiple_sketches(
+    qtbot: QtBot, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_sketch: bool
+) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+
+    window = managed_window(qtbot)
+    window.show()
+    source = window.new_session_document("sketch")
+    sketches = tuple(
+        Sketch(
+            uuid4().hex,
+            WorkPlaneFrame.xy(),
+            (LineEntity(uuid4().hex, (0.0, y), (20.0, y)),),
+        )
+        for y in (0.0, 10.0)
+    )
+    for sketch in sketches:
+        source.loaded.bus.execute("sketch.create", sketch.to_state_mapping(), "local")
+    original = source.loaded.document.commands
+    drawing = window.new_session_document("drawing")
+    assert drawing.workbench is not None
+    before = drawing.loaded.document.commands
+    prompts: list[str] = []
+
+    def choose(
+        _parent: object, title: str, _label: str, items: list[str], *_args: object
+    ) -> tuple[str, bool]:
+        prompts.append(title)
+        if title == "草图来源" and cancel_sketch:
+            return "", False
+        return items[-1], True
+
+    monkeypatch.setattr(QInputDialog, "getItem", staticmethod(choose))
+    drawing.workbench.choose_source_button.click()
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert prompts == ["工程图来源", "草图来源"]
+    assert source.loaded.document.commands == original
+    if cancel_sketch:
+        assert drawing.loaded.document.commands == before
+        assert not drawing.services.kernel.document_references
+    else:
+        references = drawing.services.kernel.document_references
+        assert len(references) == 1
+        assert references[0].object_id == sketches[1].sketch_id
+        assert drawing.workbench.sketch_view_action.isEnabled()
+        target = tmp_path / "multi-sketch.my2d"
+        monkeypatch.setattr(
+            QFileDialog,
+            "getSaveFileName",
+            staticmethod(lambda *_args, **_kwargs: (str(target), "")),
+        )
+        window.act_save.trigger()
+        qtbot.waitUntil(lambda: target.is_file() and not unit.is_busy, timeout=10000)
+        services = app.fork_app_services(drawing.services)
+        reopened = app.open_app_document(services, target)
+        assert reopened.document.document_kind == "drawing"
+        assert services.kernel.document_references[0].object_id == sketches[1].sketch_id

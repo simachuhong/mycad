@@ -122,7 +122,7 @@ def test_independent_drawing_new_save_and_open_roundtrip(
 
     drawing = _bound(window).document
     assert drawing.document_type == "drawing2d"
-    assert drawing.archive_version == 3
+    assert drawing.archive_version == 8
     assert drawing.commands == ()
     feature_actions = {action.text(): action for action in window.menu_feature.actions()}
     assert not feature_actions["拉伸"].isEnabled()
@@ -132,7 +132,8 @@ def test_independent_drawing_new_save_and_open_roundtrip(
     _patch_save_path(monkeypatch, target)
     window.act_save_as.triggered.emit()
     payload = json.loads(target.read_text(encoding="utf-8"))
-    assert payload["version"] == 3
+    assert payload["version"] == 8
+    assert payload["drawing_defaults"] == {"fillet_radius": 0, "chamfer_angle": 0}
     assert payload["document_type"] == "drawing2d"
 
     reopened = _new_window(services, qtbot)
@@ -461,6 +462,53 @@ def test_export_dxf_reports_supported_sketch_exchange(
         ) in window.status_command.text()
 
 
+@pytest.mark.parametrize("preview_action", ["accept", "cancel", "stale"])
+def test_drawing2d_multi_sketch_dxf_preview_is_atomic(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    preview_action: str,
+) -> None:
+    from mycad.formats.providers.dxf_provider import read_sketch_dxf
+
+    target = tmp_path / "drawing.dxf"
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    loaded = _bound(window)
+    circles = (
+        CircleEntity("1b" * 16, (0, 0), 2),
+        CircleEntity("2c" * 16, (8, 0), 3),
+    )
+    for index, circle in enumerate(circles):
+        sketch = Sketch(("3d" if index == 0 else "4e") * 16, WorkPlaneFrame.xy(), (circle,))
+        loaded.bus.execute("sketch.create", sketch.to_state_mapping(), "test")
+    _patch_save_path(monkeypatch, target)
+    target.write_bytes(b"previous export")
+    previews: list[bool] = []
+
+    def inspect_preview(dialog: DxfOutputPreviewDialog) -> int:
+        assert target.read_bytes() == b"previous export"
+        assert dialog.renderer.isValid() and "多个草图" in dialog.report_label.text()
+        previews.append(True)
+        if preview_action == "stale":
+            loaded.bus.undo()
+        return int(
+            dialog.DialogCode.Rejected if preview_action == "cancel" else dialog.DialogCode.Accepted
+        )
+
+    monkeypatch.setattr(DxfOutputPreviewDialog, "exec", inspect_preview)
+    window.act_export.triggered.emit()
+    qtbot.waitUntil(lambda: bool(previews), timeout=15000)
+    if preview_action == "accept":
+        assert read_sketch_dxf(target).sketch.entities == circles
+    else:
+        assert target.read_bytes() == b"previous export"
+        assert (
+            "已取消" if preview_action == "cancel" else "已过期"
+        ) in window.status_command.text()
+
+
 def test_import_dxf_previews_then_commits_through_bus(
     services: AppServices,
     qtbot: QtBot,
@@ -586,6 +634,102 @@ def test_dxf_import_requires_explicit_unit_and_scales_before_preview(
     assert isinstance(imported_entities, list)
     assert imported_entities[0]["radius_mm"] == pytest.approx(127.0)
     assert "inch (override)" in preview_text[0]
+
+
+@pytest.mark.parametrize("external_text", [False, True])
+def test_dxf_import_restores_explicit_projection_dimension(
+    services: AppServices,
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    external_text: bool,
+) -> None:
+    import math
+    from collections.abc import Iterable
+    from dataclasses import replace
+    from typing import Protocol, cast
+    from uuid import uuid4
+
+    import ezdxf.filemanagement as dxf_filemanagement
+
+    from mycad.core.persistence import save_document
+    from mycad.core.sketch import LineEntity
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    q = math.sqrt(0.5)
+    line = LineEntity(uuid4().hex, (0, 0), (20, 10))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "distance",
+        (
+            SketchGeometryReference(line.entity_id, "start"),
+            SketchGeometryReference(line.entity_id, "end"),
+        ),
+        30 * q,
+        "mm",
+        driving=False,
+        axis="horizontal",
+        projection_axis=(q, q),
+    )
+    source = tmp_path / "projection.dxf"
+    write_sketch_dxf(Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dimension,)), source)
+    if external_text:
+
+        class MutableTextAttributes(Protocol):
+            text_midpoint: tuple[float, float, float]
+
+        class DimensionEntity(Protocol):
+            dxf: MutableTextAttributes
+
+            def dxftype(self) -> str: ...
+
+        class DxfDocument(Protocol):
+            def modelspace(self) -> Iterable[DimensionEntity]: ...
+
+            def saveas(self, path: Path) -> None: ...
+
+        class DxfReader(Protocol):
+            def __call__(self, path: Path) -> DxfDocument: ...
+
+        document = cast("DxfReader", vars(dxf_filemanagement)["readfile"])(source)
+        native = next(item for item in document.modelspace() if item.dxftype() == "DIMENSION")
+        native.dxf.text_midpoint = (35, 22, 0)
+        document.saveas(source)
+    _patch_open_path(monkeypatch, source)
+    previews: list[str] = []
+
+    def confirm(
+        _parent: object, _title: str, text: str, *_args: object, **_kwargs: object
+    ) -> QMessageBox.StandardButton:
+        previews.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(confirm))
+    window = _new_window(services, qtbot)
+    window.act_new_drawing.trigger()
+    window.act_import.trigger()
+    unit = window.execution_unit
+    assert unit is not None
+    loaded = _bound(window)
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 1 and not unit.is_busy, timeout=10000)
+    assert "恢复关联尺寸 1 个" in previews[0]
+    if external_text:
+        assert "外部文字位置已恢复" in previews[0]
+    assert loaded.document.commands[-1].version == 28
+    expected = replace(dimension, text_position_mm=(35, 22)) if external_text else dimension
+    assert services.kernel.sketches[0].constraints == (expected,)
+    after = services.kernel.sketches
+    path = tmp_path / "projection.my2d"
+    save_document(loaded.document, path)
+    loaded.bus.undo()
+    assert not services.kernel.sketches
+    loaded.bus.redo()
+    assert services.kernel.sketches == after
+    from mycad.app import open_app_document
+
+    reopened = build_app(discoverers=[])
+    open_app_document(reopened, path)
+    assert reopened.kernel.sketches == after
 
 
 def test_save_without_document_is_noop(

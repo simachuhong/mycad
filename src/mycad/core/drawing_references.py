@@ -88,8 +88,6 @@ def _curve_predicate(curve: ProjectedCurve) -> tuple[tuple[str, float], ...]:
     if isinstance(geometry, LineCurve):
         a, b = sorted((geometry.start, geometry.end))
         length = math.dist(a, b)
-        if length <= 1e-9:
-            raise ValueError("不能关联零长线")
         return (
             ("projected_type", 1),
             ("projected_dx", (b[0] - a[0]) / length),

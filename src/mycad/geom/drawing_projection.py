@@ -273,6 +273,15 @@ def project_shape(
             geometry[key] = ProjectedCurve(
                 f"curve-{len(geometry)}", curve, visibility, silhouette=silhouette
             )
+    if not geometry:
+        diagnostics.append("该方向没有可显示的投影曲线")
+        return ProjectionResult(
+            request.view_id,
+            request.source_fingerprint,
+            request.generation,
+            (),
+            tuple(dict.fromkeys(diagnostics)),
+        )
     # Recover original faces through HLR's explicit history (not topology index).
     face_map = algo.DataStructure().FaceMap()
     history = algo.ShapeBounds(1).Shape().DataStructure()

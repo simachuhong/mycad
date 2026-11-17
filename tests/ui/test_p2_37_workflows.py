@@ -306,11 +306,27 @@ def test_generic_body_array_with_unrelated_body_edit_undo_and_archive(
     assert len(loaded.document.commands[-1].amendments) == 1
     check_instances(4)
     window.act_undo.trigger()
+    qtbot.waitUntil(
+        lambda: (
+            len(loaded.document.commands) == 3
+            and not loaded.document.commands[-1].amendments
+            and not unit.is_busy
+        ),
+        timeout=30000,
+    )
+    check_instances(3)
+    window.act_undo.trigger()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=30000)
     assert services.kernel.mass_properties().solid_count == 2
     assert services.kernel.mass_properties().volume == pytest.approx(256)
     window.act_redo.trigger()
     qtbot.waitUntil(lambda: len(loaded.document.commands) == 3 and not unit.is_busy, timeout=30000)
+    check_instances(3)
+    window.act_redo.trigger()
+    qtbot.waitUntil(
+        lambda: bool(loaded.document.commands[-1].amendments) and not unit.is_busy,
+        timeout=30000,
+    )
     check_instances(4)
     _archive(
         qtbot, monkeypatch, window, services, tmp_path / f"array-{kind}-{angle}.mc.json", 640, 5

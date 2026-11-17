@@ -11,22 +11,31 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import build123d
 
+from mycad.core.drawing_detail import clip_detail_projection
 from mycad.core.drawing_projection import (
     DrawingProjectionRequest,
     DrawingSourceSnapshot,
     ProjectionResult,
     ViewBasis,
 )
+from mycad.geom.drawing_detail import clip_detail_exact
 from mycad.geom.drawing_projection import ProjectionSources, Shape, project_shape
+from mycad.geom.drawing_section import project_section
+
+if TYPE_CHECKING:
+    from mycad.core.drawing_detail import DetailRegion
+    from mycad.core.drawing_section import SectionPlane
 
 _shape: Shape | None = None
 _sources: ProjectionSources | None = None
 _fingerprint = ""
-_cache: dict[ViewBasis, ProjectionResult] = {}
+_cache: dict[
+    tuple[ViewBasis, SectionPlane | None, float, DetailRegion | None], ProjectionResult
+] = {}
 
 
 def _ready() -> int:
@@ -52,13 +61,43 @@ def _project(
         _cache.clear()
     results: list[ProjectionResult] = []
     for request in requests:
-        if request.basis not in _cache:
+        key = (request.basis, request.section, request.hatch_spacing_mm, request.detail)
+        if key not in _cache:
             if len(_cache) >= 24:
                 _cache.clear()
-            _cache[request.basis] = project_shape(_shape, request, _sources)
-        results.append(
-            replace(_cache[request.basis], view_id=request.view_id, generation=request.generation)
-        )
+            try:
+                if request.section is not None:
+                    if not isinstance(_shape, build123d.Compound | build123d.Solid):
+                        raise ValueError("section requires a solid source")
+                    _cache[key] = project_section(
+                        _shape, request.section, request, request.hatch_spacing_mm
+                    ).projection
+                elif request.detail is not None:
+                    parent = project_shape(_shape, request, _sources)
+                    _cache[key] = clip_detail_projection(
+                        parent,
+                        request.detail,
+                        request.view_id,
+                        request.generation,
+                        clipper=clip_detail_exact,
+                    )
+                else:
+                    _cache[key] = project_shape(_shape, request, _sources)
+            except Exception as error:
+                kind = (
+                    "剖视" if request.section is not None else "详图" if request.detail else "投影"
+                )
+                results.append(
+                    ProjectionResult(
+                        request.view_id,
+                        request.source_fingerprint,
+                        request.generation,
+                        (),
+                        (f"{kind}生成失败：{error}",),
+                    )
+                )
+                continue
+        results.append(replace(_cache[key], view_id=request.view_id, generation=request.generation))
     return tuple(results)
 
 

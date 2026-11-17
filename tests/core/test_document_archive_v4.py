@@ -26,7 +26,7 @@ def test_workspace_document_identity_roundtrip(
     target = tmp_path / f"document{suffix}"
     save_document(loaded.document, target)
     payload = json.loads(target.read_text(encoding="utf-8"))
-    assert payload["version"] == 4
+    assert payload["version"] == (4 if kind == "part" else 8)
     assert payload["document_kind"] == kind
     assert payload["file_id"] == loaded.document.file_id
     reopened = app.open_app_document(services, target)

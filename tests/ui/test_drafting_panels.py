@@ -174,7 +174,7 @@ def test_navigation_constraints_highlight_and_open_inline_editor(qtbot: QtBot) -
     item = leaf(editor, constraint.constraint_id)
     tree.setCurrentItem(item)
     assert editor.canvas.selected_constraint_ids == {constraint.constraint_id}
-    assert editor.canvas.selected_entity_ids == {editor.canvas.entities[0].entity_id}
+    assert not editor.canvas.selected_entity_ids
     assert editor.canvas.grab().toImage() != original
     tree.itemDoubleClicked.emit(item, 0)
     assert editor.dimensions.candidate == constraint

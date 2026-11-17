@@ -9,6 +9,7 @@ from typing import Literal, Protocol, cast
 
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
+from pytestqt.qtbot import QtBot
 
 from mycad.app import build_app
 from mycad.ui.main_window import MainWindow
@@ -97,3 +98,153 @@ def test_applying_dark_theme_updates_an_existing_widget_palette(qapp: QApplicati
     assert label.palette().color(QPalette.ColorRole.Window).name() == "#202833"
     assert label.palette().color(QPalette.ColorRole.Text).name() == "#e6edf5"
     theme.apply_theme(qapp, "light")
+
+
+def test_dark_theme_updates_drawing_canvas_and_preserves_layer_color(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    from mycad.core.sketch import LineEntity
+
+    window = MainWindow(services=build_app(discoverers=[]))
+    qtbot.addWidget(window)
+    window.resize(1200, 800)
+    window.show()
+    window._apply_theme_setting("light", persist=False)
+    window.act_new_drawing.trigger()
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    canvas = editor.canvas
+    canvas.set_grid_visible(False)
+    line = LineEntity(uuid4().hex, (-20, 10), (20, 10))
+    assert canvas.replace_draft_entities((line,))
+    bg = canvas.local_to_screen((0, -10))
+    stroke = canvas.local_to_screen((10, 10))
+    light = canvas.grab().toImage()
+    assert light.pixelColor(bg).lightness() > 200
+    assert light.pixelColor(stroke).lightness() < 120
+    window._apply_theme_setting("dark", persist=False)
+    dark = canvas.grab().toImage()
+    assert dark.pixelColor(bg).lightness() < 60
+    assert dark.pixelColor(stroke).lightness() > 160
+    assert canvas.layer_table.get(line.layer_name).color_rgb == (40, 46, 52)
+    window._apply_theme_setting("light", persist=False)
+    assert canvas.grab().toImage().pixelColor(bg).lightness() > 200
+
+
+def test_dark_theme_is_applied_to_new_drawing(qtbot: QtBot) -> None:
+    window = MainWindow(services=build_app(discoverers=[]))
+    qtbot.addWidget(window)
+    window.show()
+    window._apply_theme_setting("dark", persist=False)
+    window.act_new_drawing.trigger()
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    editor.canvas.set_grid_visible(False)
+    image = editor.canvas.grab().toImage()
+    assert image.pixelColor(editor.canvas.local_to_screen((0, -10))).lightness() < 60
+    window._apply_theme_setting("light", persist=False)
+
+
+def test_dark_theme_follows_drawing_document_switches(qtbot: QtBot) -> None:
+    from mycad.ui.document_session import DocumentSession
+
+    window = MainWindow(services=build_app(discoverers=[]), document_session=DocumentSession())
+    qtbot.addWidget(window)
+    window.show()
+    window._apply_theme_setting("light", persist=False)
+    first = window.new_session_document("sketch")
+    editor_a = window.active_sketch_dialog()
+    assert editor_a is not None
+    second = window.new_session_document("sketch")
+    editor_b = window.active_sketch_dialog()
+    assert editor_b is not None and editor_b is not editor_a
+    window._apply_theme_setting("dark", persist=False)
+    window.activate_session_document(first.loaded.document.document_id)
+    current = window.active_sketch_dialog()
+    assert current is not None
+    current.canvas.set_grid_visible(False)
+    assert (
+        current.canvas.grab()
+        .toImage()
+        .pixelColor(current.canvas.local_to_screen((0, -10)))
+        .lightness()
+        < 60
+    )
+    window.activate_session_document(second.loaded.document.document_id)
+    current = window.active_sketch_dialog()
+    assert current is not None
+    current.canvas.set_grid_visible(False)
+    assert (
+        current.canvas.grab()
+        .toImage()
+        .pixelColor(current.canvas.local_to_screen((0, -10)))
+        .lightness()
+        < 60
+    )
+    window._apply_theme_setting("light", persist=False)
+
+
+def test_dark_drawing_keeps_dimensions_and_crosshair_visible(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+    from mycad.ui.sketch_editor import SketchCanvas
+
+    canvas = SketchCanvas(select_committed_entities=True)
+    qtbot.addWidget(canvas)
+    canvas.resize(700, 500)
+    canvas.set_grid_visible(False)
+    line = LineEntity(uuid4().hex, (-30, 0), (30, 0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        60,
+        "mm",
+        driving=False,
+        position_mm=(0, 20),
+    )
+    canvas.entities = [line]
+    canvas.constraints = [dimension]
+    canvas.set_drawing_theme("dark")
+    canvas.show()
+    layout = canvas.dimension_layout(dimension, canvas.dimension_entities())
+    assert layout is not None
+    rect = canvas.dimension_label_rect(dimension, layout.label)
+    QTest.mouseMove(canvas, QPoint(100, 100))
+    image = canvas.grab().toImage()
+    assert image.pixelColor(QPoint(100, 100)).lightness() > 150
+    assert image.pixelColor(QPoint(int(rect.left() + 2), int(rect.top() + 2))).lightness() < 80
+    color = canvas._drawing_color(QColor(*canvas.annotation_layer(dimension).color_rgb))
+    assert color.lightness() > QColor("#202830").lightness() + 50
+
+
+def test_start_page_cards_follow_theme_with_readable_enabled_and_disabled_text(
+    qtbot: QtBot,
+) -> None:
+    from PySide6.QtCore import QPoint
+
+    window = MainWindow(services=build_app(discoverers=[]))
+    qtbot.addWidget(window)
+    window.resize(1100, 750)
+    window.show()
+    window.show_start_page()
+    page = window.start_page
+    for name, expected_bg, expected_text, disabled_bg, disabled_text in (
+        ("dark", "#202833", "#e6edf5", "#27323f", "#a9b7c7"),
+        ("light", "#ffffff", "#243247", "#f7f9fb", "#586b80"),
+    ):
+        window._apply_theme_setting(name, persist=False)
+        for card in (page.drawing_button, page.engineering_button, page.part_button):
+            assert card.grab().toImage().pixelColor(QPoint(10, 10)).name() == expected_bg
+            assert f"color: {expected_text}" in card.styleSheet().lower()
+            assert _contrast_ratio(expected_text, expected_bg) >= 4.5
+        card = page.assembly_button
+        assert not card.isEnabled()
+        assert card.grab().toImage().pixelColor(QPoint(10, 10)).name() == disabled_bg
+        assert f"color: {disabled_text}" in card.styleSheet().lower()
+        assert _contrast_ratio(disabled_text, disabled_bg) >= 4.5

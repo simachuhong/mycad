@@ -20,8 +20,10 @@ from mycad.core.drawing import (
     SourceBinding,
     apply_drawing_operation,
 )
+from mycad.core.drawing_detail import DetailRegion
 from mycad.core.drawing_projection import Point2, Point3, ViewBasis, ViewDirection, finite
 from mycad.core.drawing_references import DrawingGeometryReference
+from mycad.core.drawing_section import SectionLine
 from mycad.core.drawing_templates import DrawingTemplate
 
 
@@ -141,6 +143,22 @@ def drawing_object_mapping(
             "hidden_lines": value.hidden_lines,
             "tangent_lines": value.tangent_lines,
             "inherit_display": value.inherit_display,
+            **(
+                {
+                    "section": {
+                        "start": list(value.section.start),
+                        "end": list(value.section.end),
+                        "observer_side": value.section.observer_side,
+                    }
+                }
+                if value.section is not None
+                else {}
+            ),
+            **(
+                {"detail": {"center": list(value.detail.center), "radius": value.detail.radius}}
+                if value.detail is not None
+                else {}
+            ),
         }
     return {
         "annotation_id": str(value.annotation_id),
@@ -195,6 +213,12 @@ def _view(obj: Mapping[str, object]) -> DrawingView:
     if set(basis) != {"right", "up", "normal"}:
         raise ValueError("basis requires right/up/normal only")
     parent = obj.get("parent_id")
+    section_obj = _record(obj["section"]) if obj.get("section") is not None else None
+    if section_obj is not None and set(section_obj) != {"start", "end", "observer_side"}:
+        raise ValueError("section requires start, end and observer_side")
+    detail_obj = _record(obj["detail"]) if obj.get("detail") is not None else None
+    if detail_obj is not None and set(detail_obj) != {"center", "radius"}:
+        raise ValueError("detail requires center and radius")
     return DrawingView(
         _uuid(obj.get("view_id")),
         _uuid(obj.get("sheet_id")),
@@ -217,6 +241,22 @@ def _view(obj: Mapping[str, object]) -> DrawingView:
         _boolean(obj.get("hidden_lines", True)),
         _boolean(obj.get("tangent_lines", False)),
         _boolean(obj.get("inherit_display", True)),
+        (
+            SectionLine(
+                cast("Point2", _point(section_obj["start"], 2)),
+                cast("Point2", _point(section_obj["end"], 2)),
+                cast('Literal["left", "right"]', _text(section_obj["observer_side"])),
+            )
+            if section_obj is not None
+            else None
+        ),
+        (
+            DetailRegion(
+                cast("Point2", _point(detail_obj["center"], 2)), _number(detail_obj["radius"])
+            )
+            if detail_obj is not None
+            else None
+        ),
     )
 
 
@@ -278,6 +318,8 @@ _FIELDS: dict[str, frozenset[str]] = {
             "hidden_lines",
             "tangent_lines",
             "inherit_display",
+            "section",
+            "detail",
         }
     ),
     "annotation": frozenset(

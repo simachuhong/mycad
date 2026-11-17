@@ -353,7 +353,10 @@ def test_ui_layout_acceptance(
 
     # §11.5 left palette: all registered builtins are discoverable, searchable.
     expected_builtin_count = sum(
-        len(specs) for specs in services.registry.list_by_category().values()
+        spec.id not in {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+        and not spec.id.startswith("drawing.raster.")
+        for specs in services.registry.list_by_category().values()
+        for spec in specs
     )
     assert palette.apply_filter("") == expected_builtin_count
     assert palette.apply_filter("box") == 1

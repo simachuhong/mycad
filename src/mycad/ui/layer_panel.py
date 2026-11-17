@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import cast
+from functools import partial
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QColorDialog,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -21,7 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mycad.core.sketch_layers import SKETCH_LINETYPES, SketchLayer, SketchLayerTable
+from mycad.core.sketch_layers import SketchLayer, SketchLayerTable
+from mycad.ui.linetype_dialog import LinetypeSelectionDialog
 
 
 class DrawingLayerPanel(QDialog):
@@ -71,7 +74,7 @@ class DrawingLayerPanel(QDialog):
             row.addWidget(button)
         layout.addLayout(row)
         self.status_label = QLabel(
-            "关闭和冻结独立；解冻不会打开已关闭的层。双击颜色/线型/线宽可修改。"
+            "关闭和冻结独立；解冻不会打开已关闭的层。点击颜色或线型修改；双击线宽可修改。"
         )
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -104,10 +107,24 @@ class DrawingLayerPanel(QDialog):
                 )
                 item.setCheckState(Qt.CheckState.Checked if state else Qt.CheckState.Unchecked)
                 self.table.setItem(row, column, item)
-            self.table.setItem(
-                row, 4, QTableWidgetItem("#" + "".join(f"{v:02X}" for v in layer.color_rgb))
-            )
-            self.table.setItem(row, 5, QTableWidgetItem(layer.linetype))
+            color = QColor(*layer.color_rgb)
+            swatch = QPixmap(24, 14)
+            swatch.fill(color)
+            painter = QPainter(swatch)
+            painter.setPen(QPen(QColor("#808080")))
+            painter.drawRect(0, 0, swatch.width() - 1, swatch.height() - 1)
+            painter.end()
+            color_button = QPushButton(color.name().upper())
+            color_button.setIcon(QIcon(swatch))
+            color_button.setToolTip(f"选择图层 {layer.name} 的颜色")
+            color_button.setAccessibleName(f"选择图层 {layer.name} 的颜色")
+            color_button.clicked.connect(partial(self._choose_color, layer.name))
+            self.table.setCellWidget(row, 4, color_button)
+            linetype_button = QPushButton(f"{layer.linetype} …")
+            linetype_button.setToolTip(f"选择图层 {layer.name} 的线型")
+            linetype_button.setAccessibleName(f"选择图层 {layer.name} 的线型")
+            linetype_button.clicked.connect(partial(self._choose_linetype, layer.name))
+            self.table.setCellWidget(row, 5, linetype_button)
             self.table.setItem(row, 6, QTableWidgetItem(f"{layer.lineweight_mm:g}"))
         self.table.resizeColumnsToContents()
         self.dimension_combo.clear()
@@ -116,6 +133,40 @@ class DrawingLayerPanel(QDialog):
             self.dimension_combo.addItem(layer.name, layer.name)
         self.dimension_combo.setCurrentIndex(self.dimension_combo.findData(dimension_layer))
         self._updating = False
+
+    def _choose_color(self, name: str) -> None:
+        layer = self.layer_table.get(name)
+        color = QColorDialog.getColor(QColor(*layer.color_rgb), self, "选择图层颜色")
+        if not color.isValid():
+            return
+        try:
+            layer = self.layer_table.get(name)
+        except KeyError:
+            return
+        rgb = (color.red(), color.green(), color.blue())
+        if rgb == layer.color_rgb:
+            return
+        self.layer_table = self.layer_table.replace(replace(layer, color_rgb=rgb))
+        self.set_layers(self.layer_table, self.dimension_layer, self.current_layer)
+        self.properties_changed.emit(self.layer_table, self.dimension_layer)
+
+    def _choose_linetype(self, name: str) -> None:
+        layer = self.layer_table.get(name)
+        dialog = LinetypeSelectionDialog(layer.linetype, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        linetype = dialog.selected_linetype if accepted else None
+        dialog.deleteLater()
+        if linetype is None:
+            return
+        try:
+            layer = self.layer_table.get(name)
+        except KeyError:
+            return
+        if linetype == layer.linetype:
+            return
+        self.layer_table = self.layer_table.replace(replace(layer, linetype=linetype))
+        self.set_layers(self.layer_table, self.dimension_layer, self.current_layer)
+        self.properties_changed.emit(self.layer_table, self.dimension_layer)
 
     def set_layer_state(
         self,
@@ -156,18 +207,7 @@ class DrawingLayerPanel(QDialog):
                 self.set_layer_state(layer.name, locked=state)
             return
         try:
-            if column == 4:
-                value = item.text().removeprefix("#")
-                if len(value) != 6:
-                    raise ValueError("颜色使用 #RRGGBB 格式")
-                rgb = tuple(int(value[i : i + 2], 16) for i in (0, 2, 4))
-                revised = replace(layer, color_rgb=cast("tuple[int, int, int]", rgb))
-            elif column == 5:
-                value = item.text().upper()
-                if value not in SKETCH_LINETYPES:
-                    raise ValueError("线型应为 " + ", ".join(SKETCH_LINETYPES))
-                revised = replace(layer, linetype=value)
-            elif column == 6:
+            if column == 6:
                 revised = replace(layer, lineweight_mm=float(item.text()))
             else:
                 return

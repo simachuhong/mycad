@@ -15,6 +15,8 @@ from mycad.core.drawing_references import DrawingGeometryReference
 if TYPE_CHECKING:
     from mycad.core.drawing import DrawingAnnotation, DrawingNote, DrawingState
     from mycad.core.drawing_annotations import SceneAnnotation
+    from mycad.core.drawing_detail import DetailRegion
+    from mycad.core.drawing_section import SectionPlane
     from mycad.core.drawing_templates import DrawingTemplate
 
 Point2 = tuple[float, float]
@@ -196,6 +198,9 @@ class DrawingProjectionRequest:
     basis: ViewBasis = ViewBasis()
     source: Literal["current_part", "sketch"] = "current_part"
     sketch_id: str | None = None
+    section: SectionPlane | None = None
+    hatch_spacing_mm: float = 2.5
+    detail: DetailRegion | None = None
 
     def __post_init__(self) -> None:
         from mycad.core.drawing import SourceBinding
@@ -203,6 +208,15 @@ class DrawingProjectionRequest:
         SourceBinding(self.source, self.sketch_id)
         if not self.source_fingerprint or self.generation < 0:
             raise ValueError("invalid drawing projection request")
+        finite((self.hatch_spacing_mm,), "hatch spacing")
+        if self.hatch_spacing_mm <= 0:
+            raise ValueError("hatch spacing must be positive")
+        if self.section is not None and (
+            self.source != "current_part" or self.basis != self.section.basis
+        ):
+            raise ValueError("section request requires the part and section basis")
+        if self.detail is not None and (self.source != "current_part" or self.section is not None):
+            raise ValueError("detail request requires an ordinary part projection")
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +226,7 @@ class ProjectionResult:
     generation: int
     curves: tuple[ProjectedCurve, ...]
     diagnostics: tuple[str, ...] = ()
+    hatch: tuple[LineCurve, ...] = ()
 
     def __post_init__(self) -> None:
         ids = [curve.curve_id for curve in self.curves]
@@ -229,12 +244,32 @@ class SceneView:
     anchor_mm: Point2
     scale: float
     curves: tuple[ProjectedCurve, ...]
+    hatch: tuple[LineCurve, ...] = ()
 
     def to_paper(self, point: Point2) -> Point2:
         return (
             self.anchor_mm[0] + self.scale * point[0],
             self.anchor_mm[1] + self.scale * point[1],
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SectionMarker:
+    label: str
+    start_mm: Point2
+    end_mm: Point2
+    observer_side: Literal["left", "right"]
+    view_label_mm: Point2
+
+
+@dataclass(frozen=True, slots=True)
+class DetailMarker:
+    label: str
+    source_center_mm: Point2
+    source_radius_mm: float
+    view_center_mm: Point2
+    view_radius_mm: float
+    view_scale: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +288,26 @@ class DrawingScene:
     default_scale: float = 1
     sheet_number: int = 1
     sheet_count: int = 1
+    section_markers: tuple[SectionMarker, ...] = ()
+    detail_markers: tuple[DetailMarker, ...] = ()
+
+
+def _section_label(index: int) -> str:
+    label = ""
+    while index:
+        index, digit = divmod(index - 1, 26)
+        label = chr(65 + digit) + label
+    return label
+
+
+def _curve_lower_bound(curve: CurveGeometry) -> float:
+    if isinstance(curve, LineCurve):
+        return min(curve.start[1], curve.end[1])
+    if isinstance(curve, ArcCurve):
+        return curve.center[1] - curve.radius
+    if isinstance(curve, EllipseCurve):
+        return curve.center[1] - curve.major_radius
+    return min(point[1] for point in curve.poles)
 
 
 def build_drawing_scene(
@@ -267,6 +322,10 @@ def build_drawing_scene(
     for view in state.views:
         if view.sheet_id != sheet_id:
             continue
+        if view.section is not None:
+            issues.append("剖视功能开发中，尚不能出图")
+        if view.detail is not None:
+            issues.append("局部详图功能开发中，尚不能出图")
         projection = projections.get(view.view_id)
         if projection is None or projection.view_id != view.view_id:
             issues.append(f"视图 {view.view_id} 尚未生成投影")
@@ -286,11 +345,57 @@ def build_drawing_scene(
                 state.effective_anchor(view.view_id),
                 state.effective_scale(view.view_id),
                 curves,
+                projection.hatch,
             )
         )
     if len(fingerprints) > 1:
         issues.append("视图来源版本不一致，请更新工程图")
     view_ids = {view.view_id for view in state.views if view.sheet_id == sheet_id}
+    markers: list[SectionMarker] = []
+    for view in state.views:
+        if view.sheet_id != sheet_id or view.section is None or view.parent_id is None:
+            continue
+        anchor = state.effective_anchor(view.parent_id)
+        scale = state.effective_scale(view.parent_id)
+        start = view.section.start
+        end = view.section.end
+        view_anchor = state.effective_anchor(view.view_id)
+        scene_view = next((item for item in views if item.view_id == view.view_id), None)
+        bottom = (
+            min((_curve_lower_bound(curve.geometry) for curve in scene_view.curves), default=0)
+            if scene_view is not None
+            else 0
+        )
+        label_y = view_anchor[1] + state.effective_scale(view.view_id) * bottom - 5
+        markers.append(
+            SectionMarker(
+                _section_label(len(markers) + 1),
+                (anchor[0] + scale * start[0], anchor[1] + scale * start[1]),
+                (anchor[0] + scale * end[0], anchor[1] + scale * end[1]),
+                view.section.observer_side,
+                (view_anchor[0], label_y),
+            )
+        )
+    details: list[DetailMarker] = []
+    for view in state.views:
+        if view.sheet_id != sheet_id or view.detail is None or view.parent_id is None:
+            continue
+        anchor = state.effective_anchor(view.parent_id)
+        parent_scale = state.effective_scale(view.parent_id)
+        scale = state.effective_scale(view.view_id)
+        details.append(
+            DetailMarker(
+                _section_label(len(details) + 1),
+                (
+                    anchor[0] + parent_scale * view.detail.center[0],
+                    anchor[1] + parent_scale * view.detail.center[1],
+                ),
+                parent_scale * view.detail.radius,
+                state.effective_anchor(view.view_id),
+                scale * view.detail.radius,
+                scale,
+            )
+        )
     resolved: list[SceneAnnotation] = []
     for annotation in state.annotations:
         if annotation.view_id not in view_ids:
@@ -325,6 +430,8 @@ def build_drawing_scene(
         sheet.default_scale,
         next(i + 1 for i, item in enumerate(state.sheets) if item.sheet_id == sheet_id),
         len(state.sheets),
+        tuple(markers),
+        tuple(details),
     )
 
 

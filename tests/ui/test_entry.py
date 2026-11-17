@@ -84,6 +84,49 @@ def test_run_gui_wires_services_without_creating_a_document(
     assert window.start_page.isVisible()
 
 
+def test_run_gui_prepares_input_method_before_creating_application(
+    monkeypatch: pytest.MonkeyPatch,
+    services: AppServices,
+    spy_window: type[_SpyWindow],
+    no_event_loop: None,
+    qtbot: QtBot,
+) -> None:
+    existing_app = QApplication.instance()
+    assert isinstance(existing_app, QApplication)
+    events: list[str] = []
+
+    class FirstApplication:
+        @staticmethod
+        def instance() -> None:
+            return None
+
+        def __new__(cls, _arguments: list[str]) -> QApplication:
+            events.append("create")
+            return existing_app
+
+    monkeypatch.setattr(entry, "QApplication", FirstApplication)
+    monkeypatch.setattr(entry, "prepare_input_method", lambda: events.append("prepare"))
+    monkeypatch.setattr(entry, "build_app", lambda: services)
+    assert entry.run_gui() == 0
+    qtbot.addWidget(spy_window.instances[0])
+    assert events == ["prepare", "create"]
+
+
+def test_run_gui_preserves_existing_application_input_method(
+    monkeypatch: pytest.MonkeyPatch,
+    services: AppServices,
+    spy_window: type[_SpyWindow],
+    no_event_loop: None,
+    qtbot: QtBot,
+) -> None:
+    monkeypatch.setattr(
+        entry, "prepare_input_method", lambda: pytest.fail("application already exists")
+    )
+    monkeypatch.setattr(entry, "build_app", lambda: services)
+    assert entry.run_gui() == 0
+    qtbot.addWidget(spy_window.instances[0])
+
+
 def test_run_gui_builds_the_five_zones(
     monkeypatch: pytest.MonkeyPatch,
     services: AppServices,

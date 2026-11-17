@@ -32,8 +32,21 @@ RELEASED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
         "datum.coordinate_system.create",
         "datum.plane.create",
+        "drawing.array.add",
+        "drawing.array.batch_override",
+        "drawing.array.erase",
+        "drawing.array.move",
+        "drawing.array.offset",
+        "drawing.array.remove",
+        "drawing.array.replace",
+        "drawing.array.reset",
+        "drawing.array.resize",
+        "drawing.array.rotate",
+        "drawing.array.update",
         "drawing.layers.set",
         "drawing.sketch.revise",
+        "drawing.tangency.add",
+        "drawing.tangency.remove",
         "drawing.sheet.create",
         "drawing.sheet.update",
         "drawing.sheet.delete",
@@ -346,3 +359,91 @@ def test_palette_reflects_action_state_without_losing_tree_selection(qtbot: QtBo
     action.setEnabled(True)
     qtbot.waitUntil(lambda: item.text(1) == "可用")
     assert palette.tree.currentItem() is item
+
+
+@pytest.mark.parametrize("change", ["disable", "unregister"])
+def test_palette_rechecks_action_before_queued_refresh(qtbot: QtBot, change: str) -> None:
+    from mycad.ui.document_session import DocumentSession
+
+    session = DocumentSession()
+    window = MainWindow(services=build_app(discoverers=[]), document_session=session)
+    qtbot.addWidget(window)
+    window.new_session_document("part")
+    palette = window.command_palette
+    assert palette is not None
+    items = palette.tree.findItems("长方体", Qt.MatchFlag.MatchRecursive, 0)
+    assert len(items) == 1
+    item = items[0]
+    action = window.action_catalog.get("feature.box")
+    qtbot.waitUntil(lambda: not item.isDisabled())
+    assert action.isEnabled() and not item.isDisabled()
+    activated: list[str] = []
+    palette.command_activated.connect(activated.append)
+    if change == "disable":
+        action.setEnabled(False)
+    else:
+        window.action_catalog.unregister("feature.box")
+    # QAction.changed schedules a zero-delay visual update. A queued tree
+    # activation can arrive before the tree item has been repainted.
+    assert not item.isDisabled()
+    palette.tree.itemActivated.emit(item, 0)
+    assert not activated
+
+
+def test_palette_double_click_activates_command_once(qtbot: QtBot) -> None:
+    from PySide6.QtTest import QTest
+
+    from mycad.ui.document_session import DocumentSession
+
+    window = MainWindow(services=build_app(discoverers=[]), document_session=DocumentSession())
+    qtbot.addWidget(window)
+    window.resize(1200, 800)
+    window.show()
+    window.new_session_document("part")
+    palette = window.command_palette
+    assert palette is not None
+    assert window.left_tabs is not None
+    window.left_tabs.setCurrentWidget(palette)
+    window.left_dock.show()
+    items = palette.tree.findItems("长方体", Qt.MatchFlag.MatchRecursive, 0)
+    assert len(items) == 1
+    item = items[0]
+    palette.tree.scrollToItem(item)
+    qtbot.waitUntil(lambda: palette.tree.visualItemRect(item).isValid())
+    qtbot.waitUntil(lambda: not item.isDisabled())
+    activated: list[str] = []
+    palette.command_activated.connect(activated.append)
+    QTest.mouseClick(
+        palette.tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=palette.tree.visualItemRect(item).center(),
+    )
+    QTest.mouseDClick(
+        palette.tree.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=palette.tree.visualItemRect(item).center(),
+    )
+    assert activated == ["feature.box"]
+
+
+def test_palette_enter_activates_command_once(qtbot: QtBot) -> None:
+    from PySide6.QtTest import QTest
+
+    from mycad.ui.document_session import DocumentSession
+
+    window = MainWindow(services=build_app(discoverers=[]), document_session=DocumentSession())
+    qtbot.addWidget(window)
+    window.show()
+    window.new_session_document("part")
+    palette = window.command_palette
+    assert palette is not None and window.left_tabs is not None
+    window.left_tabs.setCurrentWidget(palette)
+    window.left_dock.show()
+    items = palette.tree.findItems("长方体", Qt.MatchFlag.MatchRecursive, 0)
+    assert len(items) == 1
+    palette.tree.setCurrentItem(items[0])
+    qtbot.waitUntil(lambda: not items[0].isDisabled())
+    activated: list[str] = []
+    palette.command_activated.connect(activated.append)
+    QTest.keyClick(palette.tree, Qt.Key.Key_Return)
+    assert activated == ["feature.box"]

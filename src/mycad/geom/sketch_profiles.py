@@ -14,6 +14,7 @@ from typing import Protocol, cast
 from build123d import Edge, Face, Plane, Vector, Wire
 
 from mycad.core.exceptions import GeometryBuildError
+from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
@@ -177,10 +178,23 @@ def _entities_to_curves(sketch: Sketch) -> tuple[list[_Curve], list[_Contour]]:
         elif isinstance(entity, LineEntity):
             curves.append(_line_curve(sketch, entity.start_mm, entity.end_mm, entity.entity_id))
         elif isinstance(entity, PolylineEntity):
-            pairs = list(zip(entity.points_mm, entity.points_mm[1:], strict=False))
-            if entity.closed:
-                pairs.append((entity.points_mm[-1], entity.points_mm[0]))
-            curves.extend(_line_curve(sketch, start, end, entity.entity_id) for start, end in pairs)
+            if entity.bulges:
+                segments = polyline_curve_segments(
+                    entity.points_mm, entity.bulges, entity.closed, entity.entity_id
+                )
+                curves.extend(
+                    _arc_curve(sketch, segment)
+                    if isinstance(segment, ArcEntity)
+                    else _line_curve(sketch, segment.start_mm, segment.end_mm, entity.entity_id)
+                    for segment in segments
+                )
+            else:
+                pairs = list(zip(entity.points_mm, entity.points_mm[1:], strict=False))
+                if entity.closed:
+                    pairs.append((entity.points_mm[-1], entity.points_mm[0]))
+                curves.extend(
+                    _line_curve(sketch, start, end, entity.entity_id) for start, end in pairs
+                )
         elif isinstance(entity, RectangleEntity):
             first_u, first_v = entity.first_corner_mm
             opposite_u, opposite_v = entity.opposite_corner_mm

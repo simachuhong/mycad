@@ -16,6 +16,8 @@ def validate_versioned_archive(data: object) -> None:
     from mycad.core.schema_v4 import validate_archive_v4
     from mycad.core.schema_v5 import validate_archive_v5
     from mycad.core.schema_v6 import validate_archive_v6
+    from mycad.core.schema_v7 import validate_archive_v7
+    from mycad.core.schema_v8 import validate_archive_v8
 
     if not isinstance(data, dict):
         raise ValidationError("archive: expected object")
@@ -30,6 +32,8 @@ def validate_versioned_archive(data: object) -> None:
         4: validate_archive_v4,
         5: validate_archive_v5,
         6: validate_archive_v6,
+        7: validate_archive_v7,
+        8: validate_archive_v8,
     }.get(version)
     if validator is None:
         raise ValidationError("unsupported archive version")

@@ -239,7 +239,7 @@ def test_point_sketch_can_be_detached_with_a_replayable_archive() -> None:
     sketch = Sketch("e5" * 16, WorkPlaneFrame.xy(), (point,))
     commit_new_sketch(services, loaded, sketch, session_identity=1)
     isolated, detached = separate_internal_sketch(services, sketch.sketch_id)
-    assert detached.document.archive_version == 6
+    assert detached.document.archive_version == 8
     assert isolated.kernel.sketches[0].entities == (point,)
 
 

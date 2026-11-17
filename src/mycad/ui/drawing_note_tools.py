@@ -259,6 +259,7 @@ class DrawingNoteTools(QWidget):
 
     def cancel(self) -> None:
         self._active = False
+        self._dragging = False
         self._editing_id = None
         self._sheet_id = None
         self.draft = None

@@ -88,7 +88,6 @@ class CommandPalette(QWidget):
         self._fill_from_registry()
         self.search_box.textChanged.connect(self.apply_filter)
         self.tree.itemActivated.connect(self._activate_item)
-        self.tree.itemDoubleClicked.connect(self._activate_item)
 
     # ------------------------------------------------------------------
     # Population
@@ -113,6 +112,11 @@ class CommandPalette(QWidget):
             group.setToolTip(0, category)
             set_tree_icon(group, CATEGORY_ICONS.get(category, "plugin"), self._icon_theme)
             for spec in specs:
+                if spec.id in {
+                    "drawing.fillet_radius.set",
+                    "drawing.chamfer_values.set",
+                } or spec.id.startswith("drawing.raster."):
+                    continue
                 if self._document_type == "drawing2d" and spec.id not in DRAWING2D_COMMAND_IDS:
                     continue
                 disabled, explanation = self._availability(spec.id)
@@ -251,5 +255,5 @@ class CommandPalette(QWidget):
         if item.isDisabled():
             return
         command_id = item.data(0, COMMAND_ID_ROLE)
-        if command_id:
+        if isinstance(command_id, str) and not self._availability(command_id)[0]:
             self.command_activated.emit(str(command_id))

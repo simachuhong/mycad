@@ -121,9 +121,10 @@ class ReplayChangeSet:
         if self.undo_appends_separately and (raw_replacements or not raw_appends):
             raise ValidationError("separate append undo requires an append-only change set")
         if self.target_archive_version is not None and (
-            type(self.target_archive_version) is not int or self.target_archive_version != 6
+            type(self.target_archive_version) is not int
+            or self.target_archive_version not in (6, 7, 8)
         ):
-            raise ValidationError("target_archive_version must be 6 or None")
+            raise ValidationError("target_archive_version must be 6, 7, 8 or None")
         replacements = cast("tuple[ReplayEdit, ...]", raw_replacements)
         appends = cast("tuple[ReplayAppend, ...]", raw_appends)
         object.__setattr__(self, "replacements", replacements)
@@ -153,8 +154,8 @@ class ReplayCandidateProposal:
         _nonnegative_integer("revision", self.revision)
         _nonnegative_integer("session_identity", self.session_identity)
         _nonnegative_integer("generation", self.generation)
-        if type(self.archive_version) is not int or not 1 <= self.archive_version <= 6:
-            raise ValidationError("archive_version must be an integer from 1 to 6")
+        if type(self.archive_version) is not int or not 1 <= self.archive_version <= 8:
+            raise ValidationError("archive_version must be an integer from 1 to 8")
         _require_text("digest", self.digest)
         if type(self.undo_appends_separately) is not bool:
             raise ValidationError("undo_appends_separately must be a boolean")
@@ -254,8 +255,8 @@ def _command_payload(command: ExecutedCommand, index: int) -> dict[str, object]:
 
 def replay_digest(archive_version: int, commands: Sequence[ExecutedCommand]) -> str:
     """Hash canonical JSON for the complete archive version and command history."""
-    if type(archive_version) is not int or not 1 <= archive_version <= 6:
-        raise ValidationError("archive_version must be an integer from 1 to 6")
+    if type(archive_version) is not int or not 1 <= archive_version <= 8:
+        raise ValidationError("archive_version must be an integer from 1 to 8")
     commands_value = cast("object", commands)
     if isinstance(commands_value, (str, bytes)) or not isinstance(commands_value, Sequence):
         raise ValidationError("commands must be a sequence of ExecutedCommand values")

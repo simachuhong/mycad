@@ -6,13 +6,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from functools import partial
+from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QTimer
 from pytestqt.qtbot import QtBot
 
-from mycad.app import build_app, new_document
-from mycad.core.sketch import CircleEntity, LineEntity, Sketch, WorkPlaneFrame
+from mycad.app import build_app, commit_new_sketch, new_document, open_app_document
+from mycad.core.persistence import save_document
+from mycad.core.sketch import CircleEntity, LineEntity, PolylineEntity, Sketch, WorkPlaneFrame
 from mycad.core.sketch_constraints import (
     SketchBranchChange,
     SketchConstraint,
@@ -120,6 +123,54 @@ def test_reference_dimension_measures_geometry_without_moving_it(qtbot: QtBot) -
     assert dialog.apply_button.isEnabled()
 
 
+@pytest.mark.parametrize("kind", ["radius", "diameter", "arc_length"])
+@pytest.mark.parametrize("driving", [False, True])
+def test_curved_polyline_segment_dimension_from_constraint_dialog(
+    qtbot: QtBot, kind: str, driving: bool
+) -> None:
+    services = build_app(discoverers=())
+    polyline = PolylineEntity(LINE_ID, ((0, 0), (10, 0), (10, 10)), bulges=(0, 0.5))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (polyline,))
+    dialog = SketchConstraintDialog((sketch,), services.kernel.preview_sketch_constraint)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    kind_index = dialog.kind_combo.findData(kind)
+    assert kind_index >= 0
+    dialog.kind_combo.setCurrentIndex(kind_index)
+    assert dialog.first_reference.currentData() == "segment"
+    dialog.first_index.setValue(1)
+    dialog.driving_check.setChecked(driving)
+    if driving:
+        dialog.value_field.setValue({"radius": 7.5, "diameter": 15.0, "arc_length": 12.0}[kind])
+    dialog.preview_button.click()
+    if dialog.branch_acknowledgement.isVisible():
+        dialog.branch_acknowledgement.setChecked(True)
+    assert dialog.status_label.text().startswith("求解成功"), dialog.status_label.text()
+    assert dialog.apply_button.isEnabled()
+    assert dialog.value_field.value() > 0
+
+
+def test_existing_arc_length_dimension_is_available_for_editing(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    polyline = PolylineEntity(LINE_ID, ((0, 0), (10, 0), (10, 10)), bulges=(0, 0.5))
+    dimension = SketchConstraint(
+        "22222222-2222-4222-8222-222222222222",
+        "arc_length",
+        (SketchGeometryReference(LINE_ID, "segment", 1),),
+        10,
+        "mm",
+        False,
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (polyline,), (dimension,))
+    dialog = SketchConstraintDialog((sketch,), services.kernel.preview_sketch_constraint)
+    qtbot.addWidget(dialog)
+    assert dialog.dimension_combo.findData(dimension.constraint_id) >= 0
+    dialog.dimension_combo.setCurrentIndex(dialog.dimension_combo.findData(dimension.constraint_id))
+    assert dialog.kind_combo.currentData() == "arc_length"
+    assert dialog.first_reference.currentData() == "segment"
+    assert dialog.first_index.value() == 1
+
+
 def test_dimension_precision_and_scale_are_part_of_the_previewed_constraint(
     qtbot: QtBot,
 ) -> None:
@@ -185,6 +236,102 @@ def test_main_window_constraint_action_commits_through_bus(qtbot: QtBot) -> None
     assert len(loaded.document.commands) == 2
     assert loaded.document.commands[-1].id == "sketch.constraint.add"
     assert services.kernel.sketches[0].constraints[0].kind == "length"
+
+
+def test_main_window_constrains_straight_segment_of_curved_polyline(qtbot: QtBot) -> None:
+    services = build_app(discoverers=())
+    loaded = new_document(services, document_type="drawing2d")
+    path = PolylineEntity(LINE_ID, ((0, 0), (3, 2), (9, 3)), bulges=(0.5, 0))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (path,))
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+
+    def accept_constraint() -> None:
+        dialog = window.active_sketch_constraint_dialog()
+        assert dialog is not None
+        try:
+            dialog.kind_combo.setCurrentIndex(dialog.kind_combo.findData("horizontal"))
+            dialog.first_reference.setCurrentIndex(dialog.first_reference.findData("segment"))
+            dialog.first_index.setValue(1)
+            dialog.preview_button.click()
+            qtbot.waitUntil(dialog.apply_button.isEnabled, timeout=10000)
+            dialog.apply_button.click()
+        except BaseException:
+            dialog.reject()
+            raise
+
+    QTimer.singleShot(0, accept_constraint)
+    window.act_sketch_constraints.trigger()
+    unit = window.execution_unit
+    assert unit is not None
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 2 and not unit.is_busy, timeout=10000)
+    solved = services.kernel.sketches[0].entities[0]
+    assert isinstance(solved, PolylineEntity) and solved.bulges == path.bulges
+    assert solved.points_mm[1][1] == pytest.approx(solved.points_mm[2][1])
+    loaded.bus.undo()
+    assert services.kernel.sketches[0] == sketch
+
+
+def test_main_window_adds_and_edits_polyline_arc_length(qtbot: QtBot, tmp_path: Path) -> None:
+    services = build_app(discoverers=())
+    loaded = new_document(services, document_type="drawing2d")
+    path = PolylineEntity(LINE_ID, ((0, 0), (10, 0), (10, 10)), bulges=(0, 0.5))
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (path,))
+    commit_new_sketch(services, loaded, sketch, session_identity=1)
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+
+    def apply_dimension(*, edit: bool) -> None:
+        dialog = window.active_sketch_constraint_dialog()
+        assert dialog is not None
+        try:
+            if edit:
+                dimension = services.kernel.sketches[0].constraints[0]
+                dialog.dimension_combo.setCurrentIndex(
+                    dialog.dimension_combo.findData(dimension.constraint_id)
+                )
+                assert dialog.kind_combo.currentData() == "arc_length"
+                assert dialog.first_reference.currentData() == "segment"
+                assert dialog.first_index.value() == 1
+            else:
+                dialog.kind_combo.setCurrentIndex(dialog.kind_combo.findData("arc_length"))
+                dialog.first_index.setValue(1)
+            dialog.value_field.setValue(13 if edit else 12)
+            dialog.preview_button.click()
+            qtbot.waitUntil(
+                lambda: (
+                    dialog.apply_button.isEnabled() or dialog.branch_acknowledgement.isVisible()
+                ),
+                timeout=10000,
+            )
+            if dialog.branch_acknowledgement.isVisible():
+                dialog.branch_acknowledgement.setChecked(True)
+            assert dialog.apply_button.isEnabled(), dialog.status_label.text()
+            dialog.apply_button.click()
+        except BaseException:
+            dialog.reject()
+            raise
+
+    unit = window.execution_unit
+    assert unit is not None
+    for edit in (False, True):
+        QTimer.singleShot(0, partial(apply_dimension, edit=edit))
+        window.act_sketch_constraints.trigger()
+        qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert len(loaded.document.commands) == 3
+    assert services.kernel.sketches[0].constraints[0].value == pytest.approx(13)
+    after = services.kernel.sketches
+    save_path = tmp_path / "dialog-arc-length.my2d"
+    save_document(loaded.document, save_path)
+    reopened = open_app_document(services, save_path)
+    assert services.kernel.sketches == after
+    reopened.bus.undo()
+    assert services.kernel.sketches[0].constraints[0].value == pytest.approx(12)
 
 
 def test_async_constraint_preview_ignores_results_after_input_changes(qtbot: QtBot) -> None:

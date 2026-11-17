@@ -19,6 +19,7 @@ class ThemeTokens:
     panel: str
     secondary_panel: str
     divider: str
+    toolbar_separator: str
     text: str
     secondary_text: str
     focus: str
@@ -37,6 +38,7 @@ LIGHT_THEME = ThemeTokens(
     panel="#FFFFFF",
     secondary_panel="#F7F9FB",
     divider="#DCE3EB",
+    toolbar_separator="#AAB4BE",
     text="#243247",
     secondary_text="#586B80",
     focus="#255BCE",
@@ -55,6 +57,7 @@ DARK_THEME = ThemeTokens(
     panel="#202833",
     secondary_panel="#27323F",
     divider="#3A4757",
+    toolbar_separator="#748594",
     text="#E6EDF5",
     secondary_text="#A9B7C7",
     focus="#86A9FF",
@@ -114,6 +117,11 @@ def apply_theme(app: QApplication, theme: ThemeName) -> None:
         QWidget {{ color: {tokens.text}; font-family: "Noto Sans CJK SC", "Noto Sans", sans-serif; font-size: 13px; }}
         QMainWindow, QDialog, QDockWidget {{ background: {tokens.panel}; }}
         QToolBar {{ background: {tokens.secondary_panel}; border: 0; border-bottom: 1px solid {tokens.divider}; spacing: 4px; padding: 4px; }}
+        QToolBar::separator:horizontal {{ background: {tokens.toolbar_separator}; width: 1px; margin: 5px 6px; }}
+        QToolBar::separator:vertical {{ background: {tokens.toolbar_separator}; height: 1px; margin: 6px 5px; }}
+        QToolBar::handle:horizontal {{ background: {tokens.toolbar_separator}; width: 2px; margin: 5px 2px; }}
+        QToolBar::handle:vertical {{ background: {tokens.toolbar_separator}; height: 2px; margin: 2px 5px; }}
+        QFrame#ribbonSeparator {{ background: {tokens.toolbar_separator}; border: 0; }}
         QToolButton, QPushButton {{ border: 1px solid transparent; border-radius: 4px; padding: 5px 7px; }}
         QToolButton:hover, QPushButton:hover {{ background: {tokens.active}; border-color: {tokens.divider}; }}
         QPushButton[sketchTool="true"]:checked {{ background: {tokens.active}; border-color: {tokens.focus}; }}

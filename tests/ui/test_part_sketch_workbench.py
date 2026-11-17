@@ -2389,6 +2389,110 @@ def test_confirmed_sketch_is_preselected_for_independent_extrude(qtbot: QtBot) -
     assert services.kernel.mass_properties().volume == pytest.approx(pi * 5**2 * 10)
 
 
+def test_draw_dimension_region_extrude_edit_undo_and_reopen(qtbot: QtBot, tmp_path: Path) -> None:
+    from PySide6.QtWidgets import QComboBox
+
+    services = app.build_app(discoverers=[])
+    loaded = app.new_workspace_document(services, kind="part")
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.resize(1000, 800)
+    window.show()
+    window.act_sketch.trigger()
+    task = window.part_sketch_task
+    view = window.viewport
+    assert task is not None and view is not None
+    task.lock_plane()
+    task.select_tool("circle")
+    task.place_uv((0, 0))
+    task.place_uv((10, 0))
+    circle = task.session.sketch.entities[0]
+    view.fit_world_points(((-15, -15, 0), (15, 15, 0)))
+    next(action for action in task.dimension_menu.actions() if action.text() == "半径").trigger()
+    source = view.project_world_point((10, 0, 0))
+    location = view.project_world_point((12, 12, 0))
+    assert source is not None and location is not None
+    QTest.mouseClick(
+        view, Qt.MouseButton.LeftButton, pos=QPoint(round(source[0]), round(source[1]))
+    )
+    QTest.mouseClick(
+        view, Qt.MouseButton.LeftButton, pos=QPoint(round(location[0]), round(location[1]))
+    )
+    dialog = task.constraint_dialog
+    assert dialog is not None
+    assert dialog.first_entity.currentData() == circle.entity_id
+    dialog.value_field.setValue(10)
+    dialog.preview_button.click()
+    assert dialog.apply_button.isEnabled(), dialog.status_label.text()
+    dialog.apply_button.click()
+    dimension = task.session.sketch.constraints[0]
+    task.region_button.click()
+    point = view.project_world_point((5, 0, 0))
+    assert point is not None
+    QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(round(point[0]), round(point[1])))
+    task.preview()
+    assert task.confirm_button.isEnabled(), task.status_label.text()
+    task.confirm()
+    assert window.command_palette is not None
+    window.command_palette.command_activated.emit("feature.extrude")
+    bar = window.modeling_command_bar
+    assert bar is not None
+    region = bar.findChild(QComboBox, "sketchRegion")
+    assert region is not None and region.currentData() == "selected"
+    profile = cast("Mapping[str, object]", bar.values()["profile"])
+    assert profile["boundary_entity_ids"] == [circle.entity_id]
+    commit = bar.findChild(QPushButton, "modelingCommitButton")
+    assert commit is not None
+    qtbot.waitUntil(commit.isEnabled, timeout=30000)
+    unit = window.execution_unit
+    assert unit is not None
+    command_count = len(loaded.document.commands)
+    commit.click()
+    qtbot.waitUntil(
+        lambda: len(loaded.document.commands) == command_count + 1 and not unit.is_busy,
+        timeout=30000,
+    )
+    before = services.kernel.mass_properties().volume
+    assert before == pytest.approx(1000 * pi)
+    assert window.right_panel is not None
+    window.right_panel.select_feature_ordinal(0)
+    button = window.right_panel.findChild(QPushButton, "editPartSketch")
+    assert button is not None
+    button.click()
+    edited = window.part_sketch_task
+    assert edited is not None
+    label = next(
+        d for d in view.draft_sketch_dimensions() if d.constraint_id == dimension.constraint_id
+    )
+    position = view.project_world_point(label.position)
+    assert position is not None
+    QTest.mouseDClick(
+        view, Qt.MouseButton.LeftButton, pos=QPoint(round(position[0]), round(position[1]))
+    )
+    editor = edited.dimension_editor
+    assert editor is not None
+    editor.setValue(12)
+    QTest.keyClick(editor.lineEdit(), Qt.Key.Key_Return)
+    edited.preview()
+    assert edited.confirm_button.isEnabled(), edited.status_label.text()
+    assert services.kernel.mass_properties().volume == pytest.approx(before)
+    edited.confirm()
+    assert services.kernel.mass_properties().volume == pytest.approx(1440 * pi)
+    loaded.bus.undo_operation()
+    assert services.kernel.mass_properties().volume == pytest.approx(before)
+    loaded.bus.redo_operation()
+    assert services.kernel.mass_properties().volume == pytest.approx(1440 * pi)
+    path = tmp_path / "region-dimension.my3d"
+    save_document(loaded.document, path)
+    reopened_services = app.fork_app_services(services)
+    app.open_app_document(reopened_services, path)
+    assert reopened_services.kernel.mass_properties().volume == pytest.approx(1440 * pi)
+    assert (
+        reopened_services.kernel.sketches[0].constraints[0].constraint_id == dimension.constraint_id
+    )
+
+
 def test_selected_region_from_sketch_drives_extrude(qtbot: QtBot) -> None:
     from PySide6.QtWidgets import QComboBox
 

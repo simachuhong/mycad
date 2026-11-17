@@ -10,10 +10,10 @@ from mycad.core.schema_v5 import validate_archive_v5
 ARCHIVE_VERSION_V6 = 6
 
 
-def validate_archive_v6(data: object) -> None:
+def validate_archive_v6(data: object, *, max_reference_version: int = 6) -> None:
     if not isinstance(data, dict):
         raise ValidationError("archive: expected object")
     root = cast("dict[str, object]", data)
     if type(root.get("version")) is not int or root["version"] != 6:
         raise ValidationError("archive/version: expected integer 6")
-    validate_archive_v5({**root, "version": 5}, max_reference_version=6)
+    validate_archive_v5({**root, "version": 5}, max_reference_version=max_reference_version)

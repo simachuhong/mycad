@@ -189,3 +189,111 @@ def test_constraint_state_digest_changes_without_changing_create_v1_mapping() ->
         constrained.to_mapping(version=2)
     with pytest.raises(ValueError, match="already exists"):
         constrained.with_constraint(constraint, constrained.entities)
+
+
+def test_tangent_endpoints_roundtrip_and_preserve_legacy_mapping() -> None:
+    refs = (
+        SketchGeometryReference(FIRST_ENTITY_ID, "geometry"),
+        SketchGeometryReference(SECOND_ENTITY_ID, "segment", 0),
+    )
+    legacy = SketchConstraint(CONSTRAINT_ID, "tangent", refs, source="inferred")
+    assert "first_endpoint" not in legacy.to_mapping()
+    assert SketchConstraint.from_mapping(legacy.to_mapping()) == legacy
+    linked = SketchConstraint(
+        CONSTRAINT_ID,
+        "tangent",
+        refs,
+        source="inferred",
+        first_endpoint="end",
+        second_endpoint="start",
+    )
+    assert SketchConstraint.from_mapping(linked.to_mapping()) == linked
+    for invalid in (None, "middle", True, 1):
+        with pytest.raises(ValueError):
+            SketchConstraint.from_mapping({**legacy.to_mapping(), "first_endpoint": invalid})
+    with pytest.raises(ValueError):
+        SketchConstraint(CONSTRAINT_ID, "coincident", refs, first_endpoint="start")
+    with pytest.raises(ValueError):
+        SketchConstraint(
+            CONSTRAINT_ID,
+            "tangent",
+            (SketchGeometryReference(FIRST_ENTITY_ID, "start"), refs[1]),
+            first_endpoint="start",
+        )
+
+
+def test_local_endpoint_relations_require_new_create_and_revision_versions() -> None:
+    from uuid import uuid4
+
+    from mycad.builtin_commands import BUILTIN_COMMAND_SPECS, COMMAND_SCHEMA_DEFS
+    from mycad.commands.validation import validate_params
+    from mycad.core.exceptions import ValidationError
+
+    line = LineEntity(FIRST_ENTITY_ID, (0, 0), (10, 0))
+    other = LineEntity(SECOND_ENTITY_ID, (10, 0), (10, 10))
+    relation = SketchConstraint(
+        CONSTRAINT_ID,
+        "tangent",
+        (
+            SketchGeometryReference(line.entity_id, "geometry"),
+            SketchGeometryReference(other.entity_id, "geometry"),
+        ),
+        source="inferred",
+        second_endpoint="start",
+    )
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line, other), (relation,))
+    state = sketch.to_state_mapping()
+    revision: dict[str, object] = {
+        "sketch_id": sketch.sketch_id,
+        "base_state_sha256": "0" * 64,
+        "entities": state["entities"],
+        "constraints": state["constraints"],
+    }
+    cases: tuple[tuple[str, int, int, dict[str, object]], ...] = (
+        ("sketch.create", 12, 13, state),
+        ("sketch.revise", 3, 4, revision),
+        ("drawing.sketch.revise", 7, 8, {"revisions": [revision]}),
+    )
+    for command, old_version, new_version, params in cases:
+        old = next(s for s in BUILTIN_COMMAND_SPECS if s.id == command and s.version == old_version)
+        new = next(s for s in BUILTIN_COMMAND_SPECS if s.id == command and s.version == new_version)
+        with pytest.raises(ValidationError):
+            validate_params(old, params, defs=COMMAND_SCHEMA_DEFS)
+        assert validate_params(new, params, defs=COMMAND_SCHEMA_DEFS) == params
+
+
+def test_local_endpoint_constraint_add_schema_requires_new_version() -> None:
+    from mycad.builtin_commands import BUILTIN_COMMAND_SPECS, COMMAND_SCHEMA_DEFS
+    from mycad.commands.validation import validate_params
+    from mycad.core.exceptions import ValidationError
+
+    relation = SketchConstraint(
+        CONSTRAINT_ID,
+        "tangent",
+        (
+            SketchGeometryReference(FIRST_ENTITY_ID, "geometry"),
+            SketchGeometryReference(SECOND_ENTITY_ID, "geometry"),
+        ),
+        second_endpoint="start",
+    )
+    params: dict[str, object] = {
+        "sketch_id": FIRST_ENTITY_ID,
+        "base_state_sha256": "0" * 64,
+        "constraint": relation.to_mapping(),
+        "solver_id": "planegcs",
+        "solver_version": "1",
+        "degrees_of_freedom": 0,
+        "solution_entities": [],
+    }
+    for command, old_version, new_version in (
+        ("sketch.constraint.add", 4, 5),
+        ("sketch.constraint.update", 2, 3),
+    ):
+        old = next(s for s in BUILTIN_COMMAND_SPECS if s.id == command and s.version == old_version)
+        new = next(s for s in BUILTIN_COMMAND_SPECS if s.id == command and s.version == new_version)
+        with pytest.raises(ValidationError):
+            validate_params(old, params, defs=COMMAND_SCHEMA_DEFS)
+        assert validate_params(new, params, defs=COMMAND_SCHEMA_DEFS) == {
+            **params,
+            "rebuild_consumers": True,
+        }

@@ -1,0 +1,491 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "Dim2",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-17T00:21:49.714858+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6a289d8b73e24fcba4e2d6f10275132c"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "Dim2",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-17T00:21:53.478193+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6efcdc33ff0044dfb297d8016d960f2e"
+    },
+    {
+      "id": "drawing.dimension_styles.set",
+      "version": 2,
+      "params": {
+        "styles": [
+          {
+            "name": "标准",
+            "precision": 2,
+            "scale": 0.8,
+            "arrow_first": "open",
+            "arrow_second": "open",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5
+          }
+        ],
+        "current": "标准"
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-17T00:24:01.147295+00:00",
+      "confirmed_by": "local",
+      "instance_id": "cd8f0044725c414999261e5bfe66e5fb"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "Dim2",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false,
+            "frozen": true
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-17T00:38:27.058526+00:00",
+      "confirmed_by": "local",
+      "instance_id": "bde3e56d4cd94278b7c3ad9298fd8ea4"
+    },
+    {
+      "id": "sketch.create",
+      "version": 32,
+      "params": {
+        "sketch_id": "39b91626b346496d9e92d26b79c2b4d6",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "Dim2",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false,
+            "frozen": true
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "3ed14b5a578440609d875898145f4ce8",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -60.74453125,
+              35.084375
+            ],
+            "end_mm": [
+              -116.76171875,
+              -18.82421875
+            ]
+          },
+          {
+            "entity_id": "6ca7ff7b51744287821e9f6621fc2412",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -116.76171875,
+              -18.82421875
+            ],
+            "end_mm": [
+              -48.36013908967142,
+              -1.8951601041467798
+            ]
+          },
+          {
+            "entity_id": "ff16a537130f42e1aea662c5a83c433c",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              41.92421875,
+              34.06796875
+            ],
+            "end_mm": [
+              97.01015625,
+              -14.26953125
+            ]
+          },
+          {
+            "entity_id": "624741f87dc94fb6ad7be105b0fd81b0",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              86.93366356714307,
+              42.89765625
+            ],
+            "end_mm": [
+              43.87890625,
+              -21.24296875
+            ]
+          },
+          {
+            "entity_id": "04da798f27974f31a5530a0552d7e8d3",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              128.50531249999995,
+              -7.893671874999997
+            ],
+            "end_mm": [
+              190.55321249999994,
+              -7.893671874999997
+            ]
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "518f88123830412abe1505b2716b66ab",
+            "kind": "coincident",
+            "references": [
+              {
+                "entity_id": "6ca7ff7b51744287821e9f6621fc2412",
+                "kind": "start"
+              },
+              {
+                "entity_id": "3ed14b5a578440609d875898145f4ce8",
+                "kind": "end"
+              }
+            ],
+            "driving": true,
+            "source": "inferred"
+          },
+          {
+            "constraint_id": "5d5eb8911da2458eb24bdb67703173cf",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "3ed14b5a578440609d875898145f4ce8",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "6ca7ff7b51744287821e9f6621fc2412",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "deg",
+            "value": 150.0,
+            "scale": 1.3,
+            "position_mm": [
+              -61.3,
+              1.07734375
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "d5ea57e1b3f14007a1aa78432628ffc8",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "ff16a537130f42e1aea662c5a83c433c",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "624741f87dc94fb6ad7be105b0fd81b0",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "deg",
+            "value": -82.605,
+            "scale": 1.3,
+            "position_mm": [
+              68.77421875,
+              35.7265625
+            ],
+            "layer_name": "DIM"
+          },
+          {
+            "constraint_id": "6957345781004512a3c66a317cfb20cd",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "ff16a537130f42e1aea662c5a83c433c",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "624741f87dc94fb6ad7be105b0fd81b0",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "deg",
+            "value": -82.60500000000002,
+            "scale": 1.3,
+            "position_mm": [
+              54.11171875,
+              5.90234375
+            ],
+            "layer_name": "Dim2"
+          },
+          {
+            "constraint_id": "97105ee1c6d842faabb63dbdda04d6d1",
+            "kind": "horizontal",
+            "references": [
+              {
+                "entity_id": "04da798f27974f31a5530a0552d7e8d3",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "inferred"
+          },
+          {
+            "constraint_id": "e7ec817917d74f938ecb9c4e8c118f78",
+            "kind": "distance",
+            "references": [
+              {
+                "entity_id": "04da798f27974f31a5530a0552d7e8d3",
+                "kind": "start"
+              },
+              {
+                "entity_id": "04da798f27974f31a5530a0552d7e8d3",
+                "kind": "end"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 62.0479,
+            "scale": 0.8,
+            "position_mm": [
+              141.00078124999996,
+              16.095507812499996
+            ],
+            "axis": "horizontal",
+            "layer_name": "Dim2",
+            "style_name": "标准"
+          }
+        ]
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-17T00:39:29.476918+00:00",
+      "confirmed_by": "local",
+      "instance_id": "e7e2c1a209e34d3c864c5a1257f97055"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "6801a0b6bae04b38b90e0f8fc36f05d2",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

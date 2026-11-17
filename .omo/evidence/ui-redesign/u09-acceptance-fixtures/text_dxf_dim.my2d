@@ -1,0 +1,223 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 6,
+      "params": {
+        "sketch_id": "7d6816256c1f47b793f742511a901671",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "8f3fdec9c7444ae99dcb4994a02fb6db",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -88.76953125,
+              8.940625
+            ],
+            "radius_mm": 20.66282848690134
+          },
+          {
+            "entity_id": "cf40f4c87ace49c69ea42bbad63d881f",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "arc",
+            "center_mm": [
+              -4.964971004319558,
+              0.44217334412215514
+            ],
+            "radius_mm": 32.371909062801386,
+            "start_angle_deg": 151.2377816628245,
+            "sweep_angle_deg": -97.09036195562432
+          },
+          {
+            "entity_id": "85632a317aaa47188f1d2a2b80c9c97b",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -28.1390625,
+              -20.88203125
+            ],
+            "radius_mm": 17.860066491971867
+          },
+          {
+            "entity_id": "55b91a4580bc4fb88ed0dfde3cea1833",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -65.81387239625319,
+              -24.622797756708692
+            ],
+            "radius_mm": 20.0
+          },
+          {
+            "entity_id": "580c13e1adfc4ec6adebde3854f6ad74",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              95.07119731103508,
+              30.19078565893552
+            ],
+            "end_mm": [
+              171.2843973110351,
+              47.29203587109371
+            ]
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "84d3df1992fa44d998ab774b25b3e0c2",
+            "kind": "tangent",
+            "references": [
+              {
+                "entity_id": "8f3fdec9c7444ae99dcb4994a02fb6db",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "55b91a4580bc4fb88ed0dfde3cea1833",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "inferred"
+          },
+          {
+            "constraint_id": "6e8a44ed9a734ff6be03803dea51e019",
+            "kind": "tangent",
+            "references": [
+              {
+                "entity_id": "85632a317aaa47188f1d2a2b80c9c97b",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "55b91a4580bc4fb88ed0dfde3cea1833",
+                "kind": "geometry"
+              }
+            ],
+            "driving": true,
+            "source": "inferred"
+          },
+          {
+            "constraint_id": "37e8bd3ce0b740938c0a8f348c17c6b7",
+            "kind": "distance",
+            "references": [
+              {
+                "entity_id": "580c13e1adfc4ec6adebde3854f6ad74",
+                "kind": "start"
+              },
+              {
+                "entity_id": "580c13e1adfc4ec6adebde3854f6ad74",
+                "kind": "end"
+              }
+            ],
+            "driving": true,
+            "source": "user",
+            "unit": "mm",
+            "value": 76.2132,
+            "scale": 2.0,
+            "position_mm": [
+              144.9277135961913,
+              9.423522697998038
+            ],
+            "axis": "horizontal",
+            "layer_name": "DIM"
+          }
+        ]
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-16T07:43:50.522745+00:00",
+      "confirmed_by": "local",
+      "instance_id": "52c7d8f4b515433a8c3cc8bb140205a3"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "4b6bc8216c9b46068690851d7aa3553d",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

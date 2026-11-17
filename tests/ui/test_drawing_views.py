@@ -41,7 +41,12 @@ def test_canvas_group_enter_and_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
     from PySide6.QtCore import QPointF, Qt
 
     from mycad.app import build_app, new_document
-    from mycad.core.drawing_projection import LineCurve, ProjectedCurve, ProjectionResult
+    from mycad.core.drawing_projection import (
+        LineCurve,
+        ProjectedCurve,
+        ProjectionResult,
+        projected_basis,
+    )
     from mycad.ui.main_window import MainWindow
 
     services = build_app(discoverers=[])
@@ -59,13 +64,22 @@ def test_canvas_group_enter_and_undo(qtbot: QtBot, monkeypatch: pytest.MonkeyPat
     bench.begin_placement()
     placement = bench.placement
     assert placement is not None
-    for identity in (
-        placement.base_id,
-        *(placement.projected_id(d) for d in ("top", "bottom", "left", "right")),
-    ):
-        bench.projections[identity] = ProjectionResult(
-            identity, "fixture", 1, (ProjectedCurve("line", LineCurve((0, 0), (20, 0))),)
+    bases = {placement.base_id: placement.basis}
+    for direction in ("top", "bottom", "left", "right"):
+        bases[placement.projected_id(direction)] = projected_basis(placement.basis, direction)
+    bench.updates.sync(bench.updates.session_id, services.kernel.drawing_source_fingerprint, bases)
+    batch = bench.updates.begin()
+    assert batch is not None
+    results = tuple(
+        ProjectionResult(
+            request.view_id,
+            request.source_fingerprint,
+            request.generation,
+            (ProjectedCurve("line", LineCurve((0, 0), (20, 0))),),
         )
+        for request in batch.requests
+    )
+    assert bench.updates.finish(batch, results) == len(results)
     bench.canvas.placing = True
     for point in (QPointF(90, -140), QPointF(90, -70)):
         QTest.mouseClick(

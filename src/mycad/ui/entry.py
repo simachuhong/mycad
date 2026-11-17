@@ -17,11 +17,14 @@ from PySide6.QtWidgets import QApplication
 
 from mycad.app import build_app
 from mycad.ui.document_session import DocumentSession
+from mycad.ui.input_method import prepare_input_method
 from mycad.ui.main_window import MainWindow
 
 
 def run_gui(path: Path | None = None) -> int:
     """Compose services and open the start page without creating a document."""
+    if QApplication.instance() is None:
+        prepare_input_method()
     qapp = QApplication.instance() or QApplication([])
     services = build_app()
     window = MainWindow(services=services, document_session=DocumentSession())

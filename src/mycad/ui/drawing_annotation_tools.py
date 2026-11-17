@@ -48,11 +48,14 @@ class DrawingAnnotationTools(QWidget):
         message: Callable[[str], None],
         clean: Callable[[UUID], bool],
         before_begin: Callable[[], bool] | None = None,
+        execute_with_success: Callable[[str, dict[str, object], Callable[[], None]], None]
+        | None = None,
     ) -> None:
         super().__init__()
         self.canvas, self.toolbar = canvas, toolbar
         self._state, self._projections = state, projections
         self._execute, self._render, self._message, self._clean = execute, render, message, clean
+        self._execute_with_success = execute_with_success
         self.before_begin = before_begin
         self.selected: UUID | None = None
         self.draft: DrawingAnnotation | None = None
@@ -60,6 +63,7 @@ class DrawingAnnotationTools(QWidget):
         self._references: list[DrawingGeometryReference] = []
         self._view: UUID | None = None
         self._fingerprint = ""
+        self._generation: int = -1
         self._reattach: UUID | None = None
         self._dragging = False
         self.tool_actions: dict[str, QAction] = {}
@@ -123,12 +127,12 @@ class DrawingAnnotationTools(QWidget):
     def pending(self) -> bool:
         return bool(self.draft or self._references)
 
-    def begin(self, kind: AnnotationKind) -> None:
+    def begin(self, kind: AnnotationKind) -> bool:
         if self.before_begin is not None and not self.before_begin():
-            return
+            return False
         if self.canvas.placing:
             self._message("请先完成或取消视图放置。")
-            return
+            return False
         self.cancel()
         self._kind = kind
         self.canvas.annotation_mode = True
@@ -136,6 +140,7 @@ class DrawingAnnotationTools(QWidget):
         self._message(
             "在图中选几何：直线可直接标长度；两圆心可标中心距。选好后单击放置，Esc 取消。"
         )
+        return True
 
     def choose(self, identity: object, curve_id: str, point: object) -> None:
         if self._kind is None or not isinstance(identity, UUID):
@@ -153,6 +158,11 @@ class DrawingAnnotationTools(QWidget):
         result = self._projections.get(identity)
         if result is None:
             return
+        if self._references and (
+            result.source_fingerprint != self._fingerprint or result.generation != self._generation
+        ):
+            self._message("视图投影已变化；请按 Esc 取消后重新选择几何。")
+            return
         curve = next((c for c in result.curves if c.curve_id == curve_id), None)
         if curve is None:
             return
@@ -166,7 +176,11 @@ class DrawingAnnotationTools(QWidget):
             resolution = resolve_reference(reference, result)
             if resolution.status != "resolved":
                 raise ValueError(resolution.message)
-            self._view, self._fingerprint = identity, result.source_fingerprint
+            self._view, self._fingerprint, self._generation = (
+                identity,
+                result.source_fingerprint,
+                result.generation,
+            )
             if (
                 self._kind in ("horizontal", "vertical", "aligned")
                 and not self._references
@@ -226,8 +240,9 @@ class DrawingAnnotationTools(QWidget):
             result is None
             or not self._clean(draft.view_id)
             or result.source_fingerprint != self._fingerprint
+            or result.generation != self._generation
         ):
-            self._message("模型已变化，标注草稿已保留；Esc 取消后请重新选择几何。")
+            self._message("模型或视图投影已变化，标注草稿已保留；Esc 取消后请重新选择几何。")
             return
         if point is not None:
             draft = replace(draft, position_mm=point)
@@ -247,8 +262,16 @@ class DrawingAnnotationTools(QWidget):
             if self._reattach is not None
             else "drawing.annotation.create"
         )
-        self._execute(command, drawing_object_mapping(draft))
-        self.cancel()
+        self._submit_with_success(command, drawing_object_mapping(draft), self.cancel)
+
+    def _submit_with_success(
+        self, command: str, params: dict[str, object], success: Callable[[], None]
+    ) -> None:
+        if self._execute_with_success is not None:
+            self._execute_with_success(command, params, success)
+        else:
+            self._execute(command, params)
+            success()
 
     def preview(self, state: DrawingState) -> DrawingState:
         if self.draft is None or self.draft.view_id not in {v.view_id for v in state.views}:
@@ -282,12 +305,11 @@ class DrawingAnnotationTools(QWidget):
         self._dragging = True
         self.draft = replace(annotation, position_mm=cast("Point2", point))
         if finished:
-            self._execute(
+            self._submit_with_success(
                 "drawing.annotation.update",
                 {"annotation_id": str(identity), "position_mm": list(self.draft.position_mm)},
+                self.cancel_drag,
             )
-            self.draft = None
-            self._dragging = False
         self._render()
 
     def cancel_drag(self) -> None:
@@ -312,12 +334,14 @@ class DrawingAnnotationTools(QWidget):
         annotation = next(
             (a for a in self._state().annotations if a.annotation_id == self.selected), None
         )
-        if annotation is not None:
-            self.begin(annotation.kind)
+        if annotation is not None and self.begin(annotation.kind):
             self._reattach = annotation.annotation_id
             self._message("选择新的唯一几何，再单击放置；旧标注保留到确认成功。")
 
     def delete_selected(self) -> None:
+        if self.pending or self._kind is not None:
+            self._message("请先完成或取消当前标注，再删除已选标注。")
+            return
         if self.selected is not None:
             self._execute("drawing.annotation.delete", {"annotation_id": str(self.selected)})
             self.select(None)
@@ -327,6 +351,8 @@ class DrawingAnnotationTools(QWidget):
         self._kind = None
         self._references.clear()
         self._view = None
+        self._fingerprint = ""
+        self._generation = -1
         self._reattach = None
         self._dragging = False
         self.canvas.annotation_mode = False

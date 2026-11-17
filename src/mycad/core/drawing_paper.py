@@ -3,8 +3,9 @@
 """Physical sheet decorations and output gate shared by every renderer."""
 
 from dataclasses import dataclass
+from math import hypot
 
-from mycad.core.drawing_projection import CurveGeometry, DrawingScene, LineCurve, Point2
+from mycad.core.drawing_projection import ArcCurve, CurveGeometry, DrawingScene, LineCurve, Point2
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +47,43 @@ def sheet_frame(scene: DrawingScene) -> tuple[CurveGeometry, ...]:
     return lines
 
 
+def section_marker_lines(scene: DrawingScene) -> tuple[LineCurve, ...]:
+    lines: list[LineCurve] = []
+    for marker in scene.section_markers:
+        x0, y0 = marker.start_mm
+        x1, y1 = marker.end_mm
+        dx, dy = x1 - x0, y1 - y0
+        length = hypot(dx, dy)
+        if length < 1e-9:
+            continue
+        ux, uy = dx / length, dy / length
+        side = 1 if marker.observer_side == "left" else -1
+        nx, ny = -side * uy, side * ux
+        lines.append(LineCurve((x0, y0), (x1, y1)))
+        for x, y in (marker.start_mm, marker.end_mm):
+            tip = (x + 4 * nx, y + 4 * ny)
+            lines.append(LineCurve((x, y), tip))
+            for sign in (-1, 1):
+                lines.append(
+                    LineCurve(
+                        tip,
+                        (tip[0] - 1.5 * nx + sign * 0.8 * ux, tip[1] - 1.5 * ny + sign * 0.8 * uy),
+                    )
+                )
+    return tuple(lines)
+
+
+def detail_marker_curves(scene: DrawingScene) -> tuple[ArcCurve, ...]:
+    return tuple(
+        curve
+        for marker in scene.detail_markers
+        for curve in (
+            ArcCurve(marker.source_center_mm, marker.source_radius_mm),
+            ArcCurve(marker.view_center_mm, marker.view_radius_mm),
+        )
+    )
+
+
 def paper_texts(scene: DrawingScene) -> tuple[PaperText, ...]:
     width = scene.size_mm[0]
     margin = scene.margin_mm
@@ -84,7 +122,47 @@ def paper_texts(scene: DrawingScene) -> tuple[PaperText, ...]:
     notes = tuple(
         PaperText(note.position_mm, note.text, note.height_mm, note.layer) for note in scene.notes
     )
-    return (*title, *labels, *notes)
+    section_labels: list[PaperText] = []
+    for marker in scene.section_markers:
+        dx = marker.end_mm[0] - marker.start_mm[0]
+        dy = marker.end_mm[1] - marker.start_mm[1]
+        length = hypot(dx, dy)
+        if length < 1e-9:
+            continue
+        side = 1 if marker.observer_side == "left" else -1
+        nx, ny = -side * dy / length, side * dx / length
+        for x, y in (marker.start_mm, marker.end_mm):
+            section_labels.append(PaperText((x + 5 * nx, y + 5 * ny), marker.label, 2.5, "SECTION"))
+        section_labels.append(
+            PaperText(
+                marker.view_label_mm,
+                f"SECTION {marker.label}-{marker.label}",
+                2.5,
+                "SECTION",
+            )
+        )
+    detail_labels: list[PaperText] = []
+    for marker in scene.detail_markers:
+        ratio = (
+            f"{marker.view_scale:g}:1" if marker.view_scale >= 1 else f"1:{1 / marker.view_scale:g}"
+        )
+        detail_labels.append(
+            PaperText(
+                (marker.source_center_mm[0] + marker.source_radius_mm, marker.source_center_mm[1]),
+                marker.label,
+                2.5,
+                "DETAIL",
+            )
+        )
+        detail_labels.append(
+            PaperText(
+                (marker.view_center_mm[0], marker.view_center_mm[1] - marker.view_radius_mm - 5),
+                f"DETAIL {marker.label} {ratio}",
+                2.5,
+                "DETAIL",
+            )
+        )
+    return (*title, *labels, *notes, *section_labels, *detail_labels)
 
 
 def _fit_height(value: str, height: float, width: float) -> float:

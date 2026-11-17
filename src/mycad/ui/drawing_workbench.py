@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from concurrent.futures import Future
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
@@ -38,13 +39,17 @@ from PySide6.QtWidgets import (
 from mycad import app as mycad_app
 from mycad.core.drawing import DrawingSheet, DrawingState, DrawingView, SourceBinding
 from mycad.core.drawing_codec import apply_drawing_command, drawing_object_mapping
-from mycad.core.drawing_paper import validate_drawing_output
+from mycad.core.drawing_paper import section_marker_lines, validate_drawing_output
 from mycad.core.drawing_projection import (
+    ArcCurve,
     DrawingScene,
     DrawingSourceSnapshot,
+    LineCurve,
     Point2,
     ProjectionResult,
+    SectionMarker,
     ViewBasis,
+    ViewDirection,
     build_drawing_scene,
     projected_basis,
 )
@@ -57,8 +62,17 @@ from mycad.ui.drawing_annotation_tools import DrawingAnnotationTools
 from mycad.ui.drawing_canvas import DrawingCanvas
 from mycad.ui.drawing_note_tools import DrawingNoteTools
 from mycad.ui.drawing_pdf import export_drawing_pdf
+from mycad.ui.drawing_render import curve_path, paper_pen
 from mycad.ui.drawing_templates import DrawingTemplatePanel
-from mycad.ui.drawing_tools import ViewPlacement, move_view, scale_view, set_view_alignment
+from mycad.ui.drawing_tools import (
+    DetailPlacement,
+    SectionPlacement,
+    ViewPlacement,
+    isometric_basis,
+    move_view,
+    scale_view,
+    set_view_alignment,
+)
 from mycad.ui.drawing_updates import ProjectionBatch, ProjectionUpdates
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
 
@@ -94,6 +108,10 @@ class DrawingWorkbench(QMainWindow):
         self.projections = self.updates.results
         self._view_items: dict[UUID, QTreeWidgetItem] = {}
         self.placement: ViewPlacement | None = None
+        self.section_placement: SectionPlacement | None = None
+        self._section_cursor: Point2 | None = None
+        self.detail_placement: DetailPlacement | None = None
+        self._detail_cursor: Point2 | None = None
         self._ghost: DrawingView | None = None
         self._preview_params: dict[str, object] | None = None
         self._pending_delete: tuple[UUID, tuple[UUID, ...], tuple[UUID, ...]] | None = None
@@ -110,7 +128,20 @@ class DrawingWorkbench(QMainWindow):
         self.canvas = DrawingCanvas()
         self.canvas.view_selection_guard = self._allow_canvas_view_selection
         self.pages = QStackedWidget()
-        self.pages.addWidget(self.canvas)
+        self.drawing_page = QWidget()
+        drawing_layout = QVBoxLayout(self.drawing_page)
+        drawing_layout.setContentsMargins(0, 0, 0, 0)
+        drawing_layout.setSpacing(0)
+        self.drawing_status = QLabel()
+        self.drawing_status.setWordWrap(True)
+        self.drawing_status.setMargin(8)
+        self.drawing_status.setStyleSheet(
+            "QLabel { background: #fff2cf; color: #513800; border-bottom: 1px solid #c99a36; }"
+        )
+        self.drawing_status.hide()
+        drawing_layout.addWidget(self.drawing_status)
+        drawing_layout.addWidget(self.canvas, 1)
+        self.pages.addWidget(self.drawing_page)
         self.start_page = QWidget()
         outer_layout = QVBoxLayout(self.start_page)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -184,6 +215,8 @@ class DrawingWorkbench(QMainWindow):
         self.sketch_view_action = QAction("放置草图平面视图", self)
         self.sketch_view_action.triggered.connect(self.begin_sketch_placement)
         self.base_action = QAction("从模型生成投影", self)
+        self.section_action = QAction("创建剖视（开发中）", self)
+        self.detail_action = QAction("创建详图（开发中）", self)
         self.update_action = QAction("更新视图", self)
         self.dxf_action = QAction("导出 DXF", self)
         self.pdf_action = QAction("导出 PDF", self)
@@ -197,6 +230,8 @@ class DrawingWorkbench(QMainWindow):
             self.sheet_action,
             self.sketch_view_action,
             self.base_action,
+            self.section_action,
+            self.detail_action,
             self.update_action,
             self.delete_action,
             self.confirm_delete_action,
@@ -211,6 +246,8 @@ class DrawingWorkbench(QMainWindow):
         self.cancel_update_action.triggered.connect(self.cancel_update)
         self.sheet_action.triggered.connect(self.create_sheet)
         self.base_action.triggered.connect(self.begin_placement)
+        self.section_action.triggered.connect(self.begin_section)
+        self.detail_action.triggered.connect(self.begin_detail)
         self.update_action.triggered.connect(self.update_requested)
         self.settings_tabs = QTabWidget()
         settings = QWidget()
@@ -232,7 +269,17 @@ class DrawingWorkbench(QMainWindow):
         self.scale.setDecimals(3)
         self.scale.setValue(1)
         self.direction = QComboBox()
-        self.direction.addItems(["前视", "后视", "俯视", "仰视", "左视", "右视"])
+        self.direction.addItems(["前视", "后视", "俯视", "仰视", "左视", "右视", "等轴测"])
+        self.include_isometric = QCheckBox("同时放置等轴测视图")
+        self.include_isometric.setToolTip(
+            "放置基准视图后，沿对角方向单击放置等轴测视图；水平或垂直方向放置正投影视图。"
+        )
+        self.detail_scale_factor = QDoubleSpinBox()
+        self.detail_scale_factor.setRange(1, 100)
+        self.detail_scale_factor.setDecimals(2)
+        self.detail_scale_factor.setValue(2)
+        self.detail_scale_factor.setSuffix(" 倍")
+        self.detail_scale_factor.setToolTip("创建详图时相对来源视图的放大倍数。")
         self.title = QLineEdit()
         self.title.setPlaceholderText("图纸名称")
         self.hint = QLabel("先创建图纸，再在画布放置基准和投影视图。Enter 完成，Esc 取消。")
@@ -243,6 +290,8 @@ class DrawingWorkbench(QMainWindow):
             ("投影法", self.angle),
             ("比例", self.scale),
             ("基准方向", self.direction),
+            ("附加视图", self.include_isometric),
+            ("详图放大", self.detail_scale_factor),
             ("标题", self.title),
         ]:
             form.addRow(name, widget)
@@ -305,6 +354,7 @@ class DrawingWorkbench(QMainWindow):
             self._set_message,
             self._annotation_source_clean,
             self._prepare_dimension,
+            execute_with_success=self._execute,
         )
         self.annotation_page = QScrollArea()
         self.annotation_page.setWidgetResizable(True)
@@ -438,6 +488,11 @@ class DrawingWorkbench(QMainWindow):
         self._start_after_sheet = None
         self._ghost = None
         self.placement = None
+        self.section_placement = None
+        self._section_cursor = None
+        self.detail_placement = None
+        self._detail_cursor = None
+        self.settings_tabs.setEnabled(self.unit is None or not self.unit.is_busy)
         self._placement_stale = False
         self.canvas.placing = False
         self.updates.sync(session_id, "", {})
@@ -455,6 +510,8 @@ class DrawingWorkbench(QMainWindow):
             self.sheet_action,
             self.sketch_view_action,
             self.base_action,
+            self.section_action,
+            self.detail_action,
             self.update_action,
             self.cancel_update_action,
             self.dxf_action,
@@ -473,7 +530,12 @@ class DrawingWorkbench(QMainWindow):
 
     @property
     def has_pending_view_edit(self) -> bool:
-        return self._preview_params is not None or self._pending_delete is not None
+        return (
+            self._preview_params is not None
+            or self._pending_delete is not None
+            or self.section_placement is not None
+            or self.detail_placement is not None
+        )
 
     def _view_edit_finished(self) -> bool:
         if self.has_pending_view_edit:
@@ -482,6 +544,12 @@ class DrawingWorkbench(QMainWindow):
         return True
 
     def _allow_canvas_view_selection(self, identity: UUID | None) -> bool:
+        if (
+            (self.section_placement is not None or self.detail_placement is not None)
+            and self.canvas.placing
+            and identity is None
+        ):
+            return True
         if self.has_pending_view_edit and identity != self.canvas.selected_view:
             self._set_message("请先完成或取消当前视图操作，再选择其他视图。")
             return False
@@ -533,7 +601,7 @@ class DrawingWorkbench(QMainWindow):
             and not any(note.sheet_id == self.sheet_id for note in self.state.notes)
             and not any(view.sheet_id == self.sheet_id for view in self.state.views)
         )
-        self.pages.setCurrentWidget(self.start_page if empty else self.canvas)
+        self.pages.setCurrentWidget(self.start_page if empty else self.drawing_page)
 
     def _reconcile_placement(self) -> None:
         if self.placement is None or self.placement.sheet.sheet_id in {
@@ -772,7 +840,7 @@ class DrawingWorkbench(QMainWindow):
 
     def _sheet_applied(self) -> None:
         self._load_sheet_settings()
-        self.pages.setCurrentWidget(self.canvas)
+        self.pages.setCurrentWidget(self.drawing_page)
         self._set_message(
             "图纸模板已应用；已有视图位置与比例保持不变，请检查是否进入图框或标题栏。"
         )
@@ -838,6 +906,111 @@ class DrawingWorkbench(QMainWindow):
             return
         self._begin_source_placement(SourceBinding("sketch", identity))
 
+    def begin_section(self) -> None:
+        if self.loaded is None or self.services is None or self.unit is None or self.unit.is_busy:
+            return
+        if not self._view_edit_finished() or not self._annotation_finished():
+            return
+        if self.placement is not None or self.notes.pending:
+            self._set_message("请先完成或取消当前视图或文字操作。")
+            return
+        identity = self.canvas.selected_view
+        if identity is None or not self._annotation_source_clean(identity):
+            self._set_message("请先选择一个已更新的实体正投影视图。")
+            return
+        self.annotations.cancel()
+        self.canvas.cancel_drag()
+        try:
+            self.section_placement = SectionPlacement(
+                self.state, identity, self.services.kernel.drawing_source_fingerprint
+            )
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        self._section_cursor = None
+        self.canvas.placing = True
+        self.settings_tabs.setEnabled(False)
+        self._set_message("依次单击剖切线起点、终点和剖视放置位置；Enter 完成，Esc 取消。")
+        self.canvas.setFocus()
+
+    def _cancel_section(self) -> None:
+        self.section_placement = None
+        self._section_cursor = None
+        self.canvas.placing = False
+        self.settings_tabs.setEnabled(self.unit is None or not self.unit.is_busy)
+        self._render()
+        self._set_message("剖视放置已结束。")
+
+    def begin_detail(self) -> None:
+        if self.loaded is None or self.services is None or self.unit is None or self.unit.is_busy:
+            return
+        if not self._view_edit_finished() or not self._annotation_finished():
+            return
+        if self.placement is not None or self.notes.pending:
+            self._set_message("请先完成或取消当前视图或文字操作。")
+            return
+        identity = self.canvas.selected_view
+        if identity is None or not self._annotation_source_clean(identity):
+            self._set_message("请先选择一个已更新的实体投影视图。")
+            return
+        self.annotations.cancel()
+        self.canvas.cancel_drag()
+        try:
+            self.detail_placement = DetailPlacement(
+                self.state,
+                identity,
+                self.services.kernel.drawing_source_fingerprint,
+                scale_factor=self.detail_scale_factor.value(),
+            )
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        self._detail_cursor = None
+        self.canvas.placing = True
+        self.settings_tabs.setEnabled(False)
+        self._set_message("依次单击详图圆心、半径和放置位置；Enter 完成，Esc 取消。")
+        self.canvas.setFocus()
+
+    def _cancel_detail(self) -> None:
+        self.detail_placement = None
+        self._detail_cursor = None
+        self.canvas.placing = False
+        self.settings_tabs.setEnabled(self.unit is None or not self.unit.is_busy)
+        self._render()
+        self._set_message("详图放置已结束。")
+
+    def _commit_detail(self) -> None:
+        placement = self.detail_placement
+        if placement is None or self.services is None:
+            return
+        if not placement.matches(
+            self.services.kernel.drawing_state, self.services.kernel.drawing_source_fingerprint
+        ):
+            self._set_message("来源或父视图已变化；请取消草稿并重新选择详图区域。")
+            return
+        try:
+            view = placement.make_view()
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        self._execute("drawing.view.create", drawing_object_mapping(view), self._cancel_detail)
+
+    def _commit_section(self) -> None:
+        placement = self.section_placement
+        if placement is None or self.services is None:
+            return
+        if not placement.matches(
+            self.services.kernel.drawing_state, self.services.kernel.drawing_source_fingerprint
+        ):
+            self._set_message("来源或父视图已变化；请取消草稿并重新选择剖切线。")
+            return
+        try:
+            view = placement.make_view()
+        except ValueError as error:
+            self._set_message(str(error))
+            return
+        self._execute("drawing.view.create", drawing_object_mapping(view), self._cancel_section)
+
     def _begin_source_placement(self, source: SourceBinding) -> None:
         if self.loaded is None or self.services is None:
             return
@@ -862,11 +1035,27 @@ class DrawingWorkbench(QMainWindow):
             self.create_sheet()
             return
         directions = ("front", "back", "top", "bottom", "left", "right")
-        basis = projected_basis(ViewBasis(), directions[self.direction.currentIndex()])
+        isometric = source.kind == "current_part" and self.direction.currentIndex() == len(
+            directions
+        )
+        basis = (
+            isometric_basis()
+            if isometric
+            else projected_basis(
+                ViewBasis(), directions[self.direction.currentIndex() % len(directions)]
+            )
+        )
         self._placement_stale = False
         self._placement_source_fingerprint = self.services.kernel.drawing_source_fingerprint
         self.placement = ViewPlacement(
-            self.state.sheet(self.sheet_id), scale=self.scale.value(), basis=basis, source=source
+            self.state.sheet(self.sheet_id),
+            scale=self.scale.value(),
+            basis=basis,
+            source=source,
+            allow_projected=not isometric,
+            include_isometric=(
+                source.kind == "current_part" and self.include_isometric.isChecked()
+            ),
         )
         self.canvas.placing = False
         self._set_message("正在准备投影；完成后在画布单击放置基准视图。")
@@ -879,11 +1068,13 @@ class DrawingWorkbench(QMainWindow):
         if self.placement is not None and not self._placement_stale:
             placement = self.placement
             bases[placement.base_id] = placement.basis
-            if placement.source.kind == "current_part":
+            if placement.source.kind == "current_part" and placement.allow_projected:
                 for direction in ("top", "bottom", "left", "right"):
                     bases[placement.projected_id(direction)] = projected_basis(
                         placement.basis, direction
                     )
+                if placement.include_isometric:
+                    bases[placement.projected_id("isometric")] = isometric_basis()
         return bases
 
     def _sync_targets(self) -> str:
@@ -900,9 +1091,27 @@ class DrawingWorkbench(QMainWindow):
             self.canvas.placing = False
             self._set_message("模型已变更，草稿已保留；请点更新视图以更新预览后继续。")
         sketch_ids = {v.view_id: v.source.sketch_id for v in self.state.views}
+        sections = {
+            view.view_id: (
+                view.section.plane(self.state.effective_basis(view.parent_id)),
+                2.5 / self.state.effective_scale(view.view_id),
+            )
+            for view in self.state.views
+            if view.section is not None and view.parent_id is not None
+        }
+        details = {
+            view.view_id: view.detail for view in self.state.views if view.detail is not None
+        }
         if self.placement is not None:
             sketch_ids[self.placement.base_id] = self.placement.source.sketch_id
-        self.updates.sync(self.session_id, fingerprint, self._target_bases(), sketch_ids=sketch_ids)
+        self.updates.sync(
+            self.session_id,
+            fingerprint,
+            self._target_bases(),
+            sketch_ids=sketch_ids,
+            sections=sections,
+            details=details,
+        )
         return fingerprint
 
     def update_requested(self) -> None:
@@ -999,7 +1208,9 @@ class DrawingWorkbench(QMainWindow):
         if busy:
             self.canvas.cancel_drag()
         self.canvas.setEnabled(not busy)
-        self.settings_tabs.setEnabled(not busy)
+        self.settings_tabs.setEnabled(
+            not busy and self.section_placement is None and self.detail_placement is None
+        )
         self.text_action.setEnabled(not busy and self.loaded is not None)
         self.dimension_menu.setEnabled(not busy and self.loaded is not None)
         self._update_start_page()
@@ -1035,6 +1246,14 @@ class DrawingWorkbench(QMainWindow):
 
     def _projection_ready(self, accepted: int) -> None:
         if not accepted:
+            failures = [
+                self.updates.failure_message(identity)
+                for identity in self._target_bases()
+                if self.updates.status(identity) == "failed"
+            ]
+            if failures:
+                reason = next((message for message in failures if message), "投影未生成")
+                self._set_message(f"视图生成失败：{reason}；请更新视图重试。")
             return
         if (
             self.placement is not None
@@ -1042,15 +1261,26 @@ class DrawingWorkbench(QMainWindow):
             and self.updates.status(self.placement.base_id) == "clean"
         ):
             self.canvas.placing = True
-            self._set_message(
-                "单击放置草图平面视图；Enter 完成，Esc 取消。"
-                if self.placement.source.kind == "sketch"
-                else "单击放置基准视图，再沿方向放置投影视图；Enter 完成整组，Esc 取消。"
-            )
+            if self.placement.source.kind == "sketch":
+                message = "单击放置草图平面视图；Enter 完成，Esc 取消。"
+            elif not self.placement.allow_projected:
+                message = "单击放置等轴测视图；Enter 完成，Esc 取消。"
+            elif self.placement.include_isometric:
+                message = (
+                    "放置基准视图后，水平或垂直放置投影视图，对角放置等轴测；Enter 完成，Esc 取消。"
+                )
+            else:
+                message = "单击放置基准视图，再沿方向放置投影视图；Enter 完成整组，Esc 取消。"
+            self._set_message(message)
             if self.isVisible():
                 self.canvas.setFocus()
         elif not self._placement_stale:
-            self._set_message("工程图已更新。")
+            if any(self.updates.status(view.view_id) == "failed" for view in self.state.views):
+                self._set_message("部分视图更新失败，请查看图纸上的原因并重试。")
+            elif self.updates.has_pending:
+                self._set_message("部分视图已更新，其他视图仍在等待处理。")
+            else:
+                self._set_message("工程图已更新。")
 
     def cancel_update(self) -> None:
         self.updates.cancel()
@@ -1066,6 +1296,7 @@ class DrawingWorkbench(QMainWindow):
                 self._load_sheet_settings()
         self._update_start_page()
         if self.sheet_id is None:
+            self.drawing_status.hide()
             self.canvas.clear_scene()
             return
         state = self.state
@@ -1090,7 +1321,7 @@ class DrawingWorkbench(QMainWindow):
             state = self.notes.preview(state)
         scene = build_drawing_scene(state, self.sheet_id, self.projections)
         labels = {"clean": "已更新", "stale": "待更新", "updating": "更新中", "failed": "更新失败"}
-        names = {
+        names: dict[ViewDirection, str] = {
             "front": "主视",
             "back": "后视",
             "top": "俯视",
@@ -1101,7 +1332,25 @@ class DrawingWorkbench(QMainWindow):
         issues = list(scene.issues)
         for view in state.views:
             status = self.updates.status(view.view_id)
-            name = "草图平面视图" if view.source.kind == "sketch" else names[view.direction]
+            if view.source.kind == "sketch":
+                name = "草图平面视图"
+            elif view.section is not None:
+                name = "剖视（开发中）"
+            elif view.detail is not None:
+                name = "局部详图（开发中）"
+            elif view.parent_id is None and view.basis == isometric_basis():
+                name = "等轴测"
+            elif view.parent_id is None:
+                name = next(
+                    (
+                        label
+                        for direction, label in names.items()
+                        if view.basis == projected_basis(ViewBasis(), direction)
+                    ),
+                    "自定义视图",
+                )
+            else:
+                name = names[view.direction]
             item = self._view_items.get(view.view_id)
             if item is not None:
                 item.setText(
@@ -1111,16 +1360,156 @@ class DrawingWorkbench(QMainWindow):
             if view.sheet_id == self.sheet_id and status != "clean":
                 issues.append(f"{name} {str(view.view_id)[:8]}：{labels[status]}")
         self.canvas.set_scene(replace(scene, issues=tuple(dict.fromkeys(issues))))
+        statuses = [
+            self.updates.status(view.view_id)
+            for view in self.state.views
+            if view.sheet_id == self.sheet_id
+        ]
+        warnings: list[str] = []
+        for status, label in (
+            ("stale", "待更新"),
+            ("updating", "更新中"),
+            ("failed", "更新失败"),
+        ):
+            count = statuses.count(status)
+            if count:
+                warnings.append(f"{count} 个视图{label}")
+        failures = [
+            self.updates.failure_message(view.view_id)
+            for view in self.state.views
+            if view.sheet_id == self.sheet_id and self.updates.status(view.view_id) == "failed"
+        ]
+        failures = list(dict.fromkeys(message for message in failures if message))
+        if failures:
+            warnings.append(f"原因：{failures[0]}")
+        affected = {
+            view.view_id
+            for view in self.state.views
+            if view.sheet_id == self.sheet_id and self.updates.status(view.view_id) != "clean"
+        }
+        if any(annotation.view_id in affected for annotation in self.state.annotations):
+            warnings.append("更新后关联标注可能失联，请检查")
+        orphaned = sum(
+            item.status != "resolved" and item.view_id not in affected
+            for item in scene.resolved_annotations
+        )
+        if orphaned:
+            warnings.append(f"{orphaned} 个标注失联，请重新附着后出图")
+        if any(
+            view.sheet_id == self.sheet_id and view.section is not None for view in self.state.views
+        ):
+            warnings.append("剖视功能开发中，暂不能出图")
+        if any(
+            view.sheet_id == self.sheet_id and view.detail is not None for view in self.state.views
+        ):
+            warnings.append("局部详图功能开发中，暂不能出图")
+        self.drawing_status.setText("；".join(warnings))
+        self.drawing_status.setVisible(bool(warnings))
+        if self.section_placement is not None:
+            start = self.section_placement.start
+            end = self.section_placement.end or self._section_cursor
+            graphics = self.canvas.scene()
+            if start is not None and end is not None:
+                try:
+                    line = LineCurve(start, end)
+                except ValueError:
+                    pass
+                else:
+                    target = self.section_placement.position or self._section_cursor
+                    cross = (
+                        (end[0] - start[0]) * (target[1] - start[1])
+                        - (end[1] - start[1]) * (target[0] - start[0])
+                        if self.section_placement.end is not None and target is not None
+                        else 0
+                    )
+                    preview = (line,)
+                    if abs(cross) > 1e-9 and target is not None:
+                        marker = SectionMarker(
+                            "", start, end, "left" if cross > 0 else "right", target
+                        )
+                        preview = section_marker_lines(replace(scene, section_markers=(marker,)))
+                    for curve in preview:
+                        item = graphics.addPath(curve_path(curve), paper_pen("SECTION"))
+                        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        if self.detail_placement is not None and self.detail_placement.center is not None:
+            center = self.detail_placement.center
+            radius = self.detail_placement.radius_paper
+            if radius is None and self._detail_cursor is not None:
+                radius = math.dist(center, self._detail_cursor)
+            if radius is not None and radius > 1e-9:
+                item = self.canvas.scene().addPath(
+                    curve_path(ArcCurve(center, radius)), paper_pen("DETAIL")
+                )
+                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            if self.detail_placement.radius_paper is not None:
+                target = self.detail_placement.position or self._detail_cursor
+                if target is not None:
+                    item = self.canvas.scene().addPath(
+                        curve_path(
+                            ArcCurve(
+                                target,
+                                self.detail_placement.scale_factor
+                                * self.detail_placement.radius_paper,
+                            )
+                        ),
+                        paper_pen("DETAIL"),
+                    )
+                    item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
     def _move(self, point: object) -> None:
+        if self.section_placement is not None:
+            self._section_cursor = cast("Point2", point)
+            self._render()
+            return
+        if self.detail_placement is not None:
+            self._detail_cursor = cast("Point2", point)
+            self._render()
+            return
         self.annotations.move_preview(cast("Point2", point))
         if self.placement is not None and self.canvas.placing:
             self._ghost = self.placement.preview(cast("Point2", point))
             self._render()
 
     def _click(self, point: object) -> None:
+        if self.section_placement is not None:
+            try:
+                self.section_placement.click(cast("Point2", point))
+            except ValueError as error:
+                self._set_message(str(error))
+            else:
+                if self.section_placement.end is None:
+                    self._set_message("请选择剖切线终点；Esc 取消。")
+                elif self.section_placement.position is None:
+                    self._set_message("请选择剖视放置位置及观察侧；Esc 取消。")
+                else:
+                    self._set_message("按 Enter 创建剖视，或继续单击调整位置；Esc 取消。")
+            self._render()
+            return
+        if self.detail_placement is not None:
+            try:
+                self.detail_placement.click(cast("Point2", point))
+            except ValueError as error:
+                self._set_message(str(error))
+            else:
+                if self.detail_placement.radius_paper is None:
+                    self._set_message("请选择详图圈半径；Esc 取消。")
+                elif self.detail_placement.position is None:
+                    self._set_message(
+                        f"请选择详图放置位置；相对来源放大 {self.detail_placement.scale_factor:g} 倍。"
+                    )
+                else:
+                    self._set_message("按 Enter 创建详图，或继续单击调整位置；Esc 取消。")
+            self._render()
+            return
         self.annotations.click(cast("Point2", point))
         if self.placement is not None and self.canvas.placing:
+            candidate = self.placement.preview(cast("Point2", point))
+            if candidate is not None and self.updates.status(candidate.view_id) != "clean":
+                reason = self.updates.failure_message(candidate.view_id)
+                self._set_message(
+                    f"该视图尚未准备好{f'：{reason}' if reason else '，请等待或更新视图'}。"
+                )
+                return
             self.placement.click(cast("Point2", point))
             self._ghost = None
             self._render()
@@ -1137,6 +1526,9 @@ class DrawingWorkbench(QMainWindow):
             return
         views = self.placement.finish()
         if views:
+            if any(self.updates.status(view.view_id) != "clean" for view in views):
+                self._set_message("视图组中有投影尚未准备好，请更新后再提交。")
+                return
             self._execute(
                 "drawing.view.create",
                 {"views": [drawing_object_mapping(v) for v in views]},
@@ -1226,6 +1618,12 @@ class DrawingWorkbench(QMainWindow):
             and identity in {v.view_id for v in self.state.views}
             and current.effective_basis(identity) == self.state.effective_basis(identity)
             and current.view(identity).source == self.state.view(identity).source
+            and current.view(identity).section == self.state.view(identity).section
+            and current.view(identity).detail == self.state.view(identity).detail
+            and (
+                current.view(identity).section is None
+                or current.effective_scale(identity) == self.state.effective_scale(identity)
+            )
         )
 
     def _edit_annotation(self, identity: object) -> None:
@@ -1340,6 +1738,8 @@ class DrawingWorkbench(QMainWindow):
         identity = self.canvas.selected_view
         if identity is None:
             return
+        if not self._view_edit_finished():
+            return
         if not self._annotation_finished():
             return
         if self.notes.pending or self.placement is not None:
@@ -1376,7 +1776,11 @@ class DrawingWorkbench(QMainWindow):
         self._render()
 
     def _confirm_canvas(self) -> None:
-        if self.annotations.pending:
+        if self.section_placement is not None:
+            self._commit_section()
+        elif self.detail_placement is not None:
+            self._commit_detail()
+        elif self.annotations.pending:
             self.annotations.commit()
         elif self._pending_delete is not None:
             self.confirm_delete()
@@ -1384,6 +1788,12 @@ class DrawingWorkbench(QMainWindow):
             self.commit_placement()
 
     def _cancel_canvas(self) -> None:
+        if self.section_placement is not None:
+            self._cancel_section()
+            return
+        if self.detail_placement is not None:
+            self._cancel_detail()
+            return
         if self.notes.pending:
             self.notes.cancel()
             return

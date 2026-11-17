@@ -8,6 +8,7 @@ from typing import cast
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -30,9 +31,17 @@ class RibbonGroup(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 4)
+        outer.setSpacing(0)
+        layout = QVBoxLayout()
         layout.setContentsMargins(6, 2, 6, 2)
         layout.setSpacing(2)
+        outer.addLayout(layout)
+        separator = QFrame(self)
+        separator.setObjectName("ribbonSeparator")
+        separator.setFixedWidth(1)
+        outer.addWidget(separator)
         grid = QGridLayout()
         grid.setHorizontalSpacing(4)
         grid.setVerticalSpacing(2)
@@ -76,4 +85,5 @@ class RibbonPage(QScrollArea):
         self.content = QWidget(self)
         self.content_layout = QHBoxLayout(self.content)
         self.content_layout.setContentsMargins(8, 4, 8, 4)
+        self.content_layout.setSpacing(0)
         self.setWidget(self.content)

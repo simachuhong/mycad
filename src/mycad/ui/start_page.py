@@ -22,9 +22,10 @@ from PySide6.QtWidgets import (
 )
 
 from mycad.core.document_kinds import DocumentKind
-from mycad.ui.cad_icons import set_button_icon
+from mycad.ui.cad_icons import current_icon_theme, set_button_icon
 from mycad.ui.document_session import KIND_LABELS
 from mycad.ui.recent_documents import RecentDocument
+from mycad.ui.theme import ThemeName, theme_tokens
 
 
 class StartPage(QWidget):
@@ -64,6 +65,7 @@ class StartPage(QWidget):
             "三维装配\n规划中，暂不可创建", "group", "组织零部件与装配关系"
         )
         self.assembly_button.setEnabled(False)
+        self.set_theme(current_icon_theme())
         for index, button in enumerate(
             (self.drawing_button, self.engineering_button, self.part_button, self.assembly_button)
         ):
@@ -151,17 +153,29 @@ class StartPage(QWidget):
         button.setAccessibleName(f"{label}：{description}")
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         button.setMinimumSize(190, 120)
-        button.setStyleSheet(
-            "QToolButton { border: 1px solid palette(mid); border-radius: 6px; "
-            "padding: 12px; background: palette(base); }"
-            "QToolButton:hover:enabled { border: 2px solid palette(highlight); "
-            "background: palette(alternate-base); }"
-            "QToolButton:focus { border: 2px solid palette(highlight); }"
-            "QToolButton:disabled { background: palette(alternate-base); }"
-        )
         button.setIconSize(QSize(36, 36))
         set_button_icon(button, icon)
         return button
+
+    def set_theme(self, theme: ThemeName) -> None:
+        """Keep card text, background and states legible after a theme change."""
+        tokens = theme_tokens(theme)
+        style = (
+            f"QToolButton {{ border: 1px solid {tokens.divider}; border-radius: 6px; "
+            f"padding: 12px; background: {tokens.panel}; color: {tokens.text}; }}"
+            f"QToolButton:hover:enabled {{ border: 2px solid {tokens.focus}; "
+            f"background: {tokens.active}; color: {tokens.text}; }}"
+            f"QToolButton:focus {{ border: 2px solid {tokens.focus}; }}"
+            f"QToolButton:disabled {{ background: {tokens.secondary_panel}; "
+            f"color: {tokens.secondary_text}; }}"
+        )
+        for button in (
+            self.drawing_button,
+            self.engineering_button,
+            self.part_button,
+            self.assembly_button,
+        ):
+            button.setStyleSheet(style)
 
     def _request_create(self, kind: DocumentKind) -> None:
         self.create_requested.emit(kind)

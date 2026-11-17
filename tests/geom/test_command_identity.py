@@ -97,13 +97,20 @@ def test_empty_upgraded_document_preview_keeps_v5_context(monkeypatch: pytest.Mo
 
 
 def test_v5_snapshot_requires_explicit_host_upgrade_and_remains_exact(tmp_path: Path) -> None:
+    from mycad.core.document import Document
+
     source_services = app.build_app(discoverers=[])
     source = app.new_workspace_document(source_services, kind="part")
     source.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 4})
     source.bus.apply_identity_upgrade(source.bus.prepare_identity_upgrade())
     params = app.reference_parameters(source.document)
     services = app.fork_app_services(source_services)
-    host = app.new_workspace_document(services, kind="drawing")
+    legacy = Document(
+        services.registry, archive_version=4, document_type="drawing2d", document_kind="drawing"
+    )
+    legacy_path = tmp_path / "legacy.my2d"
+    save_document(legacy, legacy_path)
+    host = app.open_app_document(services, legacy_path)
     with pytest.raises(ValidationError):
         host.bus.execute("reference.attach", params)
     assert host.document.commands == ()

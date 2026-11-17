@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID
 
+from mycad.core.dimension_styles import DimensionStyle
 from mycad.core.sketch_layers import SketchLayer
 
 if TYPE_CHECKING:
@@ -64,6 +65,15 @@ _DIMENSION_UNITS: dict[str, ConstraintUnit] = {
 }
 DIMENSION_KINDS = frozenset(_DIMENSION_UNITS)
 DIMENSION_AXES = frozenset({"aligned", "horizontal", "vertical", "ordinate_x", "ordinate_y"})
+
+
+def is_reference_value_refresh(before: SketchConstraint, after: SketchConstraint) -> bool:
+    """Recognize a measurement-only update of the same reference annotation."""
+    return (
+        not before.driving
+        and before.kind in DIMENSION_KINDS
+        and replace(before, value=after.value) == after
+    )
 
 
 def _placement_point(value: object) -> tuple[float, float] | None:
@@ -157,6 +167,11 @@ class SketchConstraint:
     axis: str = "aligned"
     layer_name: str | None = None
     anchor_mode: str = "auto"
+    first_endpoint: Literal["start", "end"] | None = None
+    second_endpoint: Literal["start", "end"] | None = None
+    projection_axis: tuple[float, float] | None = None
+    text_override: str | None = None
+    style_name: str | None = None
 
     def __post_init__(self) -> None:
         _identity(self.constraint_id, "constraint_id")
@@ -172,6 +187,14 @@ class SketchConstraint:
             raise ValueError("constraint references must be stable geometry references")
         if len(set(references)) != len(references):
             raise ValueError("constraint references must be distinct")
+        endpoints = (self.first_endpoint, self.second_endpoint)
+        if any(endpoint not in (None, "start", "end") for endpoint in endpoints):
+            raise ValueError("tangent endpoint is unsupported")
+        if any(endpoint is not None for endpoint in endpoints) and (
+            self.kind != "tangent"
+            or any(ref.kind not in ("geometry", "segment") for ref in references)
+        ):
+            raise ValueError("tangent endpoints require two curve references")
         if not isinstance(cast("object", self.driving), bool):
             raise ValueError("driving must be a boolean")
         if self.anchor_mode not in ("auto", "start", "end", "symmetric"):
@@ -182,6 +205,13 @@ class SketchConstraint:
             raise ValueError("dimension axis is unsupported")
         if self.axis != "aligned" and self.kind not in ("length", "distance"):
             raise ValueError("only linear dimensions accept a projection axis")
+        direction = _placement_point(self.projection_axis)
+        if direction is not None:
+            if self.kind not in ("length", "distance") or self.axis == "aligned":
+                raise ValueError("projection axis requires a directional linear dimension")
+            if abs(math.hypot(*direction) - 1.0) > 1e-9:
+                raise ValueError("projection axis must be a finite unit vector")
+        object.__setattr__(self, "projection_axis", direction)
         object.__setattr__(self, "position_mm", _placement_point(self.position_mm))
         object.__setattr__(self, "text_position_mm", _placement_point(self.text_position_mm))
         if self.layer_name is not None:
@@ -189,6 +219,20 @@ class SketchConstraint:
             if self.kind not in DIMENSION_KINDS:
                 raise ValueError("only a dimension can carry an annotation layer")
         numeric_unit = _DIMENSION_UNITS.get(self.kind)
+        if self.style_name is not None:
+            DimensionStyle(self.style_name)
+            if numeric_unit is None:
+                raise ValueError("only dimensions can reference a dimension style")
+        if self.text_override is not None:
+            if (
+                not isinstance(cast("object", self.text_override), str)
+                or not self.text_override
+                or len(self.text_override) > 256
+                or not self.text_override.isprintable()
+            ):
+                raise ValueError("dimension text must be 1–256 printable characters")
+            if numeric_unit is None:
+                raise ValueError("only dimensions can carry text overrides")
         value = self.value
         if numeric_unit is None:
             if value is not None or self.unit is not None:
@@ -261,6 +305,16 @@ class SketchConstraint:
             result["layer_name"] = self.layer_name
         if self.anchor_mode != "auto":
             result["anchor_mode"] = self.anchor_mode
+        if self.first_endpoint is not None:
+            result["first_endpoint"] = self.first_endpoint
+        if self.second_endpoint is not None:
+            result["second_endpoint"] = self.second_endpoint
+        if self.projection_axis is not None:
+            result["projection_axis"] = list(self.projection_axis)
+        if self.text_override is not None:
+            result["text_override"] = self.text_override
+        if self.style_name is not None:
+            result["style_name"] = self.style_name
         return result
 
     @classmethod
@@ -279,6 +333,11 @@ class SketchConstraint:
             "axis",
             "layer_name",
             "anchor_mode",
+            "first_endpoint",
+            "second_endpoint",
+            "projection_axis",
+            "text_override",
+            "style_name",
         }
         if not base.issubset(mapping) or any(key not in allowed for key in mapping):
             raise ValueError(
@@ -315,6 +374,15 @@ class SketchConstraint:
             raise ValueError("dimension precision must be an integer from 0 to 8")
         if isinstance(scale, bool) or not isinstance(scale, int | float):
             raise ValueError("dimension scale must be between 0.1 and 100")
+        for key in ("first_endpoint", "second_endpoint"):
+            if key in mapping and mapping[key] not in ("start", "end"):
+                raise ValueError("tangent endpoint is unsupported")
+        if "projection_axis" in mapping and mapping["projection_axis"] is None:
+            raise ValueError("projection axis must be a finite unit vector")
+        if "text_override" in mapping and not isinstance(mapping["text_override"], str):
+            raise ValueError("dimension text override must be a string")
+        if "style_name" in mapping and not isinstance(mapping["style_name"], str):
+            raise ValueError("dimension style name must be a string")
         return cls(
             identity,
             cast("ConstraintKind", kind),
@@ -330,6 +398,11 @@ class SketchConstraint:
             str(mapping.get("axis", "aligned")),
             cast("str | None", mapping.get("layer_name")),
             cast("str", mapping.get("anchor_mode", "auto")),
+            cast('Literal["start", "end"] | None', mapping.get("first_endpoint")),
+            cast('Literal["start", "end"] | None', mapping.get("second_endpoint")),
+            _placement_point(mapping.get("projection_axis")),
+            cast("str | None", mapping.get("text_override")),
+            cast("str | None", mapping.get("style_name")),
         )
 
 

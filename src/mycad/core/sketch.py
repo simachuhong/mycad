@@ -415,13 +415,14 @@ class LineEntity:
 
 @dataclass(frozen=True, slots=True)
 class PolylineEntity:
-    """Connected line segments with an optional implicit closing segment."""
+    """Connected directed segments, with optional exact circular bulges."""
 
     entity_id: str
     points_mm: tuple[Point2D, ...]
     closed: bool = False
     construction: bool = False
     layer_name: str = "0"
+    bulges: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_identity(self.entity_id, "entity_id")
@@ -442,7 +443,19 @@ class PolylineEntity:
             pairs.append((points[-1], points[0]))
         if any(start == end for start, end in pairs):
             raise ValueError("polyline segments must have distinct endpoints")
-        if self.closed:
+        bulges = tuple(_finite_number(value, "polyline bulge") for value in self.bulges)
+        if bulges and len(bulges) != len(pairs):
+            raise ValueError("polyline bulges must match the number of segments")
+        if any(0 < abs(value) <= 1e-12 for value in bulges):
+            raise ValueError("nonzero polyline bulge is too small")
+        if not any(bulges):
+            bulges = ()
+        object.__setattr__(self, "bulges", bulges)
+        if bulges:
+            from mycad.core.polyline_curves import polyline_curve_segments
+
+            polyline_curve_segments(points, bulges, self.closed, self.entity_id)
+        if self.closed and not bulges:
             _validate_simple_closed_polyline(points)
 
 
@@ -618,12 +631,15 @@ def _entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
             "end_mm": list(entity.end_mm),
         }
     if isinstance(entity, PolylineEntity):
-        return {
+        result = {
             **common,
             "kind": "polyline",
             "points_mm": [list(point) for point in entity.points_mm],
             "closed": entity.closed,
         }
+        if entity.bulges:
+            result["bulges"] = list(entity.bulges)
+        return result
     if isinstance(entity, CircleEntity):
         return {
             **common,
@@ -688,7 +704,10 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             _entity_layer_name(layer_name),
         )
     if kind == "polyline":
-        data = _strict_mapping(mapping, "polyline entity", (*entity_common, "points_mm", "closed"))
+        fields = (*entity_common, "points_mm", "closed")
+        data = _strict_mapping(
+            mapping, "polyline entity", (*fields, "bulges") if "bulges" in mapping else fields
+        )
         raw_points = data["points_mm"]
         if not isinstance(raw_points, (list, tuple)):
             raise ValueError("polyline.points_mm must be an array")
@@ -696,12 +715,19 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             _point2(point, f"polyline.points_mm[{index}]")
             for index, point in enumerate(cast("Sequence[object]", raw_points))
         )
+        raw_bulges = data.get("bulges", ())
+        if not isinstance(raw_bulges, list | tuple):
+            raise ValueError("polyline.bulges must be an array")
         return PolylineEntity(
             cast("str", data["entity_id"]),
             points,
             _boolean(data["closed"], "closed"),
             _boolean(data["construction"], "construction"),
             _entity_layer_name(layer_name),
+            tuple(
+                _finite_number(value, "polyline bulge")
+                for value in cast("Sequence[object]", raw_bulges)
+            ),
         )
     if kind == "circle":
         data = _strict_mapping(mapping, "circle entity", (*entity_common, "center_mm", "radius_mm"))
@@ -822,8 +848,12 @@ class Sketch:
 
     def to_mapping(self, *, version: int = 2) -> dict[str, object]:
         """Return JSON-compatible command values in the requested schema version."""
-        if version not in (1, 2, 3, 4):
+        if version not in (1, 2, 3, 4, 5):
             raise ValueError(f"unsupported sketch mapping version {version}")
+        if version < 5 and any(
+            isinstance(entity, PolylineEntity) and entity.bulges for entity in self.entities
+        ):
+            raise ValueError("curved polylines require mapping version 5")
         if version < 4 and any(isinstance(entity, PointEntity) for entity in self.entities):
             raise ValueError("point sketches require mapping version 4")
         if version < 3 and any(isinstance(entity, SplineEntity) for entity in self.entities):
@@ -863,7 +893,13 @@ class Sketch:
         """Return canonical sketch state, including durable constraint records."""
         return {
             **self.to_mapping(
-                version=4 if any(isinstance(entity, PointEntity) for entity in self.entities) else 3
+                version=5
+                if any(
+                    isinstance(entity, PolylineEntity) and entity.bulges for entity in self.entities
+                )
+                else 4
+                if any(isinstance(entity, PointEntity) for entity in self.entities)
+                else 3
             ),
         }
 

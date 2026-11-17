@@ -8,6 +8,7 @@ from math import atan2, cos, hypot, radians, sin, sqrt
 from mycad.core.sketch import ArcEntity, CircleEntity, Point2D, Point3D, Sketch
 from mycad.core.sketch_constraints import DIMENSION_KINDS, SketchConstraint
 from mycad.core.viewport_protocol import ViewportSketchDimension
+from mycad.ui.dimension_text import dimension_text
 from mycad.ui.sketch_editor import SketchCanvas
 
 
@@ -94,14 +95,11 @@ def draft_dimensions(sketch: Sketch) -> tuple[ViewportSketchDimension, ...]:
             count = auto_positions.get(point, 0)
             auto_positions[point] = count + 1
             point = (point[0], point[1] + count * 5.0 * constraint.scale)
-        number = f"{constraint.value:.{constraint.precision}f}"
-        suffix = "°" if constraint.kind == "angle" else " mm"
-        prefix = {"radius": "R", "diameter": "⌀"}.get(constraint.kind, "")
         mode = "驱动" if constraint.driving else "参考"
         result.append(
             ViewportSketchDimension(
                 constraint.constraint_id,
-                f"{prefix}{number}{suffix} [{mode}]",
+                f"{dimension_text(constraint)} [{mode}]",
                 sketch.frame.local_to_world(point),
                 (32, 92, 160) if constraint.driving else (95, 103, 112),
                 constraint.scale,

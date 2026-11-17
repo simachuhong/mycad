@@ -41,6 +41,19 @@ def test_drafting_toolbars_dock_independently_and_restore(qtbot: QtBot) -> None:
     assert all(not bar.isHidden() for bar in next_draft.drafting_toolbars)
 
 
+def test_vertical_modify_toolbar_aligns_chamfer_and_fillet(qtbot: QtBot) -> None:
+    draft = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(draft)
+    draft.resize(1100, 900)
+    draft.toolbar_host.addToolBar(Qt.ToolBarArea.LeftToolBarArea, draft.modify_toolbar)
+    draft.show()
+    qtbot.waitExposed(draft)
+    chamfer = draft.tool_buttons["二维倒角"]
+    fillet = draft.tool_buttons["二维圆角"]
+    assert chamfer.isVisible() and fillet.isVisible()
+    assert chamfer.geometry().center().x() == fillet.geometry().center().x()
+
+
 def test_bottom_panel_starts_collapsed_even_after_visible_session(qtbot: QtBot) -> None:
     first = MainWindow(services=build_app(discoverers=()))
     qtbot.addWidget(first)

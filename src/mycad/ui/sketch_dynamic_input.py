@@ -120,20 +120,25 @@ class SketchDynamicInput(QWidget):
         self._tool = tool
         line = tool in ("line", "continuous")
         circle = tool == "circle"
-        self.setVisible(line or circle or tool == "rectangle")
-        self.first_label.setText("长度" if line else "宽" if tool == "rectangle" else "")
+        arc_angle = tool == "arc_angle"
+        self.setVisible(line or circle or arc_angle or tool == "rectangle")
+        self.first_label.setText(
+            "角度" if arc_angle else "长度" if line else "宽" if tool == "rectangle" else ""
+        )
         self.second_label.setText("角度" if line else "高")
-        first_name = "长度" if line else "宽度" if tool == "rectangle" else "圆尺寸"
+        first_name = (
+            "角度" if arc_angle else "长度" if line else "宽度" if tool == "rectangle" else "圆尺寸"
+        )
         second_name = "角度" if line else "高度"
         self.first_value.setAccessibleName(first_name)
         self.first_lock.setAccessibleName(f"锁定{first_name}")
         self.second_value.setAccessibleName(second_name)
         self.second_lock.setAccessibleName(f"锁定{second_name}")
-        self.first_value.setSuffix(" mm")
+        self.first_value.setSuffix(" °" if arc_angle else " mm")
         self.second_value.setSuffix(" °" if line else " mm")
         self.circle_mode.setVisible(circle)
         for widget in (self.second_label, self.second_value, self.second_lock):
-            widget.setVisible(not circle)
+            widget.setVisible(not (circle or arc_angle))
 
     def clear_locks(self) -> None:
         self.first_lock.setChecked(False)
@@ -152,6 +157,8 @@ class SketchDynamicInput(QWidget):
         second = self.second_value.value() if self.second_lock.isChecked() else None
         if self._tool in ("line", "continuous"):
             return resolve_dynamic_point("line", start, cursor, length=first, angle_deg=second)
+        if self._tool == "arc_angle":
+            return resolve_dynamic_point("line", start, cursor, angle_deg=first)
         if self._tool == "rectangle":
             return resolve_dynamic_point("rectangle", start, cursor, width=first, height=second)
         if self._tool == "circle":
@@ -165,6 +172,8 @@ class SketchDynamicInput(QWidget):
         dx, dy = point[0] - start[0], point[1] - start[1]
         if self._tool in ("line", "continuous"):
             values = (hypot(dx, dy), degrees(atan2(dy, dx)))
+        elif self._tool == "arc_angle":
+            values = (degrees(atan2(dy, dx)), 0.0)
         elif self._tool == "rectangle":
             values = (abs(dx), abs(dy))
         else:

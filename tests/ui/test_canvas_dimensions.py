@@ -2,16 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 """Mouse acceptance for dimension commands, with no dialog-form input."""
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
 from mycad.app import build_app, new_document
-from mycad.core.sketch import ArcEntity, CircleEntity, LineEntity, Point2D, Sketch, WorkPlaneFrame
+from mycad.core.sketch import (
+    ArcEntity,
+    CircleEntity,
+    LineEntity,
+    Point2D,
+    PolylineEntity,
+    Sketch,
+    WorkPlaneFrame,
+)
+from mycad.core.sketch_layers import SketchLayer
 from mycad.ui.main_window import MainWindow
 from mycad.ui.sketch_editor import SketchEditorDialog
 
@@ -34,6 +45,11 @@ def editor(qtbot: QtBot) -> SketchEditorDialog:
 
 def click(view: SketchEditorDialog, point: Point2D) -> None:
     QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=view.canvas.local_to_screen(point))
+
+
+def erase_command(view: SketchEditorDialog) -> None:
+    view.drawing_command_bar.input.setText("ERASE")
+    QTest.keyClick(view.drawing_command_bar.input, Qt.Key.Key_Return)
 
 
 def test_tool_inventory_has_real_commands_and_distinct_icons(qtbot: QtBot) -> None:
@@ -103,8 +119,18 @@ def test_hover_shows_candidate_without_selecting_or_mutating(qtbot: QtBot) -> No
     view = editor(qtbot)
     view.dimensions.buttons["smart"].click()
     QApplication.processEvents()
-    QTest.mouseMove(view.canvas, QPoint(1, 1))
-    QTest.mouseMove(view.canvas, view.canvas.local_to_screen((15, 10)))
+    position = view.canvas.local_to_screen((15, 10))
+    QApplication.sendEvent(
+        view.canvas,
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(position),
+            QPointF(view.canvas.mapToGlobal(position)),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ),
+    )
     assert view.canvas.dimension_candidate is not None
     assert view.dimensions.candidate is None
     assert view.dimensions.references == []
@@ -149,6 +175,41 @@ def test_coplanar_shifted_source_has_visible_driving_preview(qtbot: QtBot) -> No
     entity = preview.entities[0]
     assert isinstance(entity, LineEntity)
     assert entity.start_mm == (100, 0)
+
+
+def test_dimension_preview_preserves_rectangle_segment_identity(qtbot: QtBot) -> None:
+    from mycad.core.cross_sketch_tangency import tangent_entity_curve
+    from mycad.core.fillet_curves import tangent_on_curves
+    from mycad.core.sketch import RectangleEntity
+    from mycad.core.sketch_constraints import (
+        SketchConstraint,
+        SketchConstraintSolveResult,
+        SketchGeometryReference,
+    )
+
+    view = editor(qtbot)
+    frame = replace(WorkPlaneFrame.xy(), origin_mm=(100, 0, 0))
+    rectangle = RectangleEntity(uuid4().hex, (10, 20), (-10, 0))
+    circle = CircleEntity(uuid4().hex, (0, 22), 2)
+    tangent = SketchConstraint(
+        uuid4().hex,
+        "tangent",
+        (
+            SketchGeometryReference(rectangle.entity_id, "segment", 0),
+            SketchGeometryReference(circle.entity_id, "geometry"),
+        ),
+    )
+    source = Sketch(uuid4().hex, frame, (rectangle, circle), constraints=(tangent,))
+    view.set_context_sketches((source,))
+    view.show_dimension_preview(SketchConstraintSolveResult("success", source, 3))
+    preview = view.canvas.dimension_preview
+    assert preview is not None
+    projected_rectangle, projected_circle = preview.entities
+    assert isinstance(projected_rectangle, RectangleEntity)
+    assert isinstance(projected_circle, CircleEntity)
+    assert projected_rectangle.first_corner_mm == (110, 20)
+    assert projected_rectangle.opposite_corner_mm == (90, 0)
+    assert tangent_on_curves(tangent_entity_curve(projected_rectangle, 0), projected_circle)
 
 
 def test_click_and_double_click_cancel_do_not_create_undo_entries(qtbot: QtBot) -> None:
@@ -225,6 +286,91 @@ def test_smart_circle_and_inline_value_edit(qtbot: QtBot) -> None:
     assert entity.radius_mm == pytest.approx(15)
 
 
+@pytest.mark.parametrize("kind", ("radius", "diameter", "arc_length"))
+def test_reference_dimension_on_curved_polyline_arc_segment(qtbot: QtBot, kind: str) -> None:
+    view = editor(qtbot)
+    curved = PolylineEntity(uuid4().hex, ((0, 0), (10, 0), (10, 10)), bulges=(1, 0))
+    view.canvas.entities = [curved]
+    view.dimensions.buttons[kind].click()
+    click(view, (5, -5))
+    click(view, (15, -10))
+    assert len(view.canvas.constraints) == 1
+    dimension = view.canvas.constraints[0]
+    assert dimension.kind == kind and not dimension.driving
+    assert dimension.references[0].kind == "segment" and dimension.references[0].index == 0
+    expected = 10 if kind == "diameter" else (5 * 3.141592653589793 if kind == "arc_length" else 5)
+    assert dimension.value == pytest.approx(expected)
+    assert view.canvas.dimension_layout(dimension, {curved.entity_id: curved}) is not None
+    assert view.canvas.entities == [curved]
+
+
+def test_driving_radius_on_curved_polyline_arc_segment(qtbot: QtBot) -> None:
+    from mycad.core.polyline_curves import polyline_arc_segment
+
+    view = editor(qtbot)
+    curved = PolylineEntity(uuid4().hex, ((0, 0), (10, 0), (10, 10)), bulges=(0.5, 0))
+    view.canvas.entities = [curved]
+    view.dimensions.driving_check.setChecked(True)
+    view.dimensions.buttons["radius"].click()
+    click(view, (5, -2.5))
+    click(view, (15, -10))
+    view.dimensions.value_editor.setValue(7.5)
+    view.dimensions.apply_button.click()
+    assert len(view.canvas.constraints) == 1
+    assert view.canvas.constraints[0].driving
+    moved = view.canvas.entities[0]
+    assert isinstance(moved, PolylineEntity)
+    assert polyline_arc_segment(moved, 0).radius_mm == pytest.approx(7.5)
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.entities == [curved] and not view.canvas.constraints
+
+
+def test_driving_distance_between_curved_polyline_vertices(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    curved = PolylineEntity(uuid4().hex, ((0, 0), (10, 0), (10, 10)), bulges=(0.5, 0))
+    view.canvas.entities = [curved]
+    view.dimensions.driving_check.setChecked(True)
+    view.dimensions.buttons["aligned"].click()
+    click(view, (0, 0))
+    click(view, (10, 0))
+    click(view, (5, -10))
+    view.dimensions.value_editor.setValue(15)
+    view.dimensions.apply_button.click()
+    assert len(view.canvas.constraints) == 1
+    dimension = view.canvas.constraints[0]
+    assert dimension.kind == "distance" and dimension.driving
+    moved = view.canvas.entities[0]
+    assert isinstance(moved, PolylineEntity)
+    assert moved.bulges == curved.bulges
+    assert abs(moved.points_mm[1][0] - moved.points_mm[0][0]) == pytest.approx(15)
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.entities == [curved] and not view.canvas.constraints
+
+
+def test_driving_dimension_keeps_unrelated_curved_polyline(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    curved = PolylineEntity(uuid4().hex, ((30, 0), (32, 0), (32, 2)), bulges=(1, 0))
+    assert view.canvas.replace_draft_entities((circle, curved))
+    view.dimensions.buttons["smart"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Escape)
+    dimension = view.canvas.constraints[0]
+    label = view.canvas.dimension_layout(dimension, {e.entity_id: e for e in view.canvas.entities})
+    assert label is not None
+    QTest.mouseDClick(view.canvas, Qt.MouseButton.LeftButton, pos=label.label.toPoint())
+    view.dimensions.driving_check.setChecked(True)
+    view.dimensions.value_editor.setValue(30)
+    view.dimensions.apply_button.click()
+    assert view.canvas.constraints[0].driving
+    assert isinstance(view.canvas.entities[0], CircleEntity)
+    assert view.canvas.entities[0].radius_mm == pytest.approx(15)
+    assert view.canvas.entities[1] == curved
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.entities == [circle, curved]
+
+
 def test_continue_baseline_and_ordinate_use_stable_point_references(qtbot: QtBot) -> None:
     view = editor(qtbot)
     view.canvas.entities = [
@@ -265,6 +411,54 @@ def test_angle_picks_two_segments_then_places(qtbot: QtBot) -> None:
     click(view, (12, 12))
     assert view.canvas.constraints[-1].kind == "angle"
     assert abs(view.canvas.constraints[-1].value or 0) == pytest.approx(90)
+
+
+@pytest.mark.parametrize("bulge", [0.5, -0.5])
+def test_driving_angle_on_straight_segment_of_curved_polyline(qtbot: QtBot, bulge: float) -> None:
+    view = editor(qtbot)
+    path = PolylineEntity(uuid4().hex, ((-20, -20), (-20, 0), (20, 0)), bulges=(bulge, 0))
+    line = LineEntity(uuid4().hex, (0, 0), (0, 30))
+    view.canvas.entities = [path, line]
+    view.dimensions.driving_check.setChecked(True)
+    view.dimensions.buttons["angle"].click()
+    click(view, (-10, 0))
+    click(view, (0, 15))
+    click(view, (10, 10))
+    assert view.dimensions.value_editor.isVisible(), view.dimensions.prompt.text()
+    view.dimensions.value_editor.setValue(45)
+    QTest.mouseClick(
+        view.canvas,
+        Qt.MouseButton.RightButton,
+        pos=view.canvas.local_to_screen((10, 10)),
+    )
+    if not view.canvas.constraints:
+        assert "再次确认" in view.dimensions.prompt.text()
+        QTest.mouseClick(
+            view.canvas,
+            Qt.MouseButton.RightButton,
+            pos=view.canvas.local_to_screen((10, 10)),
+        )
+    assert len(view.canvas.constraints) == 1, view.dimensions.prompt.text()
+    dimension = view.canvas.constraints[0]
+    assert dimension.kind == "angle" and dimension.driving
+    assert dimension.references[0].entity_id == path.entity_id
+    assert dimension.references[0].kind == "segment" and dimension.references[0].index == 1
+    assert dimension.value == pytest.approx(45)
+    solved = view.canvas.entities[0]
+    assert isinstance(solved, PolylineEntity) and solved.bulges == path.bulges
+    QTest.mouseClick(
+        view.canvas, Qt.MouseButton.RightButton, pos=view.canvas.local_to_screen((10, 10))
+    )
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert not view.canvas.constraints
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.constraints == [dimension]
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.entities == [path, line] and not view.canvas.constraints
 
 
 def test_committed_dimension_uses_canvas_bus_and_undo(qtbot: QtBot) -> None:
@@ -473,3 +667,293 @@ def test_failed_async_preview_has_an_explicit_retry(qtbot: QtBot) -> None:
     view.dimensions.apply_button.click()
     qtbot.waitUntil(lambda: requests[-1] > previous, timeout=2000)
     assert source.constraints == (dimension,)
+
+
+@pytest.mark.parametrize("finish_with_right_click", [False, True])
+def test_dimension_finished_enter_and_right_click_exit_mode(
+    qtbot: QtBot, finish_with_right_click: bool
+) -> None:
+    view = editor(qtbot)
+    view.dimensions.buttons["horizontal"].click()
+    click(view, (15, 10))
+    click(view, (20, -15))
+    assert len(view.canvas.constraints) == 1 and view.dimensions.mode == "horizontal"
+    if finish_with_right_click:
+        QTest.mouseClick(
+            view.canvas, Qt.MouseButton.RightButton, pos=view.canvas.local_to_screen((20, -15))
+        )
+    else:
+        QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    assert view.dimensions.mode is None and len(view.canvas.constraints) == 1
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        "smart",
+        "horizontal",
+        "vertical",
+        "aligned",
+        "radius",
+        "diameter",
+        "arc_length",
+        "angle",
+        "ordinate",
+    ],
+)
+def test_reference_dimension_right_click_then_select_delete(qtbot: QtBot, tool: str) -> None:
+    view = editor(qtbot)
+    if tool in ("radius", "diameter", "arc_length"):
+        view.canvas.entities = [ArcEntity(uuid4().hex, (0, 0), 10, 0, 180)]
+        points = ((0, 10), (20, 20))
+    elif tool == "angle":
+        view.canvas.entities = [
+            LineEntity(uuid4().hex, (0, 0), (30, 0)),
+            LineEntity(uuid4().hex, (0, 0), (0, 30)),
+        ]
+        points = ((15, 0), (0, 15), (12, 12))
+    elif tool == "ordinate":
+        points = ((0, 0), (30, 20), (40, -20))
+    else:
+        points = ((15, 10), (20, -15))
+    view.dimensions.buttons[tool].click()
+    for point in points:
+        click(view, point)
+    assert len(view.canvas.constraints) == 1, view.status_label.text()
+    dimension = view.canvas.constraints[0]
+    QTest.mouseClick(
+        view.canvas, Qt.MouseButton.RightButton, pos=view.canvas.local_to_screen(points[-1])
+    )
+    assert view.dimensions.mode is None
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert not view.canvas.constraints
+    assert view.canvas.undo_last_operation() and view.canvas.constraints == [dimension]
+
+
+@pytest.mark.parametrize("tool", ["continue", "baseline"])
+def test_chained_dimension_right_click_then_select_delete(qtbot: QtBot, tool: str) -> None:
+    view = editor(qtbot)
+    view.canvas.entities = [
+        LineEntity(uuid4().hex, (0, 0), (20, 0)),
+        LineEntity(uuid4().hex, (20, 0), (40, 20)),
+    ]
+    view.dimensions.buttons["horizontal"].click()
+    for point in ((0, 0), (20, 0), (10, -10)):
+        click(view, point)
+    view.dimensions.buttons[tool].click()
+    for point in ((40, 20), (30, -20)):
+        click(view, point)
+    assert len(view.canvas.constraints) == 2
+    dimension = view.canvas.constraints[-1]
+    QTest.mouseClick(
+        view.canvas, Qt.MouseButton.RightButton, pos=view.canvas.local_to_screen((30, -20))
+    )
+    assert view.dimensions.mode is None
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert len(view.canvas.constraints) == 1
+    assert view.canvas.undo_last_operation() and view.canvas.constraints[-1] == dimension
+
+
+def test_dimension_right_click_applies_entered_driving_value(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    view.canvas.entities = [CircleEntity(uuid4().hex, (0, 0), 10)]
+    view.dimensions.driving_check.setChecked(True)
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    view.dimensions.value_editor.setValue(7)
+    QTest.mouseClick(
+        view.canvas, Qt.MouseButton.RightButton, pos=view.canvas.local_to_screen((20, 20))
+    )
+    assert len(view.canvas.constraints) == 1 and view.canvas.constraints[0].driving
+    circle = view.canvas.entities[0]
+    assert isinstance(circle, CircleEntity) and circle.radius_mm == pytest.approx(7)
+
+
+@pytest.mark.parametrize("driving", [False, True])
+def test_select_dimension_with_single_click_and_delete_undo(qtbot: QtBot, driving: bool) -> None:
+    view = editor(qtbot)
+    view.canvas.entities = [CircleEntity(uuid4().hex, (0, 0), 10)]
+    view.dimensions.driving_check.setChecked(driving)
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    if driving:
+        view.dimensions.value_editor.setValue(7)
+        view.dimensions.apply_button.click()
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(
+        dimension, {entity.entity_id: entity for entity in view.canvas.entities}
+    )
+    assert layout is not None
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert not view.canvas.constraints and len(view.canvas.entities) == 1
+    assert view.canvas.undo_last_operation() and view.canvas.constraints == [dimension]
+
+
+def test_delete_mixed_draft_dimension_and_entity_atomically(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    line = LineEntity(uuid4().hex, (40, 0), (60, 0))
+    view.canvas.entities = [circle, line]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(
+        dimension, {item.entity_id: item for item in view.canvas.entities}
+    )
+    assert layout is not None
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    QTest.mouseClick(
+        view.canvas,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        pos=view.canvas.local_to_screen((50, 0)),
+    )
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    assert view.canvas.selected_entity_ids == {line.entity_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert view.canvas.entities == [circle] and not view.canvas.constraints
+    assert view.canvas.undo_last_operation()
+    assert view.canvas.entities == [circle, line] and view.canvas.constraints == [dimension]
+
+
+def test_crossing_box_selects_and_deletes_dimension(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    view.canvas.select_committed_entities = True
+    view.canvas.entities = [CircleEntity(uuid4().hex, (0, 0), 10)]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(
+        dimension, {item.entity_id: item for item in view.canvas.entities}
+    )
+    assert layout is not None
+    center = layout.label.toPoint()
+    start, end = center + QPoint(45, -25), center + QPoint(-45, 25)
+    QTest.mousePress(view.canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseRelease(view.canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    assert not view.canvas.selected_entity_ids
+    QTest.keyClick(view.canvas, Qt.Key.Key_Delete)
+    assert not view.canvas.constraints and len(view.canvas.entities) == 1
+    assert view.canvas.undo_last_operation() and view.canvas.constraints == [dimension]
+    QTest.mousePress(
+        view.canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, pos=start
+    )
+    QTest.mouseRelease(
+        view.canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier, pos=end
+    )
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.mousePress(
+        view.canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, pos=start
+    )
+    QTest.mouseRelease(
+        view.canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier, pos=end
+    )
+    assert not view.canvas.selected_constraint_ids
+
+
+@pytest.mark.parametrize("hidden", [False, True])
+def test_deleting_draft_entity_preserves_locked_dependent_dimension(
+    qtbot: QtBot, hidden: bool
+) -> None:
+    view = editor(qtbot)
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    view.canvas.entities = [circle]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = replace(view.canvas.constraints[0], layer_name="locked")
+    view.canvas.constraints = [dimension]
+    view.canvas.set_layer_table(
+        view.canvas.layer_table.add(SketchLayer("locked", locked=not hidden, visible=not hidden)),
+        "0",
+    )
+    view.canvas.selected_entity_ids = {circle.entity_id}
+    assert not view.canvas.delete_selected()
+    assert view.canvas.entities == [circle] and view.canvas.constraints == [dimension]
+
+
+@pytest.mark.parametrize("preselect", [False, True])
+def test_erase_command_deletes_dimension(qtbot: QtBot, preselect: bool) -> None:
+    view = editor(qtbot)
+    view.canvas.select_committed_entities = True
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    view.canvas.entities = [circle]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    if not preselect:
+        erase_command(view)
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    if preselect:
+        erase_command(view)
+    else:
+        QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    assert not view.canvas.constraints and view.canvas.entities == [circle]
+    assert view.canvas.undo_last_operation() and view.canvas.constraints == [dimension]
+
+
+def test_erase_command_selects_dimension_and_geometry_together(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    view.canvas.select_committed_entities = True
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    line = LineEntity(uuid4().hex, (40, 0), (60, 0))
+    view.canvas.entities = [circle, line]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    erase_command(view)
+    click(view, (50, 0))
+    QTest.mouseClick(view.canvas, Qt.MouseButton.LeftButton, pos=layout.label.toPoint())
+    assert view.canvas.selected_entity_ids == {line.entity_id}
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    assert view.canvas.entities == [circle] and not view.canvas.constraints
+
+
+def test_erase_command_crossing_box_selects_dimension(qtbot: QtBot) -> None:
+    view = editor(qtbot)
+    view.canvas.select_committed_entities = True
+    circle = CircleEntity(uuid4().hex, (0, 0), 10)
+    view.canvas.entities = [circle]
+    view.dimensions.buttons["radius"].click()
+    click(view, (10, 0))
+    click(view, (20, 20))
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    dimension = view.canvas.constraints[0]
+    layout = view.canvas.dimension_layout(dimension, view.canvas.dimension_entities())
+    assert layout is not None
+    erase_command(view)
+    center = layout.label.toPoint()
+    QTest.mousePress(view.canvas, Qt.MouseButton.LeftButton, pos=center + QPoint(45, -25))
+    QTest.mouseRelease(view.canvas, Qt.MouseButton.LeftButton, pos=center + QPoint(-45, 25))
+    assert view.canvas.selected_constraint_ids == {dimension.constraint_id}
+    QTest.keyClick(view.canvas, Qt.Key.Key_Return)
+    assert not view.canvas.constraints and view.canvas.entities == [circle]

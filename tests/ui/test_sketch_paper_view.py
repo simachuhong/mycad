@@ -281,13 +281,20 @@ def test_mixed_sources_and_layer_visibility_update_without_stale_export(
     with pytest.raises(ValueError, match="过期|尚未就绪"):
         bench.output_scene()
     bench.refresh()
+    views = services.kernel.drawing_state.views
+    qtbot.waitUntil(lambda: bench.updates.status(views[1].view_id) == "failed", timeout=30000)
+    assert "没有可显示" in bench.updates.failure_message(views[1].view_id)
+    with pytest.raises(ValueError, match="过期|尚未就绪"):
+        bench.output_scene()
+    layers = SketchLayerTable(tuple(replace(layer, frozen=False) for layer in layers.layers))
+    loaded.bus.execute(
+        "drawing.layers.set", {"layers": layers.to_mapping(), "dimension_layer": "DIM"}
+    )
+    bench.refresh()
     qtbot.waitUntil(
-        lambda: all(
-            bench.updates.status(view.view_id) == "clean"
-            for view in services.kernel.drawing_state.views
-        )
+        lambda: all(bench.updates.status(view.view_id) == "clean" for view in views), timeout=30000
     )
     qtbot.waitUntil(lambda: not unit.is_busy)
     scene = bench.output_scene()
     assert scene.views[0].curves
-    assert not scene.views[1].curves
+    assert scene.views[1].curves

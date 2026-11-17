@@ -12,16 +12,18 @@ right/bottom/centre contents remain owned by todos 7 / 9 / 12.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from functools import partial
-from math import isfinite
+from math import atan2, cos, degrees, hypot, isfinite, radians, sin
 from pathlib import Path
 from typing import TYPE_CHECKING, cast, override
 from uuid import uuid4
 
 from PySide6.QtCore import (
     QByteArray,
+    QMimeData,
     QObject,
     QPoint,
     QSettings,
@@ -65,7 +67,42 @@ from shiboken6 import isValid
 
 from mycad import app as mycad_app
 from mycad.commands.registry import CommandRegistry
+from mycad.core.associative_array import (
+    ArrayBasePoint,
+    ArrayEntityRef,
+    ArrayExtraOutput,
+    ArrayMember,
+    ArrayReplacement,
+    AssociativeRectArray,
+    array_member_rotation_anchor,
+    erase_drawing_entities,
+    has_interleaved_array_dependencies,
+    has_internal_replacements,
+    propagate_array_changes,
+    strip_erased_member_dimensions,
+)
 from mycad.core.bus import CommandBus
+from mycad.core.cross_sketch_tangency import (
+    CrossSketchRef,
+    CrossSketchTangency,
+    DraftTangentPair,
+    RectangleTransformEvidence,
+    draft_tangent_reference,
+    project_coplanar_entity,
+    project_coplanar_rotation,
+    project_coplanar_vector,
+    project_polyline_entity,
+    project_tangent_entity,
+    rebind_committed_tangencies,
+    rebind_committed_tangencies_for_edit,
+    rebind_retained_local_tangencies,
+    rebind_unchanged_user_polyline_constraints,
+    resolve_tangency_component,
+    split_transform_evidence,
+    unique_split_arc_relation_fragment,
+    unique_split_line_relation_fragment,
+)
+from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
 from mycad.core.document import AFFECTED_OBJECTS
 from mycad.core.document_kinds import (
     DRAWING2D_COMMAND_IDS,
@@ -73,19 +110,40 @@ from mycad.core.document_kinds import (
     DocumentKind,
     DocumentType,
 )
+from mycad.core.drawing_raster import DrawingRaster
 from mycad.core.exceptions import InvalidHistoryError, MycadError, ValidationError
 from mycad.core.identity import BodyId
 from mycad.core.persistence import LoadedDocument, save_document
 from mycad.core.plan import Plan
 from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet, ReplayEdit
 from mycad.core.signals import SignalName
-from mycad.core.sketch import PointEntity, Sketch, SketchEntity, SketchSupportFace, WorkPlaneFrame
+from mycad.core.sketch import (
+    ArcEntity,
+    CircleEntity,
+    LineEntity,
+    PointEntity,
+    PolylineEntity,
+    RectangleEntity,
+    Sketch,
+    SketchEntity,
+    SketchSupportFace,
+    SplineEntity,
+    WorkPlaneFrame,
+)
 from mycad.core.sketch_constraints import (
+    DIMENSION_KINDS,
     SketchConstraint,
     SketchConstraintSolveResult,
+    SketchGeometryReference,
 )
-from mycad.core.sketch_edit import mirror_entities, move_entities, rotate_entities
-from mycad.core.sketch_layers import SketchLayer
+from mycad.core.sketch_edit import (
+    copy_entities,
+    mirror_entities,
+    move_entities,
+    rotate_entities,
+    scale_entities,
+)
+from mycad.core.sketch_layers import SketchLayer, SketchLayerTable, merge_layer_tables
 from mycad.core.spatial_frames import RigidFrame
 from mycad.core.spatial_references import SpatialReference
 from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
@@ -104,9 +162,18 @@ from mycad.ui.cli_tab import CliTab
 from mycad.ui.command_palette import CommandPalette
 from mycad.ui.command_reference import CommandReferenceDialog
 from mycad.ui.command_strip import install_command_strip
+from mycad.ui.cross_sketch_tangency_dialog import CrossSketchTangencyDialog, tangent_preview_summary
 from mycad.ui.datum_task import DatumTaskDialog
+from mycad.ui.dimension_tools import DEFAULT_NEW_DRAWING_DIMENSION_SCALE
 from mycad.ui.document_save import DocumentSaveController, SaveResult
 from mycad.ui.document_session import DEFAULT_NAMES, DocumentSession, SessionDocument
+from mycad.ui.drawing_clipboard import (
+    DRAWING_CLIPBOARD_MIME,
+    DRAWING_MIXED_CLIPBOARD_MIME,
+    DRAWING_RASTER_GROUP_MIME,
+    reconcile_clipboard_styles,
+)
+from mycad.ui.drawing_dimension_styles import DrawingDimensionStylesDialog
 from mycad.ui.drawing_templates import DrawingTemplateChoiceDialog
 from mycad.ui.drawing_workbench import DrawingWorkbench
 from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
@@ -120,12 +187,25 @@ from mycad.ui.part_sketch_workbench import PartSketchWorkbench
 from mycad.ui.path_identity import path_identity
 from mycad.ui.plan_cards import PlanCards
 from mycad.ui.plan_draft import PlanDraftController
+from mycad.ui.preferences import (
+    CONSTRAINT_MARKERS_KEY,
+    CURSOR_STYLE_KEY,
+    CursorSettingsDialog,
+    drawing_constraint_markers_visible,
+    drawing_cursor_style,
+)
 from mycad.ui.quick_access import QuickAccessController, QuickAccessDialog, QuickAccessStore
 from mycad.ui.recent_documents import RecentDocuments
 from mycad.ui.ribbon import RibbonGroup, RibbonPage
 from mycad.ui.right_panel import HistoryEditDialog, RightPanel
 from mycad.ui.sketch_constraint_dialog import SketchConstraintDialog
-from mycad.ui.sketch_editor import MixedMoveState, SketchEditorDialog
+from mycad.ui.sketch_editor import (
+    MixedMoveState,
+    SavedHandlePreview,
+    SketchCanvas,
+    SketchEditorDialog,
+    rebind_pending_saved_sources,
+)
 from mycad.ui.start_page import StartPage
 from mycad.ui.theme import ThemeName, apply_theme
 from mycad.ui.unsaved_documents_dialog import UnsavedDocumentsDialog
@@ -138,7 +218,13 @@ from mycad.ui.viewport import (
     ViewOrientation,
 )
 from mycad.ui.workplane_position import WorkplanePositionDialog
-from mycad.ui.workspace_console import AiChatPanel, InformationPanel, MessageLabel, WorkspaceConsole
+from mycad.ui.workspace_console import (
+    AiChatPanel,
+    InformationPanel,
+    MessageLabel,
+    WorkspaceConsole,
+    drawing_message,
+)
 from mycad.ui.workspace_layout import WorkspaceLayoutStore
 from mycad.ui.workspace_tabs import WorkspaceId, WorkspaceTabs
 
@@ -160,8 +246,55 @@ SETTINGS_KEY_THEME = "appearance/theme"
 SETTINGS_KEY_TOOLBAR_AREA = "toolbar/preferredArea"
 SETTINGS_KEY_DOCUMENT_DIRECTORY = "documents/lastDirectory"
 SETTINGS_KEY_COPY_MODE = "drawing2d/copyMode"
+SETTINGS_KEY_EDGE_MODE = "drawing2d/edgeMode"
+SETTINGS_KEY_OFFSET_GAP_TYPE = "drawing2d/offsetGapType"
+SETTINGS_KEY_CORNER_TRIM = "drawing2d/cornerTrim"
+SETTINGS_KEY_TRIM_STANDARD = "drawing2d/trimStandard"
+SETTINGS_KEY_PROJECTION_MODE = "drawing2d/projectionMode"
 
 APP_VERSION = "0.1.0"
+
+
+def _staged_committed_tangencies(
+    original: tuple[Sketch, ...],
+    relations: tuple[CrossSketchTangency, ...],
+    steps: Sequence[tuple[tuple[Sketch, ...], tuple[RectangleTransformEvidence, ...]]],
+) -> tuple[CrossSketchTangency, ...]:
+    previous = original
+    for saved, transforms in steps:
+        surviving = {
+            (sketch.sketch_id, entity.entity_id) for sketch in saved for entity in sketch.entities
+        }
+        relevant_transforms = tuple(
+            item
+            for item in transforms
+            if item.reference.sketch_id in {sketch.sketch_id for sketch in saved}
+        )
+        rectangle_proofs, polyline_proofs, line_proofs = split_transform_evidence(
+            previous, relevant_transforms
+        )
+        relations = rebind_committed_tangencies(
+            previous,
+            saved,
+            tuple(
+                relation
+                for relation in relations
+                if all(
+                    (ref.sketch_id, ref.entity_id) in surviving
+                    for ref in (relation.first, relation.second)
+                )
+            ),
+            rectangle_proofs,
+            polyline_proofs,
+            line_proofs,
+            allow_extended_segments=True,
+            allow_extended_arcs=True,
+            allow_retained_tangent_arcs=True,
+            allow_retained_tangent_lines=True,
+            allow_retained_tangent_fragments=True,
+        )
+        previous = saved
+    return relations
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +307,43 @@ class _SketchConstraintPreview:
     solve_result: SketchConstraintSolveResult
     viewport: ViewportData | None = None
     sketches: tuple[ViewportSketchData, ...] = ()
+    linked_sketches: tuple[Sketch, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _MixedHandleContext:
+    previous: MixedMoveState | None
+    original_saved: tuple[Sketch, ...]
+    current_saved: tuple[Sketch, ...]
+    original_draft: Sketch
+    draft: Sketch
+    background: tuple[tuple[SketchEntity, SketchLayer], ...]
+    pairs: tuple[DraftTangentPair, ...]
+    history: tuple[tuple[tuple[Sketch, ...], Sketch, tuple[DraftTangentPair, ...]], ...]
+    history_position: int
+    arrays: tuple[AssociativeRectArray, ...]
+    array_history: tuple[tuple[AssociativeRectArray, ...], ...]
+    transform_history: tuple[tuple[RectangleTransformEvidence, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _DraftTangencyPreview:
+    relation: CrossSketchTangency
+    context: _MixedHandleContext
+    state: MixedMoveState
+    solved_draft: Sketch
+    pair: DraftTangentPair
+    revision: int
+
+
+@dataclass
+class _PreparedSketchSave:
+    entry: SessionDocument
+    loaded: LoadedDocument
+    draft: SketchEditorDialog
+    checkpoint: str
+    source_revision: int
+    prepared_revision: int
 
 
 #: UI draft §3, menu order and titles verbatim — pinned by tests/ui.
@@ -264,9 +434,12 @@ class MainWindow(QMainWindow):
         self._session_close_waiting = False
         self.execution_unit: SerializedExecutionUnit | None = None
         self._session_id = 0
+        self._offset_default_distance = -1.0
+        self._chamfer_method_angle = False
         self._busy_action_states: dict[QAction, bool] = {}
         self._loaded: LoadedDocument | None = None
         self._sketch_dialog: SketchEditorDialog | None = None
+        self._mixed_history_pending = False
         self.part_sketch_task: PartSketchWorkbench | None = None
         self._preferred_part_sketch: tuple[LoadedDocument, str] | None = None
         self._preferred_part_region: tuple[LoadedDocument, str, tuple[str, ...]] | None = None
@@ -281,6 +454,7 @@ class MainWindow(QMainWindow):
         self._history_discard_timer.setSingleShot(True)
         self._history_discard_timer.timeout.connect(self._flush_history_discards)
         self._after_sketch_commit: Callable[[], None] | None = None
+        self._prepared_sketch_save: _PreparedSketchSave | None = None
         self._after_sketch_failure: Callable[[], None] | None = None
         self.new_document_dialog: NewDocumentDialog | None = None
         self._sketch_dock_visibility: tuple[bool, bool] | None = None
@@ -288,6 +462,12 @@ class MainWindow(QMainWindow):
         self._modeling_toolbar_was_visible = False
         self._sketch_constraint_dialog: SketchConstraintDialog | None = None
         self._sketch_constraint_preview_revision: int | None = None
+        self._cross_tangency_dialog: CrossSketchTangencyDialog | None = None
+        self._cross_tangency_preview: (
+            tuple[CrossSketchTangency, tuple[Sketch, ...], tuple[Sketch, ...], int]
+            | _DraftTangencyPreview
+            | None
+        ) = None
         self._document_path: Path | None = None
         self._bus: CommandBus | None = None
         self._active_modeling_command: str | None = None
@@ -473,6 +653,8 @@ class MainWindow(QMainWindow):
             ("file.export", self.act_export),
             ("edit.undo", self.act_undo),
             ("edit.redo", self.act_redo),
+            ("edit.copy", self.act_copy),
+            ("edit.paste", self.act_paste),
             ("edit.delete", self.act_delete),
             ("ui.view.fit", self.act_fit_view),
             ("ui.view.current-model", self.act_return_current_model),
@@ -687,6 +869,10 @@ class MainWindow(QMainWindow):
             self.bottom_tabs.currentChanged.connect(self._console_state_changed)
         self._set_workspace_environment("home" if self.document_session is not None else "part")
         self.restore_window_state()
+        self._sync_session_document_actions()
+        if self.document_session is not None:
+            self._sync_workspace_actions()
+        QApplication.clipboard().dataChanged.connect(self._sync_drawing_clipboard_actions)
         if self.document_session is not None:
             self.document_saver = DocumentSaveController(
                 self.document_session,
@@ -694,6 +880,7 @@ class MainWindow(QMainWindow):
                 choose_path=self._choose_session_save_path,
                 changed=self._session_save_changed,
                 report=self._report_session_save,
+                settle=self._settle_session_save,
             )
             document_menu = self.menuBar().addMenu("文档")
             actions: tuple[tuple[str, Callable[[], object]], ...] = (
@@ -768,9 +955,25 @@ class MainWindow(QMainWindow):
         self._set_action_shortcut(self.act_undo, QKeySequence(QKeySequence.StandardKey.Undo))
         self.act_undo.triggered.connect(self.request_undo)
         self.act_redo = self.menu_edit.addAction("重做")
-        self._set_action_shortcut(self.act_redo, QKeySequence(QKeySequence.StandardKey.Redo))
+        redo_shortcut = QKeySequence("Ctrl+Y")
+        self._set_action_shortcut(self.act_redo, redo_shortcut)
+        platform_redo = QKeySequence(QKeySequence.StandardKey.Redo)
+        if platform_redo != redo_shortcut:
+            self.act_redo.setShortcuts([redo_shortcut, platform_redo])
         self.act_redo.triggered.connect(self.request_redo)
+        self.act_copy = self.menu_edit.addAction("复制")
+        self._set_action_shortcut(self.act_copy, QKeySequence(QKeySequence.StandardKey.Copy))
+        self.act_copy.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.act_copy.triggered.connect(self._copy_drawing_selection)
+        self.act_paste = self.menu_edit.addAction("粘贴")
+        self._set_action_shortcut(self.act_paste, QKeySequence(QKeySequence.StandardKey.Paste))
+        self.act_paste.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.act_paste.triggered.connect(self._paste_drawing_selection)
+        self.menu_edit.aboutToShow.connect(self._sync_drawing_clipboard_actions)
+        self.act_copy.setEnabled(False)
+        self.act_paste.setEnabled(False)
         self.act_delete = self.menu_edit.addAction("删除")
+        self.act_delete.triggered.connect(self._delete_drawing_selection)
         self.selection_filter_menu: QMenu = self.menu_edit.addMenu("选择过滤器")
         self.act_select_filter = self.selection_filter_menu.menuAction()
         self.selection_filter_group = QActionGroup(self)
@@ -971,12 +1174,59 @@ class MainWindow(QMainWindow):
         self.act_sketch_constraints.setEnabled(self._services is not None)
         self.act_sketch_constraints.setToolTip("为已有草图预览并确认参数化约束。")
         self.act_sketch_constraints.triggered.connect(self._on_sketch_constraints)
+        self.act_cross_sketch_tangency = self.menu_feature.addAction("对象相切")
+        self.act_cross_sketch_tangency.setEnabled(self._services is not None)
+        self.act_cross_sketch_tangency.triggered.connect(self._on_cross_sketch_tangency)
+        self.act_manage_tangencies = self.menu_feature.addAction("相切选项")
+        self.act_manage_tangencies.setEnabled(self._services is not None)
+        self.act_manage_tangencies.setToolTip("通过列表预览对象相切并查看可用关系。")
+        self.act_manage_tangencies.triggered.connect(
+            lambda: self._on_cross_sketch_tangency(force_dialog=True)
+        )
+        self.act_remove_associative_array = self.menu_feature.addAction("解除矩形阵列关联")
+        self.act_remove_associative_array.setEnabled(self._services is not None)
+        self.act_remove_associative_array.triggered.connect(self._remove_selected_associative_array)
+        self.act_edit_associative_array = self.menu_feature.addAction("修改矩形阵列间距")
+        self.act_edit_associative_array.setEnabled(self._services is not None)
+        self.act_edit_associative_array.triggered.connect(self._edit_selected_associative_array)
+        self.act_resize_associative_array = self.menu_feature.addAction("修改矩形阵列数量")
+        self.act_resize_associative_array.setEnabled(self._services is not None)
+        self.act_resize_associative_array.triggered.connect(self._resize_selected_associative_array)
+        self.act_rotate_associative_array = self.menu_feature.addAction("修改矩形阵列方向")
+        self.act_rotate_associative_array.setEnabled(self._services is not None)
+        self.act_rotate_associative_array.triggered.connect(self._rotate_selected_associative_array)
+        self.act_base_associative_array = self.menu_feature.addAction("修改矩形阵列基点")
+        self.act_base_associative_array.setEnabled(self._services is not None)
+        self.act_base_associative_array.triggered.connect(self._base_selected_associative_array)
+        self.act_offset_associative_member = self.menu_feature.addAction("修改阵列成员位置偏移")
+        self.act_offset_associative_member.setEnabled(self._services is not None)
+        self.act_offset_associative_member.triggered.connect(
+            self._offset_selected_associative_member
+        )
+        self.act_rotate_associative_member = self.menu_feature.addAction("旋转阵列成员")
+        self.act_rotate_associative_member.setEnabled(self._services is not None)
+        self.act_rotate_associative_member.triggered.connect(self._rotate_associative_member)
+        self.act_replace_associative_member = self.menu_feature.addAction("替换阵列成员")
+        self.act_replace_associative_member.setEnabled(self._services is not None)
+        self.act_replace_associative_member.triggered.connect(self._replace_associative_member)
+        self.act_replace_associative_cell = self.menu_feature.addAction("替换阵列单元")
+        self.act_replace_associative_cell.setEnabled(self._services is not None)
+        self.act_replace_associative_cell.triggered.connect(self._replace_associative_cell_members)
+        self.act_reset_associative_offsets = self.menu_feature.addAction("重置阵列成员位置偏移")
+        self.act_reset_associative_offsets.setEnabled(self._services is not None)
+        self.act_reset_associative_offsets.triggered.connect(self._reset_associative_offsets)
+        self.act_reset_associative_overrides = self.menu_feature.addAction("重置阵列成员覆盖")
+        self.act_reset_associative_overrides.setEnabled(self._services is not None)
+        self.act_reset_associative_overrides.triggered.connect(self._reset_associative_overrides)
 
         self.menu_tools = self.menuBar().addMenu("工具")
-        self.act_options = self.menu_tools.addAction("选项")
+        self.act_options = self.menu_tools.addAction("系统设置…")
         self.act_options.triggered.connect(self._show_options)
         self.act_units = self.menu_tools.addAction("单位")
         self.act_units.triggered.connect(self._show_units)
+        self.act_drawing_dimension_styles = self.menu_tools.addAction("标注样式…")
+        self.act_drawing_dimension_styles.setEnabled(False)
+        self.act_drawing_dimension_styles.triggered.connect(self._show_drawing_dimension_styles)
         self.act_measure = self.menu_tools.addAction("测量")
         self.act_measure.setEnabled(False)
         self.act_measure.triggered.connect(self._show_measure_panel)
@@ -1396,6 +1646,9 @@ class MainWindow(QMainWindow):
             self.part_sketch_task.select_tool(tool)
 
     def _on_sketch_start(self, _checked: bool = False) -> None:
+        if self._prepared_sketch_save is not None:
+            self.status_command.setText("保存恢复尚未完成；原草稿已保留，请先处理保存错误。")
+            return
         if self.execution_unit is not None and (
             self.execution_unit.is_busy or self.execution_unit.is_notifying_result
         ):
@@ -1473,8 +1726,16 @@ class MainWindow(QMainWindow):
             self._show_part_sketch_command_bar(task)
             return
         if self._sketch_dialog is not None:
+            if self._sketch_dialog.canvas.select_committed_entities:
+                self._sketch_dialog.canvas.set_crosshair_style(
+                    drawing_cursor_style(QSettings(ORG_NAME, APP_NAME))
+                )
+                self._sketch_dialog.canvas.set_constraint_markers_visible(
+                    drawing_constraint_markers_visible(QSettings(ORG_NAME, APP_NAME))
+                )
             self._show_sketch_workbench(self._sketch_dialog)
             return
+        sketch_document = self._loaded.document
         dialog = SketchEditorDialog(
             self,
             can_finish=lambda: (
@@ -1484,9 +1745,450 @@ class MainWindow(QMainWindow):
             drag_preview=self._services.kernel.preview_sketch_drag,
             continuous_lines=True,
             select_committed_entities=self._loaded.document.document_type == "drawing2d",
+            document_metadata=(lambda: sketch_document.metadata)
+            if sketch_document.document_type == "drawing2d"
+            else None,
             constraint_preview=self._services.kernel.preview_sketch_constraint,
             constraint_update_preview=self._services.kernel.preview_sketch_constraint_update,
+            measure_planar_region=self._services.kernel.measure_planar_region,
         )
+        if self._loaded.document.document_type == "drawing2d":
+            dialog.canvas.set_drawing_theme(self._theme_name)
+            dialog.canvas.set_crosshair_style(drawing_cursor_style(QSettings(ORG_NAME, APP_NAME)))
+            dialog.canvas.set_constraint_markers_visible(
+                drawing_constraint_markers_visible(QSettings(ORG_NAME, APP_NAME))
+            )
+            radius_document = self._loaded
+            radius_services = self._services
+            dialog.canvas.drawing_dimension_styles = radius_services.kernel.drawing_dimension_styles
+            dialog.dimensions.set_drawing_style_manager(
+                lambda: self._open_drawing_dimension_styles(dialog)
+            )
+            if any(
+                command.id == "drawing.dimension_styles.set" or "clipboard_styles" in command.params
+                for command in radius_document.document.commands
+            ):
+                dialog.dimensions.set_drawing_style(
+                    radius_services.kernel.drawing_dimension_styles.current
+                )
+            dialog.canvas.circle_fillet_radius = radius_services.kernel.drawing_fillet_radius
+            dialog.canvas.sync_chamfer_values(radius_services.kernel.drawing_chamfer_values)
+
+            def persist_fillet_radius(radius: float) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；圆角半径未修改。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；圆角半径未修改。")
+                try:
+                    radius_document.bus.execute(
+                        "drawing.fillet_radius.set", {"radius": radius}, "local", version=1
+                    )
+                except MycadError as exc:
+                    raise ValueError(f"圆角半径保存失败：{exc}") from exc
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+
+            dialog.canvas.persist_fillet_radius = persist_fillet_radius
+
+            def persist_chamfer_values(values: tuple[float, float, float, float]) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；倒角参数未修改。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；倒角参数未修改。")
+                try:
+                    radius_document.bus.execute(
+                        "drawing.chamfer_values.set",
+                        dict(
+                            zip(
+                                ("distance_first", "distance_second", "angle_length", "angle"),
+                                values,
+                                strict=True,
+                            )
+                        ),
+                        "local",
+                        version=1,
+                    )
+                except MycadError as exc:
+                    raise ValueError(f"倒角参数保存失败：{exc}") from exc
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+
+            dialog.canvas.persist_chamfer_values = persist_chamfer_values
+
+            def import_clipboard_layers(
+                layers: SketchLayerTable, styles: DimensionStyleTable | None
+            ) -> Callable[[bool], None]:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；剪贴板图层未导入。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；请稍后粘贴。")
+                checkpoint = radius_document.bus.create_save_checkpoint()
+                position = dialog.canvas.history_position
+                source_revision = radius_document.document.revision
+                try:
+                    params: dict[str, object] = {
+                        "layers": layers.to_mapping(),
+                        "dimension_layer": radius_services.kernel.dimension_layer,
+                        "assignments": [],
+                    }
+                    command = "drawing.layers.set"
+                    if (
+                        styles is not None
+                        and styles != radius_services.kernel.drawing_dimension_styles
+                    ):
+                        command = "drawing.clipboard.prepare"
+                        params["clipboard_styles"] = styles.to_mapping()
+                    if (
+                        command == "drawing.clipboard.prepare"
+                        and radius_document.document.archive_version < 8
+                    ):
+                        candidate = mycad_app.create_replay_candidate(
+                            radius_services, radius_document, session_identity=self._session_id
+                        )
+                        candidate.stage(
+                            ReplayChangeSet(
+                                (), (ReplayAppend(command, 6, params, "local"),), False, 8
+                            ),
+                            current_session_identity=self._session_id,
+                        )
+                        preview = candidate.preview(current_session_identity=self._session_id)
+                        if preview.state != "succeeded":
+                            raise ValueError(str(preview.failure or "剪贴板图层及样式预览失败"))
+                        candidate.commit(
+                            candidate.authorize_commit(current_session_identity=self._session_id),
+                            current_session_identity=self._session_id,
+                        )
+                    else:
+                        radius_document.bus.execute(
+                            command,
+                            params,
+                            "local",
+                            version=6 if command == "drawing.clipboard.prepare" else 1,
+                        )
+                except (MycadError, ValueError) as exc:
+                    radius_document.bus.release_save_checkpoint(checkpoint)
+                    raise ValueError(f"无法导入剪贴板图层：{exc}") from exc
+                revision = radius_document.document.revision
+                dialog.canvas.acknowledge_fillet_setting_revision(source_revision, revision)
+                self._sync_drawing_layers()
+
+                def finish(accepted: bool) -> None:
+                    if accepted:
+                        dialog.canvas.rebase_mixed_layers(radius_services.kernel.sketches, layers)
+                        radius_document.bus.release_save_checkpoint(checkpoint)
+                        count = radius_document.document.command_count
+                        dialog.layer_history_boundaries[count] = dialog.canvas.history_position
+                        dialog.mixed_draft_history[count] = (
+                            position,
+                            dialog.canvas.history_position,
+                            radius_document.document.commands[-1].instance_id,
+                        )
+                        dialog.layer_history_redo.clear()
+                        dialog.canvas.discard_redo_history()
+                    else:
+                        radius_document.bus.restore_save_checkpoint(
+                            checkpoint, expected_revision=revision
+                        )
+                        dialog.canvas.acknowledge_fillet_setting_revision(
+                            revision, radius_document.document.revision
+                        )
+                        self._sync_drawing_layers()
+
+                return finish
+
+            dialog.canvas.import_clipboard_layers = import_clipboard_layers
+
+            def commit_clipboard_raster(raster: DrawingRaster) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；图片未粘贴。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；请稍后粘贴。")
+                mixed = dialog.canvas.mixed_move
+                if mixed is not None and (
+                    not dialog.canvas.mixed_move_is_valid
+                    or mixed.source_revision != radius_document.document.revision
+                ):
+                    raise ValueError("暂存编辑已过期；请先撤销后再粘贴图片。")
+                previous_revision = radius_document.document.revision
+                try:
+                    radius_document.bus.execute(
+                        "drawing.raster.add", raster.to_mapping(version=2), "local", version=2
+                    )
+                except MycadError as exc:
+                    raise ValueError(f"无法粘贴图片：{exc}") from exc
+                if mixed is not None:
+                    dialog.canvas.rebind_restored_source(
+                        previous_revision, radius_document.document.revision
+                    )
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+                self._sync_drawing_layers()
+
+            dialog.canvas.commit_clipboard_raster = commit_clipboard_raster
+
+            def commit_mixed_clipboard(
+                sketch: Sketch,
+                images: tuple[DrawingRaster, ...],
+                styles: DimensionStyleTable | None,
+            ) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；对象未粘贴。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；请稍后粘贴。")
+                if (
+                    dialog.canvas.mixed_move is not None
+                    or dialog.canvas.pending_cross_tangencies
+                    or dialog.canvas.pending_associative_arrays
+                ):
+                    raise ValueError("请先完成或撤销当前暂存关联编辑。")
+                names = {entity.layer_name for entity in sketch.entities}
+                names.update(image.layer_name for image in images)
+                names.update(c.layer_name for c in sketch.constraints if c.layer_name is not None)
+                for name in names:
+                    try:
+                        layer = radius_services.kernel.drawing_layers.get(name)
+                    except KeyError:
+                        layer = sketch.layers.get(name)
+                    if layer.locked or not layer.displayed:
+                        raise ValueError(f"目标图层 {name} 隐藏或已锁定。")
+                params = replace(sketch, frame=dialog.current_frame()).to_state_mapping()
+                params["raster_batch"] = {
+                    "action": "add",
+                    "images": [image.to_mapping(version=2) for image in images],
+                }
+                if styles is not None and styles != radius_services.kernel.drawing_dimension_styles:
+                    params["clipboard_styles"] = styles.to_mapping()
+                version = (
+                    44
+                    if "clipboard_styles" in params
+                    else 33
+                    if any(c.style_name is not None for c in sketch.constraints)
+                    else 31
+                    if any(c.text_override is not None for c in sketch.constraints)
+                    else 29
+                )
+                try:
+                    if radius_document.document.archive_version < 8:
+                        candidate = mycad_app.create_replay_candidate(
+                            radius_services, radius_document, session_identity=self._session_id
+                        )
+                        candidate.stage(
+                            ReplayChangeSet(
+                                (),
+                                (ReplayAppend("sketch.create", version, params, "local"),),
+                                False,
+                                8,
+                            ),
+                            current_session_identity=self._session_id,
+                        )
+                        preview = candidate.preview(current_session_identity=self._session_id)
+                        if preview.state != "succeeded":
+                            raise ValueError(str(preview.failure or "剪贴板对象预览失败"))
+                        candidate.commit(
+                            candidate.authorize_commit(current_session_identity=self._session_id),
+                            current_session_identity=self._session_id,
+                        )
+                    else:
+                        radius_document.bus.execute(
+                            "sketch.create", params, "local", version=version
+                        )
+                except (MycadError, ValueError) as exc:
+                    raise ValueError(f"无法粘贴对象：{exc}") from exc
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+                self._sync_drawing_layers()
+
+            dialog.canvas.commit_mixed_clipboard = commit_mixed_clipboard
+
+            def ensure_raster_source_current(action: str) -> None:
+                revision = dialog.canvas.source_context_revision
+                if (
+                    action != "add"
+                    and revision is not None
+                    and revision != radius_document.document.revision
+                ):
+                    self._sync_drawing_layers()
+                    raise ValueError("图纸已变化，请重新选择图片。")
+
+            def commit_raster_edit(action: str, raster: DrawingRaster) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；图片未修改。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；请稍后重试。")
+                if dialog.canvas.mixed_move is not None:
+                    raise ValueError("请先完成或撤销当前暂存编辑。")
+                ensure_raster_source_current(action)
+                layer = dialog.canvas.layer_table.get(raster.layer_name)
+                if layer.locked or not layer.displayed:
+                    raise ValueError("图片所在图层已锁定或隐藏。")
+                params = (
+                    {"image_id": raster.image_id}
+                    if action == "remove"
+                    else raster.to_mapping(version=2)
+                )
+                try:
+                    radius_document.bus.execute(
+                        f"drawing.raster.{action}",
+                        params,
+                        "local",
+                        version=1 if action == "remove" else 2,
+                    )
+                except MycadError as exc:
+                    raise ValueError(f"无法修改图片：{exc}") from exc
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+                self._sync_drawing_layers()
+
+            dialog.canvas.commit_raster_edit = commit_raster_edit
+
+            def commit_raster_batch(action: str, rasters: tuple[DrawingRaster, ...]) -> None:
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    raise ValueError("图纸已切换；图片未修改。")
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    raise ValueError("应用正在执行其他命令；请稍后重试。")
+                if dialog.canvas.mixed_move is not None:
+                    raise ValueError("请先完成或撤销当前暂存编辑。")
+                ensure_raster_source_current(action)
+                if not rasters:
+                    raise ValueError("没有选择图片。")
+                for raster in rasters:
+                    layer = dialog.canvas.layer_table.get(raster.layer_name)
+                    if layer.locked or not layer.displayed:
+                        raise ValueError("图片所在图层已锁定或隐藏。")
+                params = (
+                    {"action": action, "image_ids": [item.image_id for item in rasters]}
+                    if action == "remove"
+                    else {
+                        "action": action,
+                        "images": [item.to_mapping(version=2) for item in rasters],
+                    }
+                )
+                try:
+                    radius_document.bus.execute("drawing.raster.batch", params, "local", version=1)
+                except MycadError as exc:
+                    raise ValueError(f"无法修改图片：{exc}") from exc
+                dialog.layer_history_boundaries[radius_document.document.command_count] = (
+                    dialog.canvas.history_position
+                )
+                dialog.layer_history_redo.clear()
+                dialog.canvas.discard_redo_history()
+                self._sync_drawing_layers()
+
+            dialog.canvas.commit_raster_batch = commit_raster_batch
+
+            def commit_mixed_draft_transform(
+                entities: tuple[SketchEntity, ...], images: tuple[DrawingRaster, ...], action: str
+            ) -> str | None:
+                canvas = dialog.canvas
+                if self._loaded is not radius_document or self._services is not radius_services:
+                    canvas.message = "图纸已切换；对象未修改。"
+                    canvas.changed.emit()
+                    return None
+                unit = self.execution_unit
+                if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                    canvas.message = "应用正在执行其他命令；请稍后重试。"
+                    canvas.changed.emit()
+                    return None
+                preserves_pending = action == "add" and canvas.draft_copy_preserves_sources(
+                    entities
+                )
+                if canvas.mixed_move or (
+                    (canvas.pending_cross_tangencies or canvas.pending_associative_arrays)
+                    and not preserves_pending
+                ):
+                    canvas.message = "请先完成或撤销当前暂存关联编辑。"
+                    canvas.changed.emit()
+                    return None
+                if canvas.source_context_revision != radius_document.document.revision:
+                    canvas.message = "图纸已变化；请重新选择对象。"
+                    canvas.changed.emit()
+                    return None
+                for image in images:
+                    layer = canvas.layer_table.get(image.layer_name)
+                    if layer.locked or not layer.displayed:
+                        canvas.message = "图片所在图层隐藏或锁定。"
+                        canvas.changed.emit()
+                        return None
+                checkpoint = radius_document.bus.create_save_checkpoint()
+                before = canvas.history_position
+                previous_layer_redo = list(dialog.layer_history_redo)
+                try:
+                    radius_document.bus.execute(
+                        "drawing.raster.batch",
+                        (
+                            {"action": action, "image_ids": [image.image_id for image in images]}
+                            if action == "remove"
+                            else {
+                                "action": action,
+                                "images": [image.to_mapping(version=2) for image in images],
+                            }
+                        ),
+                        "local",
+                        version=1,
+                    )
+                except MycadError as exc:
+                    radius_document.bus.release_save_checkpoint(checkpoint)
+                    canvas.message = f"变换失败：{exc}"
+                    canvas.changed.emit()
+                    return None
+                revision = radius_document.document.revision
+                try:
+                    applied = canvas.replace_draft_entities_atomically(
+                        entities,
+                        remove_dependent_constraints=action == "remove",
+                        allow_satisfied_tangency=(
+                            action == "update" and canvas.selected_user_tangencies_transformable()
+                        ),
+                    )
+                    failure = canvas.message
+                except Exception as exc:
+                    applied = False
+                    failure = f"草稿更新失败：{exc}"
+                if not applied:
+                    dialog.layer_history_redo[:] = previous_layer_redo
+                    radius_document.bus.restore_save_checkpoint(
+                        checkpoint, expected_revision=revision
+                    )
+                    canvas.cancel_transform()
+                    self._sync_drawing_layers()
+                    canvas.message = f"{failure}；操作已回滚。"
+                    canvas.changed.emit()
+                    return None
+                radius_document.bus.release_save_checkpoint(checkpoint)
+                count = radius_document.document.command_count
+                dialog.layer_history_boundaries[count] = canvas.history_position
+                dialog.mixed_draft_history[count] = (
+                    before,
+                    canvas.history_position,
+                    radius_document.document.commands[-1].instance_id,
+                )
+                dialog.layer_history_redo.clear()
+                self._sync_drawing_layers()
+                return radius_document.document.commands[-1].instance_id
+
+            dialog.canvas.commit_mixed_draft_transform = commit_mixed_draft_transform
         dialog.toolbar_host.statusBar().hide()
         dialog.status_label.text_changed.connect(partial(self._on_drafting_message, dialog, False))
         dialog.status_label.transient_changed.connect(
@@ -1494,7 +2196,40 @@ class MainWindow(QMainWindow):
         )
         dialog.document_layer_mode = True
         source_document = self._loaded.document
+        array_services = self._services
         dialog.canvas.source_revision_provider = lambda: source_document.revision
+        dialog.canvas.associative_arrays_provider = lambda: array_services.kernel.associative_arrays
+        dialog.canvas.associative_sketches_provider = lambda: array_services.kernel.sketches
+        dialog.canvas.associative_tangencies_provider = lambda: (
+            array_services.kernel.cross_sketch_tangencies
+        )
+
+        def array_spacing_commit(
+            token: object, array: object, row: object, column: object, revision: object
+        ) -> None:
+            self._on_array_spacing_grip_commit(
+                dialog, self._session_id, token, array, row, column, revision
+            )
+
+        dialog.canvas.array_spacing_commit_requested.connect(array_spacing_commit)
+
+        def array_count_commit(
+            token: object, array: object, resized: object, revision: object
+        ) -> None:
+            self._on_array_count_grip_commit(
+                dialog, self._session_id, token, array, resized, revision
+            )
+
+        dialog.canvas.array_count_commit_requested.connect(array_count_commit)
+
+        def array_move_commit(
+            token: object, array: object, displacement: object, revision: object
+        ) -> None:
+            self._on_array_move_grip_commit(
+                dialog, self._session_id, token, array, displacement, revision
+            )
+
+        dialog.canvas.array_move_commit_requested.connect(array_move_commit)
         dialog.canvas.source_revision_invalidated.connect(
             lambda: self._sync_drawing_layers() if self._sketch_dialog is dialog else None
         )
@@ -1506,15 +2241,80 @@ class MainWindow(QMainWindow):
 
         dialog.canvas.committed_move_requested.connect(committed_move)
 
+        def committed_mixed_copy(ids: object, delta: object) -> None:
+            self._on_drawing_move(dialog, self._session_id, ids, delta, copy_source=True)
+
+        dialog.canvas.committed_mixed_copy_requested.connect(committed_mixed_copy)
+
+        def committed_mixed_copy_array(ids: object, delta: object, count: int) -> None:
+            self._on_drawing_move(
+                dialog, self._session_id, ids, delta, copy_source=True, copy_count=count
+            )
+
+        dialog.canvas.committed_mixed_copy_array_requested.connect(committed_mixed_copy_array)
+
+        def saved_handle_preview(
+            token: object, reference: object, point: object, revision: object
+        ) -> None:
+            self._on_saved_handle_preview(
+                dialog, self._session_id, token, reference, point, revision
+            )
+
+        def saved_handle_commit(token: object, preview: object, revision: object) -> None:
+            self._on_saved_handle_commit(dialog, self._session_id, token, preview, revision)
+
+        dialog.canvas.saved_handle_preview_requested.connect(saved_handle_preview)
+        dialog.canvas.saved_handle_commit_requested.connect(saved_handle_commit)
+
+        def saved_handle_cancelled() -> None:
+            if (
+                self.execution_unit is not None
+                and self.execution_unit.is_busy
+                and self.execution_unit.operation in ("saved-handle-preview", "saved-handle-commit")
+            ):
+                dialog.setEnabled(False)
+
+        dialog.canvas.saved_handle_cancelled.connect(saved_handle_cancelled)
+        dialog.canvas.mixed_handle_drag_enabled = True
+
         def committed_delete(ids: object) -> None:
             self._on_drawing_move(dialog, self._session_id, ids, (0.0, 0.0), erase=True)
 
         dialog.canvas.committed_delete_requested.connect(committed_delete)
 
+        def committed_dimension_delete(ids: object) -> None:
+            self._on_delete_drawing_dimensions(dialog, self._session_id, ids)
+
+        dialog.canvas.committed_dimension_delete_requested.connect(committed_dimension_delete)
+
         def committed_line_edit(mode: object, identity: object, edited: object) -> None:
             self._on_saved_line_edit(dialog, self._session_id, mode, identity, edited)
 
         dialog.canvas.committed_line_edit_requested.connect(committed_line_edit)
+
+        def selected_tangency_objects() -> None:
+            if self._sketch_dialog is dialog:
+                self._on_cross_sketch_tangency()
+
+        dialog.canvas.object_tangency_selection_ready.connect(selected_tangency_objects)
+
+        def open_tangency_options() -> None:
+            if self._sketch_dialog is dialog:
+                self._on_cross_sketch_tangency(force_dialog=True)
+
+        dialog.canvas.object_tangency_options_requested.connect(open_tangency_options)
+
+        def undo_saved_line_edit(identity: str, position: int, revision: int) -> None:
+            self._undo_saved_line_edit(dialog, self._session_id, identity, position, revision)
+
+        dialog.canvas.saved_line_edit_undo_requested.connect(undo_saved_line_edit)
+
+        def undo_saved_mixed_copy(identity: str, position: int, revision: int) -> None:
+            self._undo_saved_line_edit(
+                dialog, self._session_id, identity, position, revision, mixed_copy=True
+            )
+
+        dialog.canvas.saved_mixed_copy_undo_requested.connect(undo_saved_mixed_copy)
 
         def committed_drag_trim(
             events: object, draft: object, constraints: object, background: object, revision: object
@@ -1532,7 +2332,44 @@ class MainWindow(QMainWindow):
 
         dialog.canvas.committed_rotation_requested.connect(committed_rotation)
 
-        def committed_mirror(ids: object, start: object, end: object) -> None:
+        def committed_rotation_copy(ids: object, center: object, angle: object) -> None:
+            if not isinstance(angle, int | float) or not isfinite(angle):
+                return
+            self._on_drawing_move(
+                dialog, self._session_id, ids, center, angle=float(angle), copy_source=True
+            )
+
+        dialog.canvas.committed_rotation_copy_requested.connect(committed_rotation_copy)
+
+        def committed_scale(ids: object, center: object, factor: object) -> None:
+            if (
+                not isinstance(factor, int | float)
+                or isinstance(factor, bool)
+                or not isfinite(factor)
+                or factor <= 0
+            ):
+                return
+            self._on_drawing_move(dialog, self._session_id, ids, center, scale=float(factor))
+
+        dialog.canvas.committed_scale_requested.connect(committed_scale)
+
+        def committed_scale_copy(ids: object, center: object, factor: object) -> None:
+            if (
+                not isinstance(factor, int | float)
+                or isinstance(factor, bool)
+                or not isfinite(factor)
+                or factor <= 0
+            ):
+                return
+            self._on_drawing_move(
+                dialog, self._session_id, ids, center, scale=float(factor), copy_source=True
+            )
+
+        dialog.canvas.committed_scale_copy_requested.connect(committed_scale_copy)
+
+        def committed_mirror(
+            ids: object, start: object, end: object, *, copy_source: bool = False
+        ) -> None:
             if not isinstance(end, tuple):
                 return
             raw_end = cast("tuple[object, ...]", end)
@@ -1541,20 +2378,104 @@ class MainWindow(QMainWindow):
             ):
                 return
             self._on_drawing_move(
-                dialog, self._session_id, ids, start, mirror_end=cast("tuple[float, float]", end)
+                dialog,
+                self._session_id,
+                ids,
+                start,
+                mirror_end=cast("tuple[float, float]", end),
+                copy_source=copy_source,
             )
 
         dialog.canvas.committed_mirror_requested.connect(committed_mirror)
+
+        def committed_mirror_copy(ids: object, start: object, end: object) -> None:
+            committed_mirror(ids, start, end, copy_source=True)
+
+        dialog.canvas.committed_mirror_copy_requested.connect(committed_mirror_copy)
 
         def store_copy_mode(mode: int) -> None:
             QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_COPY_MODE, mode)
 
         dialog.canvas.copy_mode_changed.connect(store_copy_mode)
 
+        def store_offset_distance(value: float) -> None:
+            self._offset_default_distance = value
+
+        dialog.canvas.offset_default_distance_changed.connect(store_offset_distance)
+
+        def store_offset_gap_type(value: int) -> None:
+            QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_OFFSET_GAP_TYPE, value)
+
+        dialog.canvas.offset_gap_type_changed.connect(store_offset_gap_type)
+
+        def store_corner_trim(trim: bool) -> None:
+            QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_CORNER_TRIM, int(trim))
+            if self.document_session is not None:
+                for entry in self.document_session.documents:
+                    if entry.draft is not None and entry.draft is not dialog:
+                        entry.draft.canvas.set_corner_trim(trim, notify=False)
+
+        dialog.canvas.corner_trim_changed.connect(store_corner_trim)
+
+        def store_chamfer_method(angle_method: bool) -> None:
+            self._chamfer_method_angle = angle_method
+            if self.document_session is not None:
+                for entry in self.document_session.documents:
+                    if entry.draft is not None and entry.draft is not dialog:
+                        entry.draft.canvas.set_chamfer_method(angle_method, notify=False)
+
+        dialog.canvas.chamfer_method_changed.connect(store_chamfer_method)
+
+        def store_edge_mode(extend: bool) -> None:
+            QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_EDGE_MODE, int(extend))
+
+        dialog.canvas.line_edge_mode_changed.connect(store_edge_mode)
+
+        def store_trim_mode(standard: bool) -> None:
+            QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_TRIM_STANDARD, int(standard))
+
+        dialog.canvas.line_standard_mode_changed.connect(store_trim_mode)
+
+        def store_projection_mode(mode: int) -> None:
+            QSettings(ORG_NAME, APP_NAME).setValue(SETTINGS_KEY_PROJECTION_MODE, mode)
+
+        dialog.canvas.line_projection_mode_changed.connect(store_projection_mode)
+
         def layer_changed(payload: object) -> None:
             self._on_drawing_layer_update(dialog, self._session_id, payload)
 
         dialog.layer_change_requested.connect(layer_changed)
+
+        def assign_layer(raw_ids: object, layer_name: str) -> None:
+            if self._sketch_dialog is dialog:
+                self._on_drawing_assign_layer(dialog, self._session_id, raw_ids, layer_name)
+
+        dialog.assign_selection_layer_requested.connect(assign_layer)
+
+        def assign_construction(raw_ids: object, construction: bool) -> None:
+            if self._sketch_dialog is dialog:
+                self._on_drawing_assign_construction(
+                    dialog, self._session_id, raw_ids, construction
+                )
+
+        dialog.assign_selection_construction_requested.connect(assign_construction)
+
+        def activate_drawing_console() -> None:
+            if (
+                self._sketch_dialog is dialog
+                and self.active_workspace == "sketch"
+                and self.cli_tab is not None
+                and self.cli_tab.drawing_bar is dialog.drawing_command_bar
+            ):
+                self._show_console_page(self.cli_tab)
+
+        dialog.drawing_command_bar.activate_requested.connect(activate_drawing_console)
+
+        def show_drawing_options(panel: str) -> None:
+            if panel == "options" and self._sketch_dialog is dialog:
+                self._show_options()
+
+        dialog.drawing_command_bar.panel_requested.connect(show_drawing_options)
         dialog.set_document_layers(
             self._services.kernel.drawing_layers, self._services.kernel.dimension_layer
         )
@@ -1575,8 +2496,10 @@ class MainWindow(QMainWindow):
         dialog.restore_toolbar_layout(self._drafting_toolbar_state)
         dialog.set_toolbars_locked(self.act_lock_toolbar.isChecked())
         self._sketch_dialog = dialog
+        dialog.canvas.changed.connect(self._sync_drawing_clipboard_actions)
         dialog.plane_combo.currentTextChanged.connect(self._sync_camera_status)
         dialog.set_context_sketches(self._services.kernel.sketches)
+        dialog.canvas.set_drawing_rasters(self._services.kernel.drawing_rasters)
 
         def finished(result: int) -> None:
             self._on_sketch_editor_finished(dialog, self._session_id, result)
@@ -1677,6 +2600,8 @@ class MainWindow(QMainWindow):
                 else "part"
             )
             self._set_workspace_environment(environment)
+        if current != "sketch" and self.cli_tab is not None:
+            self.cli_tab.set_drawing_bar(None)
         self.part_sketch_entry_toolbar.setVisible(current == "model")
         if previous == "model" and current != "model" and self._sketch_dock_visibility is None:
             self._modeling_toolbar_was_visible = not self.modeling_toolbar.isHidden()
@@ -1709,7 +2634,83 @@ class MainWindow(QMainWindow):
             self.status_command.setText(self.drawing_workbench.hint.text())
         self._sync_camera_status()
 
+    def _drawing_clipboard_canvas(self) -> SketchCanvas | None:
+        editor = self.active_sketch_dialog()
+        if (
+            editor is None
+            or self.active_workspace != "sketch"
+            or not editor.canvas.select_committed_entities
+        ):
+            return None
+        return editor.canvas
+
+    def _sync_drawing_clipboard_actions(self) -> None:
+        canvas = self._drawing_clipboard_canvas()
+        ready = (
+            canvas is not None
+            and not canvas.has_active_edit_gesture
+            and not canvas.has_pending_geometry
+        )
+        self.act_copy.setEnabled(
+            bool(
+                ready
+                and canvas is not None
+                and (canvas.selected_entity_ids or canvas.selected_raster_id)
+            )
+        )
+        self.act_delete.setToolTip(
+            "删除所选二维对象" if canvas is not None else "当前版本不支持直接删除实体。"
+        )
+        self.act_delete.setEnabled(
+            bool(
+                ready
+                and canvas is not None
+                and (
+                    canvas.selected_entity_ids
+                    or canvas.selected_constraint_ids
+                    or canvas.selected_raster_id
+                )
+            )
+        )
+        mime = cast("QMimeData | None", QApplication.clipboard().mimeData())
+        self.act_paste.setEnabled(
+            bool(
+                ready
+                and mime is not None
+                and (
+                    mime.hasFormat(DRAWING_CLIPBOARD_MIME)
+                    or mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME)
+                    or mime.hasFormat(DRAWING_RASTER_GROUP_MIME)
+                    or mime.hasImage()
+                )
+            )
+        )
+
+    def _delete_drawing_selection(self) -> None:
+        canvas = self._drawing_clipboard_canvas()
+        if canvas is not None:
+            canvas.delete_selected()
+            canvas.setFocus()
+
+    def _copy_drawing_selection(self) -> None:
+        canvas = self._drawing_clipboard_canvas()
+        if canvas is not None:
+            canvas.copy_to_clipboard()
+            canvas.setFocus()
+
+    def _paste_drawing_selection(self) -> None:
+        canvas = self._drawing_clipboard_canvas()
+        if canvas is not None:
+            canvas.begin_clipboard_paste()
+            canvas.setFocus()
+
     def _sync_workspace_actions(self) -> None:
+        self._sync_drawing_clipboard_actions()
+        self.act_drawing_dimension_styles.setEnabled(
+            self.active_workspace == "sketch"
+            and self._loaded is not None
+            and self._loaded.document.document_type == "drawing2d"
+        )
         for action in (
             *self.orientation_actions.values(),
             *self.projection_actions.values(),
@@ -1722,6 +2723,23 @@ class MainWindow(QMainWindow):
                 and self._loaded is not None
                 and self._loaded.document.document_type == "part"
             )
+
+    def _sync_session_document_actions(self) -> None:
+        """Keep all shared entries consistent with the active session document."""
+        if self.document_session is None:
+            return
+        available = self._loaded is not None and self.document_session.active is not None
+        for action in (
+            self.act_close_document,
+            self.act_save,
+            self.act_save_as,
+            self.act_save_all,
+            self.act_import,
+            self.act_export,
+            self.act_undo,
+            self.act_redo,
+        ):
+            action.setEnabled(available)
 
     def _show_drawing2d_workspace(self, _checked: bool = False) -> None:
         if self.document_session is None and (
@@ -1746,8 +2764,27 @@ class MainWindow(QMainWindow):
         self._sync_camera_status()
 
     def _show_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
+        if dialog.canvas.select_committed_entities and self._services is not None:
+            dialog.canvas.circle_fillet_radius = self._services.kernel.drawing_fillet_radius
+            dialog.canvas.sync_chamfer_values(self._services.kernel.drawing_chamfer_values)
+            dialog.canvas.set_chamfer_method(self._chamfer_method_angle, notify=False)
+        dialog.canvas.set_offset_default_distance(self._offset_default_distance)
+        corner_trim = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_CORNER_TRIM, 1)
+        dialog.canvas.set_corner_trim(corner_trim not in (0, "0"), notify=False)
+        gap_type = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_OFFSET_GAP_TYPE, 0)
+        dialog.canvas.set_offset_gap_type(
+            int(gap_type) if gap_type in (0, 1, 2, "0", "1", "2") else 0
+        )
         copy_mode = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_COPY_MODE, 0)
         dialog.canvas.set_copy_mode(1 if copy_mode in (1, "1") else 0)
+        edge_mode = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_EDGE_MODE, 0)
+        dialog.canvas.set_line_edit_edge_mode(edge_mode in (1, "1"))
+        standard = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_TRIM_STANDARD, 0)
+        dialog.canvas.set_line_edit_standard_mode(standard in (1, "1"))
+        projection = QSettings(ORG_NAME, APP_NAME).value(SETTINGS_KEY_PROJECTION_MODE, 1)
+        dialog.canvas.set_line_edit_projection_mode(
+            int(projection) if projection in (0, 1, 2, "0", "1", "2") else 1
+        )
         dialog.setWindowFlags(Qt.WindowType.Widget)
         self.workspace_tabs.set_content("sketch", dialog)
         self._workspace_transition = True
@@ -1756,6 +2793,10 @@ class MainWindow(QMainWindow):
         finally:
             self._workspace_transition = False
         dialog.show()
+        if dialog.canvas.select_committed_entities and self.cli_tab is not None:
+            self.cli_tab.set_drawing_bar(dialog.drawing_command_bar)
+            self._show_console_page(self.cli_tab)
+        dialog.refresh_document_properties()
         dialog.canvas.setFocus()
         dialog.set_compact_layout(self._small_screen_active)
         if (
@@ -1772,6 +2813,8 @@ class MainWindow(QMainWindow):
             self._refresh_document_choice()
 
     def _hide_sketch_workbench(self, dialog: SketchEditorDialog) -> None:
+        if self.cli_tab is not None and self.cli_tab.drawing_bar is dialog.drawing_command_bar:
+            self.cli_tab.set_drawing_bar(None)
         self._drafting_toolbar_state = dialog.toolbar_layout_state()
         if self.workspace_tabs.content("sketch") is dialog:
             self.workspace_tabs.set_content("sketch", None)
@@ -1785,11 +2828,370 @@ class MainWindow(QMainWindow):
 
     def _sync_drawing_layers(self) -> None:
         editor, services = self._sketch_dialog, self._services
+        preparation = self._prepared_sketch_save
+        if preparation is not None and preparation.draft is editor:
+            return
         if editor is not None and services is not None:
+            if editor.canvas.select_committed_entities:
+                editor.canvas.drawing_dimension_styles = services.kernel.drawing_dimension_styles
+                editor.canvas.circle_fillet_radius = services.kernel.drawing_fillet_radius
+                editor.canvas.sync_chamfer_values(services.kernel.drawing_chamfer_values)
+                if editor.dimensions.drawing_style_active:
+                    has_styles = self._loaded is not None and any(
+                        command.id == "drawing.dimension_styles.set"
+                        or "clipboard_styles" in command.params
+                        for command in self._loaded.document.commands
+                    )
+                    editor.dimensions.set_drawing_style(
+                        services.kernel.drawing_dimension_styles.current if has_styles else None
+                    )
+            # Context changes can add or remove layers. Keep both sets available
+            # while navigation and the canvas refresh against the new sketches.
+            # The final document table is installed after the context update.
+            editor.canvas.document_layer_table = merge_layer_tables(
+                editor.layer_table, services.kernel.drawing_layers
+            )
             editor.set_context_sketches(services.kernel.sketches)
+            editor.canvas.set_drawing_rasters(services.kernel.drawing_rasters)
             editor.set_document_layers(
                 services.kernel.drawing_layers, services.kernel.dimension_layer
             )
+
+    def _show_drawing_dimension_styles(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None:
+            editor.dimensions.open_format_presets()
+
+    def _open_drawing_dimension_styles(self, editor: SketchEditorDialog) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            loaded is None
+            or services is None
+            or editor is not self._sketch_dialog
+            or loaded.document.document_type != "drawing2d"
+        ):
+            editor.status_label.setText("当前没有可编辑的独立二维图纸。")
+            return
+        if (
+            (unit is not None and (unit.is_busy or unit.is_notifying_result))
+            or editor.canvas.has_pending_geometry
+            or editor.canvas.has_active_edit_gesture
+            or editor.canvas.mixed_move is not None
+            or bool(editor.canvas.pending_cross_tangencies)
+            or bool(editor.canvas.pending_associative_arrays)
+        ):
+            editor.status_label.setText("请先完成或取消当前操作，再设置标注样式。")
+            return
+        old = services.kernel.drawing_dimension_styles
+        used = frozenset(
+            constraint.style_name
+            for constraints in (
+                *(sketch.constraints for sketch in services.kernel.sketches),
+                tuple(editor.canvas.constraints),
+            )
+            for constraint in constraints
+            if constraint.style_name is not None
+        )
+        had_styles = any(
+            command.id == "drawing.dimension_styles.set" or "clipboard_styles" in command.params
+            for command in loaded.document.commands
+        )
+        initial = old
+        if not had_styles and not used:
+            initial = DimensionStyleTable(
+                (DimensionStyle("标准", scale=DEFAULT_NEW_DRAWING_DIMENSION_SCALE),), "标准"
+            )
+        style_dialog = DrawingDimensionStylesDialog(initial, used, editor)
+
+        def open_local_presets() -> None:
+            style_dialog.reject()
+            editor.dimensions.open_local_format_presets()
+
+        style_dialog.local_presets_button.clicked.connect(open_local_presets)
+        if style_dialog.exec() != int(QDialog.DialogCode.Accepted):
+            return
+        if self._loaded is not loaded or self._services is not services:
+            editor.status_label.setText("图纸已切换；标注样式未修改。")
+            return
+        table = style_dialog.table
+        for constraint in editor.canvas.constraints:
+            if constraint.style_name is None:
+                continue
+            try:
+                if old.get(constraint.style_name) != table.get(constraint.style_name):
+                    editor.status_label.setText("草稿尺寸使用了待修改样式，请先完成草图。")
+                    return
+            except KeyError:
+                editor.status_label.setText("草稿尺寸仍使用待删除样式，请先完成草图。")
+                return
+        if table != old or not had_styles:
+            try:
+                if loaded.document.archive_version < 6:
+                    candidate = mycad_app.create_replay_candidate(
+                        services, loaded, session_identity=self._session_id
+                    )
+                    candidate.stage(
+                        ReplayChangeSet(
+                            (),
+                            (
+                                ReplayAppend(
+                                    "drawing.dimension_styles.set", 8, table.to_mapping(), "local"
+                                ),
+                            ),
+                            False,
+                            6,
+                        ),
+                        current_session_identity=self._session_id,
+                    )
+                    preview = candidate.preview(current_session_identity=self._session_id)
+                    if preview.state != "succeeded":
+                        raise ValueError(str(preview.failure or "标注样式预览失败"))
+                    candidate.commit(
+                        candidate.authorize_commit(current_session_identity=self._session_id),
+                        current_session_identity=self._session_id,
+                    )
+                else:
+                    loaded.bus.execute("drawing.dimension_styles.set", table.to_mapping(), "local")
+            except (MycadError, ValueError) as exc:
+                editor.status_label.setText(f"标注样式未修改：{exc}")
+                return
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+        editor.dimensions.set_drawing_style(table.current)
+        editor.status_label.setText(f"当前图纸标注样式：{table.current_name}。")
+
+    def _on_array_spacing_grip_commit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_token: object,
+        raw_array: object,
+        raw_row: object,
+        raw_column: object,
+        raw_revision: object,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            not isinstance(raw_token, str)
+            or not isinstance(raw_array, AssociativeRectArray)
+            or not isinstance(raw_row, int | float)
+            or not isinstance(raw_column, int | float)
+            or not isinstance(raw_revision, int)
+        ):
+            return
+        token, array, revision = raw_token, raw_array, raw_revision
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            editor.canvas.finish_array_spacing_commit(token, "文档已关闭。")
+            return
+
+        def commit() -> object:
+            if (
+                self._loaded is not loaded
+                or self._sketch_dialog is not editor
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+                or not editor.canvas.array_spacing_commit_is_current(token, revision)
+                or array not in services.kernel.associative_arrays
+            ):
+                raise ValidationError("文档或阵列已变化，请重新拖动。")
+            return loaded.bus.execute(
+                "drawing.array.update",
+                {"array_id": array.array_id, "row_spacing": raw_row, "column_spacing": raw_column},
+                confirmed_by="local",
+                version=1,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            editor.canvas.finish_array_spacing_commit(token, result.error)
+            if result.error is None:
+                self._sync_drawing_layers()
+                editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                    editor.canvas.history_position
+                )
+                editor.layer_history_redo.clear()
+                editor.canvas.discard_redo_history()
+
+        if not unit.submit(
+            commit, operation="array-spacing-grip", session_id=session_id, on_complete=finish
+        ):
+            editor.canvas.finish_array_spacing_commit(token, "几何工作线程忙碌，请重试。")
+
+    def _on_array_count_grip_commit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_token: object,
+        raw_array: object,
+        raw_resized: object,
+        raw_revision: object,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            not isinstance(raw_token, str)
+            or not isinstance(raw_array, AssociativeRectArray)
+            or not isinstance(raw_resized, AssociativeRectArray)
+            or not isinstance(raw_revision, int)
+        ):
+            return
+        token, array, resized, revision = raw_token, raw_array, raw_resized, raw_revision
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            editor.canvas.finish_array_spacing_commit(token, "文档已关闭。")
+            return
+
+        def commit() -> object:
+            if (
+                self._loaded is not loaded
+                or self._sketch_dialog is not editor
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+                or not editor.canvas.array_spacing_commit_is_current(token, revision)
+                or array not in services.kernel.associative_arrays
+            ):
+                raise ValidationError("文档或阵列已变化，请重新拖动。")
+            return loaded.bus.execute(
+                "drawing.array.resize",
+                {"array": resized.to_mapping()},
+                confirmed_by="local",
+                version=15
+                if any(output.rotation_deg != 0 for output in resized.extra_outputs)
+                else 14
+                if any(output.offset_mm != (0, 0) for output in resized.extra_outputs)
+                else 13
+                if resized.extra_outputs != array.extra_outputs
+                else 12
+                if resized.extra_outputs
+                else 11
+                if any(
+                    member.replacement is not None and member.replacement.anchor_source is not None
+                    for member in resized.members
+                )
+                else 10
+                if has_interleaved_array_dependencies(
+                    tuple(
+                        resized if item.array_id == resized.array_id else item
+                        for item in services.kernel.associative_arrays
+                    )
+                )
+                else 9
+                if has_internal_replacements(resized)
+                else 8
+                if any(member.replacement is not None for member in resized.members)
+                else 7
+                if any(member.erased_neighbors is not None for member in resized.members)
+                else 6
+                if any(member.erased_index is not None for member in resized.members)
+                else 5
+                if any(member.rotation_deg != 0 for member in resized.members)
+                else 4
+                if any(member.offset_mm != (0, 0) for member in resized.members)
+                else 3
+                if resized.base_point is not None
+                else 2
+                if resized.angle_deg != 0
+                else 1,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            editor.canvas.finish_array_spacing_commit(token, result.error)
+            if result.error is None:
+                self._sync_drawing_layers()
+                editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                    editor.canvas.history_position
+                )
+                editor.layer_history_redo.clear()
+                editor.canvas.discard_redo_history()
+
+        if not unit.submit(
+            commit, operation="array-count-grip", session_id=session_id, on_complete=finish
+        ):
+            editor.canvas.finish_array_spacing_commit(token, "几何工作线程忙碌，请重试。")
+
+    def _on_array_move_grip_commit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_token: object,
+        raw_array: object,
+        raw_displacement: object,
+        raw_revision: object,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            not isinstance(raw_token, str)
+            or not isinstance(raw_array, AssociativeRectArray)
+            or not isinstance(raw_displacement, tuple)
+            or not isinstance(raw_revision, int)
+        ):
+            return
+        values = cast("tuple[object, ...]", raw_displacement)
+        if len(values) != 2 or any(not isinstance(value, int | float) for value in values):
+            return
+        token, array, revision = raw_token, raw_array, raw_revision
+        displacement = cast("tuple[float, float]", values)
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            editor.canvas.finish_array_spacing_commit(token, "文档已关闭。")
+            return
+
+        def commit() -> object:
+            if (
+                self._loaded is not loaded
+                or self._sketch_dialog is not editor
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+                or not editor.canvas.array_spacing_commit_is_current(token, revision)
+                or array not in services.kernel.associative_arrays
+            ):
+                raise ValidationError("文档或阵列已变化，请重新拖动。")
+            return loaded.bus.execute(
+                "drawing.array.move",
+                {"array_id": array.array_id, "displacement": list(displacement)},
+                confirmed_by="local",
+                version=3
+                if set(array.sources)
+                & {
+                    output.target
+                    for item in services.kernel.associative_arrays
+                    for output in item.extra_outputs
+                }
+                else 2,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            editor.canvas.finish_array_spacing_commit(token, result.error)
+            if result.error is None:
+                self._sync_drawing_layers()
+                editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                    editor.canvas.history_position
+                )
+                editor.layer_history_redo.clear()
+                editor.canvas.discard_redo_history()
+
+        if not unit.submit(
+            commit, operation="array-move-grip", session_id=session_id, on_complete=finish
+        ):
+            editor.canvas.finish_array_spacing_commit(token, "几何工作线程忙碌，请重试。")
 
     def _on_drawing_move(
         self,
@@ -1799,8 +3201,11 @@ class MainWindow(QMainWindow):
         delta: object,
         *,
         angle: float | None = None,
+        scale: float | None = None,
         mirror_end: tuple[float, float] | None = None,
         erase: bool = False,
+        copy_source: bool = False,
+        copy_count: int = 2,
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
@@ -1827,9 +3232,33 @@ class MainWindow(QMainWindow):
             return
         selected = cast("tuple[str, ...]", raw_ids)
         displacement = cast("tuple[float, float]", raw_delta)
+        image_ids: frozenset[str] = frozenset(editor.canvas.selected_raster_ids)
+        images: tuple[DrawingRaster, ...] = ()
+        if image_ids:
+            images = tuple(
+                image for image in services.kernel.drawing_rasters if image.image_id in image_ids
+            )
+            if len(images) != len(image_ids) or any(
+                not editor.canvas.layer_table.get(image.layer_name).displayed
+                or editor.canvas.layer_table.get(image.layer_name).locked
+                for image in images
+            ):
+                editor.status_label.setText("图片已变化或所在图层不可编辑；对象未修改。")
+                return
+            if copy_source and (copy_count < 2 or (copy_count - 1) * len(images) > 1000):
+                editor.status_label.setText("复制阵列数量无效，最多生成 1000 张图片。")
+                return
         action = (
             "删除"
             if erase
+            else "缩放复制"
+            if copy_source and scale is not None
+            else "旋转复制"
+            if copy_source and angle is not None
+            else "复制"
+            if copy_source and mirror_end is None
+            else "缩放"
+            if scale is not None
             else "镜像"
             if mirror_end is not None
             else "旋转"
@@ -1839,36 +3268,450 @@ class MainWindow(QMainWindow):
         draft_ids = tuple(
             entity.entity_id for entity in editor.canvas.entities if entity.entity_id in selected
         )
-        if draft_ids or editor.canvas.mixed_move is not None:
+        draft_copy_omits_constraints = (
+            copy_source and bool(draft_ids) and editor.canvas.selected_draft_constraints_exist()
+        )
+        pending_copy_tangent, pending_copy_array = (
+            editor.canvas.selected_pending_copy_omissions() if copy_source else (False, False)
+        )
+        draft_candidate: tuple[SketchEntity, ...] | None = None
+        draft_remove_constraint_ids: frozenset[str] = frozenset()
+        if (
+            image_ids
+            and draft_ids
+            and editor.canvas.mixed_move is not None
+            and editor.canvas.pending_cross_tangencies
+            and not editor.canvas.pending_associative_arrays
+            and not copy_source
+            and not erase
+            and all(
+                all(draft_tangent_reference(ref).entity_id in selected for ref in pair)
+                for pair in editor.canvas.pending_cross_tangencies
+            )
+        ):
+            transformed: list[DrawingRaster] = []
+            for image in images:
+                x, y = image.origin_mm[0] - displacement[0], image.origin_mm[1] - displacement[1]
+                if mirror_end is not None:
+                    axis = atan2(mirror_end[1] - displacement[1], mirror_end[0] - displacement[0])
+                    c, sn = cos(2 * axis), sin(2 * axis)
+                    transformed.append(
+                        replace(
+                            image,
+                            origin_mm=(
+                                displacement[0] + c * x + sn * y,
+                                displacement[1] + sn * x - c * y,
+                            ),
+                            angle_deg=degrees(2 * axis) - image.angle_deg,
+                            mirrored=not image.mirrored,
+                        )
+                    )
+                elif angle is not None:
+                    c, sn = cos(radians(angle)), sin(radians(angle))
+                    transformed.append(
+                        replace(
+                            image,
+                            origin_mm=(
+                                displacement[0] + c * x - sn * y,
+                                displacement[1] + sn * x + c * y,
+                            ),
+                            angle_deg=image.angle_deg + angle,
+                        )
+                    )
+                elif scale is not None:
+                    transformed.append(
+                        replace(
+                            image,
+                            origin_mm=(displacement[0] + x * scale, displacement[1] + y * scale),
+                            width_mm=image.width_mm * scale,
+                            height_mm=image.height_mm * scale,
+                        )
+                    )
+                else:
+                    transformed.append(
+                        replace(
+                            image,
+                            origin_mm=(
+                                image.origin_mm[0] + displacement[0],
+                                image.origin_mm[1] + displacement[1],
+                            ),
+                        )
+                    )
             self._stage_drawing_mixed_move(
                 editor,
                 session_id,
                 selected,
                 displacement,
                 angle=angle,
+                scale=scale,
                 mirror_end=mirror_end,
-                erase=erase,
+                raster_updates=tuple(transformed),
             )
             return
+        preserve_pending_transform = bool(
+            image_ids
+            and draft_ids
+            and editor.canvas.pending_cross_tangencies
+            and not editor.canvas.pending_associative_arrays
+            and not copy_source
+            and not erase
+            and all(
+                all(draft_tangent_reference(ref).entity_id in selected for ref in pair)
+                for pair in editor.canvas.pending_cross_tangencies
+            )
+        )
+        pending_source_ids = {
+            ref.entity_id
+            for array in editor.canvas.pending_associative_arrays
+            for ref in (
+                *array.sources,
+                *(member.replacement.source for member in array.members if member.replacement),
+                *(output.source for output in array.extra_outputs),
+                *(output.anchor_source for output in array.extra_outputs),
+            )
+        }
+        if (
+            draft_ids
+            or editor.canvas.mixed_move is not None
+            or (scale is not None and pending_source_ids.intersection(selected))
+        ):
+            can_transform_three = bool(
+                image_ids
+                and draft_ids
+                and editor.canvas.mixed_move is None
+                and (
+                    copy_source
+                    or preserve_pending_transform
+                    or not (
+                        editor.canvas.pending_cross_tangencies
+                        or editor.canvas.pending_associative_arrays
+                    )
+                )
+            )
+            if can_transform_three:
+                if any(
+                    entity.entity_id in draft_ids
+                    for entity, _layer in editor.canvas.background_entities
+                ):
+                    editor.status_label.setText("草稿与已提交图元身份重复；对象未修改。")
+                    return
+                operation = (
+                    "delete_mixed"
+                    if erase
+                    else "mirror"
+                    if mirror_end is not None
+                    else "scale"
+                    if scale is not None
+                    else "rotate"
+                    if angle is not None
+                    else "copy"
+                    if copy_source
+                    else "move"
+                )
+                error = editor.canvas.transform_selection_error(operation)
+                if error:
+                    editor.status_label.setText(error)
+                    return
+                if erase:
+                    affected = tuple(
+                        constraint
+                        for constraint in editor.canvas.constraints
+                        if constraint.constraint_id in editor.canvas.selected_constraint_ids
+                        or any(ref.entity_id in selected for ref in constraint.references)
+                    )
+                    if any(
+                        editor.canvas.annotation_layer(constraint).locked
+                        or not editor.canvas.annotation_layer(constraint).displayed
+                        for constraint in affected
+                    ) or any(
+                        entity.entity_id in selected and (layer.locked or not layer.displayed)
+                        for entity, layer in editor.canvas.background_entities
+                    ):
+                        editor.status_label.setText(
+                            "所选对象或约束所在图层隐藏或已锁定；对象未删除。"
+                        )
+                        return
+                    draft_remove_constraint_ids = frozenset(c.constraint_id for c in affected)
+                try:
+                    if erase:
+                        draft_candidate = tuple(
+                            entity
+                            for entity in editor.canvas.entities
+                            if entity.entity_id not in draft_ids
+                        )
+                    elif mirror_end is not None:
+                        source = tuple(editor.canvas.entities)
+                        if copy_source:
+                            originals = {entity.entity_id for entity in source}
+                            source = copy_entities(source, draft_ids, (0.0, 0.0))
+                            mirror_ids = tuple(
+                                entity.entity_id
+                                for entity in source
+                                if entity.entity_id not in originals
+                            )
+                        else:
+                            mirror_ids = draft_ids
+                        draft_candidate = mirror_entities(
+                            source, mirror_ids, displacement, mirror_end
+                        )
+                    elif copy_source and scale is None and angle is None:
+                        draft_candidate = tuple(editor.canvas.entities)
+                        for index in range(1, copy_count):
+                            draft_candidate = copy_entities(
+                                draft_candidate,
+                                draft_ids,
+                                (displacement[0] * index, displacement[1] * index),
+                            )
+                    elif scale is not None:
+                        source = tuple(editor.canvas.entities)
+                        if copy_source:
+                            originals = {entity.entity_id for entity in source}
+                            source = copy_entities(source, draft_ids, (0.0, 0.0))
+                            scale_ids = tuple(
+                                entity.entity_id
+                                for entity in source
+                                if entity.entity_id not in originals
+                            )
+                        else:
+                            scale_ids = draft_ids
+                        draft_candidate = scale_entities(source, scale_ids, displacement, scale)
+                    elif angle is not None:
+                        source = tuple(editor.canvas.entities)
+                        if copy_source:
+                            originals = {entity.entity_id for entity in source}
+                            source = copy_entities(source, draft_ids, (0.0, 0.0))
+                            rotation_ids = tuple(
+                                entity.entity_id
+                                for entity in source
+                                if entity.entity_id not in originals
+                            )
+                        else:
+                            rotation_ids = draft_ids
+                        draft_candidate = rotate_entities(source, rotation_ids, displacement, angle)
+                    else:
+                        draft_candidate = move_entities(
+                            tuple(editor.canvas.entities),
+                            draft_ids,
+                            displacement,
+                            preserve_rectangle_order=True,
+                        )
+                    editor.canvas.validate_draft_constraint_edits(
+                        draft_candidate, removed_constraint_ids=draft_remove_constraint_ids
+                    )
+                except ValueError as exc:
+                    editor.status_label.setText(str(exc))
+                    return
+                if draft_candidate == tuple(editor.canvas.entities):
+                    editor.status_label.setText(f"{action}未改变图元。")
+                    return
+                if copy_source and not editor.canvas.draft_copy_preserves_sources(draft_candidate):
+                    editor.status_label.setText("复制无法保留原草稿对象；对象未修改。")
+                    return
+                selected = tuple(identity for identity in selected if identity not in draft_ids)
+            elif image_ids:
+                if draft_ids and editor.canvas.pending_associative_arrays:
+                    message = "存在暂存阵列时暂不能同时变换图片和图元，请先完成或撤销阵列。"
+                elif (
+                    draft_ids
+                    and editor.canvas.pending_cross_tangencies
+                    and not all(
+                        all(draft_tangent_reference(ref).entity_id in selected for ref in pair)
+                        for pair in editor.canvas.pending_cross_tangencies
+                    )
+                ):
+                    message = "请同时选择暂存相切关系的两个对象，或先完成当前草稿。"
+                elif draft_ids and editor.canvas.pending_cross_tangencies:
+                    message = "存在其他暂存编辑，请先完成或撤销当前草稿操作。"
+                elif draft_ids:
+                    message = "暂不能同时编辑图片、草稿和已提交图元，请分开操作。"
+                else:
+                    message = "存在暂存关联时暂不能编辑图片，请先完成或撤销暂存操作。"
+                editor.status_label.setText(message)
+                return
+            else:
+                self._stage_drawing_mixed_move(
+                    editor,
+                    session_id,
+                    selected,
+                    displacement,
+                    angle=angle,
+                    scale=scale,
+                    mirror_end=mirror_end,
+                    erase=erase,
+                )
+                return
         committed_ids = set(selected)
+        selected_constraints: set[str] = (
+            set(editor.canvas.selected_constraint_ids) if erase else set()
+        )
+        if selected_constraints:
+            matching_constraints = [
+                constraint
+                for constraint in (
+                    *editor.canvas.constraints,
+                    *(
+                        constraint
+                        for sketch in services.kernel.sketches
+                        for constraint in sketch.constraints
+                    ),
+                )
+                if constraint.constraint_id in selected_constraints
+            ]
+            if len(matching_constraints) != len(selected_constraints):
+                editor.status_label.setText("所选标注身份不唯一或已变化；对象未删除。")
+                return
+            if any(
+                editor.canvas.annotation_layer(constraint).locked
+                or not editor.canvas.annotation_layer(constraint).displayed
+                for constraint in matching_constraints
+            ):
+                editor.status_label.setText("所选标注所在图层隐藏或已锁定；对象未删除。")
+                return
+        if not (
+            (copy_source and image_ids and draft_candidate is not None)
+            or preserve_pending_transform
+        ) and any(
+            draft_tangent_reference(source).entity_id in committed_ids
+            for source, _ in editor.canvas.pending_cross_tangencies
+        ):
+            editor.status_label.setText("请先完成包含相切关系的当前草图，再编辑关联图元。")
+            return
         sketches = tuple(
             sketch
             for sketch in services.kernel.sketches
             if any(entity.entity_id in committed_ids for entity in sketch.entities)
+            or any(
+                constraint.constraint_id in selected_constraints
+                for constraint in sketch.constraints
+            )
         )
         if not sketches or not committed_ids.issubset(
             entity.entity_id for sketch in sketches for entity in sketch.entities
         ):
             editor.status_label.setText("选择的图元已变化；所选对象保持不变。")
             return
+        selected_entities = [
+            entity.entity_id
+            for sketch in sketches
+            for entity in sketch.entities
+            if entity.entity_id in committed_ids
+        ]
+        if len(selected_entities) != len(set(selected_entities)):
+            editor.status_label.setText("所选图元标识不唯一；所选对象保持不变。")
+            return
+        if erase:
+            owning = [
+                (
+                    array,
+                    tuple(
+                        member.target
+                        for member in array.members
+                        if member.target.entity_id in committed_ids and member.erased_index is None
+                    )
+                    + tuple(
+                        output.target
+                        for output in array.extra_outputs
+                        if output.target.entity_id in committed_ids
+                    ),
+                )
+                for array in services.kernel.associative_arrays
+            ]
+            owning = [(array, refs) for array, refs in owning if refs]
+            if owning:
+                if image_ids:
+                    editor.status_label.setText("图片与阵列成员暂不能同时删除；对象未修改。")
+                    return
+                mixed = len(owning) != 1 or {ref.entity_id for ref in owning[0][1]} != committed_ids
+                includes_extra = any(
+                    output.target.entity_id in committed_ids
+                    for array, _refs in owning
+                    for output in array.extra_outputs
+                )
+                refs = tuple(
+                    ArrayEntityRef(sketch.sketch_id, entity.entity_id)
+                    for sketch in sketches
+                    for entity in sketch.entities
+                    if entity.entity_id in committed_ids
+                )
+                revision = loaded.document.revision
+                editor.setEnabled(False)
+
+                def erase_members() -> object:
+                    if (
+                        self._loaded is not loaded
+                        or self._session_id != session_id
+                        or loaded.document.revision != revision
+                        or any(
+                            array not in services.kernel.associative_arrays for array, _ in owning
+                        )
+                    ):
+                        raise ValidationError("文档或阵列已变化，请重新选择。")
+                    params: dict[str, object] = {"targets": [ref.to_mapping() for ref in refs]}
+                    if not mixed and not includes_extra:
+                        params["array_id"] = owning[0][0].array_id
+                    return loaded.bus.execute(
+                        "drawing.array.erase",
+                        params,
+                        "local",
+                        version=4 if includes_extra else 3 if mixed else 2,
+                    )
+
+                def finish_erase(result: ExecutionResult) -> None:
+                    editor.setEnabled(True)
+                    if (
+                        self._sketch_dialog is not editor
+                        or self._loaded is not loaded
+                        or self._session_id != session_id
+                    ):
+                        return
+                    self._sync_drawing_layers()
+                    if result.error is not None:
+                        editor.status_label.setText(f"删除失败：{result.error}")
+                        return
+                    editor.canvas.selected_entity_ids.difference_update(committed_ids)
+                    editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                        editor.canvas.history_position
+                    )
+                    editor.layer_history_redo.clear()
+                    editor.canvas.discard_redo_history()
+                    editor.status_label.setText(
+                        "已删除所选对象；可撤销恢复。"
+                        if includes_extra
+                        else "已删除所选对象；阵列成员可通过重置阵列恢复。"
+                    )
+
+                if not unit.submit(
+                    erase_members,
+                    operation="array-erase",
+                    session_id=session_id,
+                    on_complete=finish_erase,
+                ):
+                    editor.setEnabled(True)
+                    editor.status_label.setText("几何工作线程忙碌，删除未应用。")
+                return
         revisions: list[dict[str, object]] = []
+        revised_sketches: dict[str, Sketch] = {}
         includes_points = False
         for sketch in sketches:
             sketch_ids = tuple(
                 entity.entity_id for entity in sketch.entities if entity.entity_id in committed_ids
             )
+            if not sketch_ids and not any(
+                constraint.constraint_id in selected_constraints
+                for constraint in sketch.constraints
+            ):
+                continue
+            if not erase:
+                try:
+                    project_coplanar_vector((0.0, 0.0), editor.current_frame(), sketch.frame)
+                except ValueError:
+                    editor.status_label.setText("所选对象不在当前工作平面；图元未修改。")
+                    return
             if erase and any(
-                any(ref.entity_id in sketch_ids for ref in constraint.references)
+                (
+                    constraint.constraint_id in selected_constraints
+                    or any(ref.entity_id in sketch_ids for ref in constraint.references)
+                )
                 and (
                     editor.canvas.annotation_layer(constraint).locked
                     or not editor.canvas.annotation_layer(constraint).displayed
@@ -1886,23 +3729,60 @@ class MainWindow(QMainWindow):
                     editor.current_frame().local_to_world(displacement)
                 )
                 end = sketch.frame.world_to_local(editor.current_frame().local_to_world(mirror_end))
-                changed = mirror_entities(sketch.entities, sketch_ids, start, end)
+                if copy_source:
+                    copied = copy_entities(sketch.entities, sketch_ids, (0.0, 0.0))
+                    clone_ids = tuple(entity.entity_id for entity in copied[len(sketch.entities) :])
+                    changed = mirror_entities(copied, clone_ids, start, end)
+                else:
+                    changed = mirror_entities(sketch.entities, sketch_ids, start, end)
             elif angle is not None:
                 center = sketch.frame.world_to_local(
                     editor.current_frame().local_to_world(displacement)
                 )
-                changed = rotate_entities(sketch.entities, sketch_ids, center, angle)
+                local_angle = project_coplanar_rotation(angle, editor.current_frame(), sketch.frame)
+                if copy_source:
+                    copied = copy_entities(sketch.entities, sketch_ids, (0.0, 0.0))
+                    clone_ids = tuple(entity.entity_id for entity in copied[len(sketch.entities) :])
+                    changed = rotate_entities(copied, clone_ids, center, local_angle)
+                else:
+                    changed = rotate_entities(sketch.entities, sketch_ids, center, local_angle)
+            elif scale is not None:
+                center = sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world(displacement)
+                )
+                if copy_source:
+                    copied = copy_entities(sketch.entities, sketch_ids, (0.0, 0.0))
+                    clone_ids = tuple(entity.entity_id for entity in copied[len(sketch.entities) :])
+                    changed = scale_entities(copied, clone_ids, center, scale)
+                else:
+                    changed = scale_entities(sketch.entities, sketch_ids, center, scale)
             else:
-                changed = move_entities(sketch.entities, sketch_ids, displacement)
-            if changed == sketch.entities:
-                continue
+                local_delta = project_coplanar_vector(
+                    displacement, editor.current_frame(), sketch.frame
+                )
+                if copy_source:
+                    changed = sketch.entities
+                    for index in range(1, copy_count):
+                        changed = copy_entities(
+                            changed, sketch_ids, (local_delta[0] * index, local_delta[1] * index)
+                        )
+                else:
+                    changed = move_entities(
+                        sketch.entities, sketch_ids, local_delta, preserve_rectangle_order=True
+                    )
             constraints = tuple(
                 constraint
                 for constraint in sketch.constraints
                 if not erase
-                or all(ref.entity_id not in sketch_ids for ref in constraint.references)
+                or (
+                    constraint.constraint_id not in selected_constraints
+                    and all(ref.entity_id not in sketch_ids for ref in constraint.references)
+                )
             )
+            if changed == sketch.entities and constraints == sketch.constraints:
+                continue
             revised = replace(sketch, entities=changed, constraints=constraints)
+            revised_sketches[sketch.sketch_id] = revised
             includes_points = includes_points or any(
                 isinstance(entity, PointEntity) for entity in revised.entities
             )
@@ -1918,7 +3798,799 @@ class MainWindow(QMainWindow):
         if not revisions:
             editor.status_label.setText(f"{action}未改变图元。")
             return
-        self._submit_drawing_revisions(editor, session_id, revisions, includes_points, action)
+        relations = services.kernel.cross_sketch_tangencies
+        selected_array_refs = {
+            ref.entity_id
+            for array in services.kernel.associative_arrays
+            for ref in (
+                *array.sources,
+                *(member.source for member in array.members),
+                *(member.target for member in array.members),
+                *(member.replacement.source for member in array.members if member.replacement),
+                *(output.source for output in array.extra_outputs),
+                *(output.target for output in array.extra_outputs),
+                *(output.anchor_source for output in array.extra_outputs),
+            )
+        }
+        copied_without_array = (
+            bool(image_ids)
+            and copy_source
+            and (pending_copy_array or bool(selected_array_refs & committed_ids))
+        )
+        copied_without_constraints = (
+            bool(image_ids)
+            and copy_source
+            and (
+                draft_copy_omits_constraints
+                or pending_copy_tangent
+                or any(
+                    ref.entity_id in committed_ids
+                    for relation in relations
+                    for ref in (relation.first, relation.second)
+                )
+                or any(
+                    ref.entity_id in committed_ids
+                    for sketch in sketches
+                    for constraint in sketch.constraints
+                    for ref in constraint.references
+                )
+            )
+        )
+        if (
+            image_ids
+            and not erase
+            and not copy_source
+            and (
+                bool(selected_array_refs & committed_ids)
+                or any(
+                    ref.entity_id in committed_ids
+                    for relation in relations
+                    for ref in (relation.first, relation.second)
+                )
+            )
+        ):
+            editor.status_label.setText("图片与关联对象暂不能同时变换；对象未修改。")
+            return
+        related_ids = {
+            ref.sketch_id for relation in relations for ref in (relation.first, relation.second)
+        }
+        related = next((sketch for sketch in sketches if sketch.sketch_id in related_ids), None)
+        if related is not None and not erase and not (copy_source and image_ids):
+            component_ids: set[str] = set()
+            for sketch in sketches:
+                connected, _ = resolve_tangency_component(
+                    services.kernel.sketches, relations, sketch.sketch_id
+                )
+                component_ids.update(item.sketch_id for item in connected)
+            component = tuple(
+                sketch for sketch in services.kernel.sketches if sketch.sketch_id in component_ids
+            )
+            component_entities = [
+                entity.entity_id for sketch in component for entity in sketch.entities
+            ]
+            if len(set(component_entities)) != len(component_entities):
+                editor.status_label.setText("关联草图存在重复图元标识，无法安全编辑。")
+                return
+            background_layers = {
+                entity.entity_id: layer for entity, layer in editor.canvas.background_entities
+            }
+            spatial = {
+                (boundary.sketch_id, boundary.entity.entity_id)
+                for boundary in editor.canvas.spatial_boundaries
+            }
+            view_frame = editor.current_frame()
+
+            def accessible_layer(sketch: Sketch, entity: SketchEntity) -> bool:
+                layer = background_layers.get(entity.entity_id)
+                if layer is None:
+                    if (
+                        entity.entity_id in committed_ids
+                        or (sketch.sketch_id, entity.entity_id) not in spatial
+                    ):
+                        return False
+                    normal_dot = sum(
+                        first * second
+                        for first, second in zip(
+                            sketch.frame.normal, view_frame.normal, strict=True
+                        )
+                    )
+                    delta = tuple(
+                        first - second
+                        for first, second in zip(
+                            sketch.frame.origin_mm, view_frame.origin_mm, strict=True
+                        )
+                    )
+                    if (
+                        abs(abs(normal_dot) - 1) > 1e-9
+                        or abs(
+                            sum(
+                                value * normal
+                                for value, normal in zip(delta, view_frame.normal, strict=True)
+                            )
+                        )
+                        > 1e-7
+                    ):
+                        return False
+                    table = (
+                        merge_layer_tables(sketch.layers, editor.canvas.document_layer_table)
+                        if editor.canvas.document_layer_table is not None
+                        else sketch.layers
+                    )
+                    layer = table.get(entity.layer_name)
+                return layer.displayed and not layer.locked
+
+            if any(
+                not accessible_layer(sketch, entity)
+                for sketch in component
+                for entity in sketch.entities
+            ):
+                editor.status_label.setText("关联草图包含锁定或隐藏图层；图元未修改。")
+                return
+            if any(
+                draft_tangent_reference(source).entity_id in component_entities
+                for source, _ in editor.canvas.pending_cross_tangencies
+            ):
+                editor.status_label.setText("请先完成包含相切关系的当前草图，再编辑关联图元。")
+                return
+            anchors = tuple(
+                CrossSketchRef(sketch.sketch_id, entity.entity_id)
+                for sketch in sketches
+                for entity in sketch.entities
+                if entity.entity_id in committed_ids
+            )
+            proposed = tuple(revised_sketches.get(sketch.sketch_id, sketch) for sketch in component)
+            rectangle_transforms: list[RectangleTransformEvidence] = []
+            polyline_transforms: list[RectangleTransformEvidence] = []
+            line_transforms: list[RectangleTransformEvidence] = []
+            if angle is not None or mirror_end is not None:
+                related = {
+                    (ref.sketch_id, ref.entity_id)
+                    for relation in relations
+                    for ref in (relation.first, relation.second)
+                }
+                for sketch in sketches:
+                    targets = [
+                        entity
+                        for entity in sketch.entities
+                        if isinstance(entity, RectangleEntity | PolylineEntity | LineEntity)
+                        and entity.entity_id in committed_ids
+                        and (sketch.sketch_id, entity.entity_id) in related
+                    ]
+                    if not targets:
+                        continue
+                    start = sketch.frame.world_to_local(
+                        editor.current_frame().local_to_world(displacement)
+                    )
+                    if mirror_end is not None:
+                        end = sketch.frame.world_to_local(
+                            editor.current_frame().local_to_world(mirror_end)
+                        )
+                        dx, dy = end[0] - start[0], end[1] - start[1]
+                        length = hypot(dx, dy)
+                        if length <= 1e-12:
+                            editor.status_label.setText("镜像轴必须有非零长度。")
+                            return
+                        ux, uy = dx / length, dy / length
+                        a, b, c, d = 2 * ux * ux - 1, 2 * ux * uy, 2 * ux * uy, 2 * uy * uy - 1
+                    else:
+                        assert angle is not None
+                        local_angle = project_coplanar_rotation(
+                            angle, editor.current_frame(), sketch.frame
+                        )
+                        a, b, c, d = (
+                            cos(radians(local_angle)),
+                            -sin(radians(local_angle)),
+                            sin(radians(local_angle)),
+                            cos(radians(local_angle)),
+                        )
+                    matrix = (
+                        a,
+                        b,
+                        c,
+                        d,
+                        start[0] - a * start[0] - b * start[1],
+                        start[1] - c * start[0] - d * start[1],
+                    )
+                    for entity in targets:
+                        proof = RectangleTransformEvidence(
+                            CrossSketchRef(sketch.sketch_id, entity.entity_id), matrix
+                        )
+                        if isinstance(entity, RectangleEntity):
+                            rectangle_transforms.append(proof)
+                        elif isinstance(entity, PolylineEntity):
+                            polyline_transforms.append(proof)
+                        else:
+                            line_transforms.append(proof)
+            if not polyline_transforms:
+                line_transforms.clear()
+            self._submit_cross_sketch_edit(
+                editor,
+                session_id,
+                component,
+                proposed,
+                anchors,
+                action,
+                tuple(rectangle_transforms),
+                tuple(polyline_transforms),
+                tuple(line_transforms),
+            )
+            return
+        removed_relations = tuple(
+            relation.relation_id
+            for relation in relations
+            if erase
+            and any(ref.entity_id in committed_ids for ref in (relation.first, relation.second))
+        )
+        raster_updates: list[DrawingRaster] = []
+        for image in images if not erase else ():
+            if mirror_end is not None:
+                dx, dy = mirror_end[0] - displacement[0], mirror_end[1] - displacement[1]
+                axis = atan2(dy, dx)
+                c, sn = cos(2 * axis), sin(2 * axis)
+                x = image.origin_mm[0] - displacement[0]
+                y = image.origin_mm[1] - displacement[1]
+                raster_updates.append(
+                    replace(
+                        image,
+                        image_id=uuid4().hex if copy_source else image.image_id,
+                        origin_mm=(
+                            displacement[0] + c * x + sn * y,
+                            displacement[1] + sn * x - c * y,
+                        ),
+                        angle_deg=degrees(2 * axis) - image.angle_deg,
+                        mirrored=not image.mirrored,
+                    )
+                )
+            elif angle is not None:
+                c, sn = cos(radians(angle)), sin(radians(angle))
+                x = image.origin_mm[0] - displacement[0]
+                y = image.origin_mm[1] - displacement[1]
+                raster_updates.append(
+                    replace(
+                        image,
+                        image_id=uuid4().hex if copy_source else image.image_id,
+                        origin_mm=(
+                            displacement[0] + c * x - sn * y,
+                            displacement[1] + sn * x + c * y,
+                        ),
+                        angle_deg=image.angle_deg + angle,
+                    )
+                )
+            elif scale is not None:
+                raster_updates.append(
+                    replace(
+                        image,
+                        image_id=uuid4().hex if copy_source else image.image_id,
+                        origin_mm=(
+                            displacement[0] + (image.origin_mm[0] - displacement[0]) * scale,
+                            displacement[1] + (image.origin_mm[1] - displacement[1]) * scale,
+                        ),
+                        width_mm=image.width_mm * scale,
+                        height_mm=image.height_mm * scale,
+                    )
+                )
+            else:
+                for index in range(1, copy_count if copy_source else 2):
+                    raster_updates.append(
+                        replace(
+                            image,
+                            image_id=uuid4().hex if copy_source else image.image_id,
+                            origin_mm=(
+                                image.origin_mm[0] + displacement[0] * index,
+                                image.origin_mm[1] + displacement[1] * index,
+                            ),
+                        )
+                    )
+        self._submit_drawing_revisions(
+            editor,
+            session_id,
+            revisions,
+            includes_points,
+            action,
+            removed_relations,
+            raster_remove_ids=tuple(sorted(image_ids)) if erase else (),
+            raster_updates=() if copy_source else tuple(raster_updates),
+            raster_additions=tuple(raster_updates) if copy_source else (),
+            draft_candidate=draft_candidate,
+            draft_remove_constraint_ids=draft_remove_constraint_ids,
+            preserve_pending_tangencies=preserve_pending_transform,
+            copy_omitted_constraints=copied_without_constraints,
+            copy_omitted_array=copied_without_array,
+        )
+
+    def _on_saved_handle_preview(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_token: object,
+        raw_reference: object,
+        raw_point: object,
+        raw_revision: object,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            loaded is None
+            or services is None
+            or unit is None
+            or session_id != self._session_id
+            or not isinstance(raw_token, str)
+            or not isinstance(raw_reference, SketchGeometryReference)
+            or not isinstance(raw_point, tuple)
+            or not isinstance(raw_revision, int)
+        ):
+            return
+        values = cast("tuple[object, ...]", raw_point)
+        if len(values) != 2 or not all(
+            isinstance(item, int | float) and isfinite(item) for item in values
+        ):
+            return
+        token, reference, point, revision = (
+            raw_token,
+            raw_reference,
+            cast("tuple[float, float]", raw_point),
+            raw_revision,
+        )
+        frame = editor.current_frame()
+        commands = tuple(loaded.document.commands)
+        canvas = editor.canvas
+        previous = canvas.mixed_move
+        pairs = tuple(canvas.pending_cross_tangencies)
+        mixed: _MixedHandleContext | None = None
+        if previous is not None or pairs or canvas.pending_associative_arrays:
+            if previous is not None and (
+                previous.source_revision != revision or previous.original_draft.frame != frame
+            ):
+                canvas.complete_saved_handle_preview(
+                    token, point, None, "暂存草图或工作平面已变化。"
+                )
+                return
+            draft = Sketch(
+                editor.draft_sketch_id,
+                frame,
+                tuple(canvas.entities),
+                tuple(canvas.constraints),
+                canvas.layer_table,
+            )
+            saved = previous.original_saved if previous else services.kernel.sketches
+            mixed = _MixedHandleContext(
+                previous,
+                tuple(saved),
+                previous.current_saved if previous else tuple(saved),
+                previous.original_draft if previous else draft,
+                draft,
+                canvas.background_entities,
+                pairs,
+                canvas.mixed_move_timeline_with_tangencies(),
+                canvas.history_position,
+                tuple(canvas.pending_associative_arrays),
+                tuple(
+                    arrays
+                    for _saved, _draft, _pairs, arrays in canvas.mixed_move_timeline_with_arrays()
+                ),
+                tuple(
+                    transforms
+                    for _saved, _draft, _pairs, _arrays, transforms in canvas.mixed_move_timeline_with_transforms()
+                ),
+            )
+
+        def solve() -> SavedHandlePreview:
+            if loaded.document.revision != revision or tuple(loaded.document.commands) != commands:
+                raise ValueError("文档已变化，请重新拖动。")
+            owners = [
+                sketch
+                for sketch in (
+                    (*mixed.current_saved, mixed.draft)
+                    if mixed is not None
+                    else services.kernel.sketches
+                )
+                if any(entity.entity_id == reference.entity_id for entity in sketch.entities)
+            ]
+            if len(owners) != 1:
+                raise ValueError("控制点图元不存在或身份不唯一。")
+            source = owners[0]
+            local_point = source.frame.world_to_local(frame.local_to_world(point))
+            if mixed is not None:
+                return self._solve_mixed_handle_preview(
+                    services,
+                    loaded,
+                    mixed,
+                    source,
+                    reference,
+                    local_point,
+                    frame,
+                    revision,
+                    session_id,
+                )
+            original, solved, anchors = mycad_app.prepare_cross_sketch_drag(
+                services, source.sketch_id, reference, local_point
+            )
+            before = {sketch.sketch_id: sketch for sketch in original}
+            overlay: list[tuple[SketchEntity, SketchLayer]] = []
+            for sketch in solved:
+                for previous, entity in zip(
+                    before[sketch.sketch_id].entities, sketch.entities, strict=True
+                ):
+                    if previous == entity:
+                        continue
+                    if isinstance(entity, PolylineEntity):
+                        view_entity = project_polyline_entity(entity, sketch.frame, frame)
+                    elif isinstance(entity, RectangleEntity | PointEntity | SplineEntity):
+                        view_entity = project_coplanar_entity(entity, sketch.frame, frame)
+                    else:
+                        view_entity = project_tangent_entity(entity, sketch.frame, frame)
+                    overlay.append(
+                        (
+                            view_entity,
+                            sketch.layers.get(entity.layer_name),
+                        )
+                    )
+            return SavedHandlePreview(original, solved, anchors, tuple(overlay))
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            preview = result.value if isinstance(result.value, SavedHandlePreview) else None
+            editor.canvas.complete_saved_handle_preview(token, point, preview, result.error)
+
+        if not unit.submit(
+            solve, operation="saved-handle-preview", session_id=session_id, on_complete=finish
+        ):
+            editor.canvas.complete_saved_handle_preview(
+                token, point, None, "几何工作线程忙碌，请重试。"
+            )
+
+    def _solve_mixed_handle_preview(
+        self,
+        services: AppServices,
+        loaded: LoadedDocument,
+        context: _MixedHandleContext,
+        source: Sketch,
+        reference: SketchGeometryReference,
+        local_point: tuple[float, float],
+        frame: WorkPlaneFrame,
+        revision: int,
+        session_id: int,
+    ) -> SavedHandlePreview:
+        """Solve and replay-check a handle against the current mixed draft."""
+        saved, draft, anchors = mycad_app.prepare_mixed_handle_drag(
+            services,
+            context.current_saved,
+            context.draft,
+            context.pairs,
+            _staged_committed_tangencies(
+                context.original_saved,
+                services.kernel.cross_sketch_tangencies,
+                tuple(
+                    (saved, transforms)
+                    for (saved, _draft, _pairs), transforms in zip(
+                        context.history, context.transform_history, strict=True
+                    )
+                ),
+            ),
+            CrossSketchRef(source.sketch_id, reference.entity_id),
+            reference,
+            local_point,
+        )
+        before = {item.sketch_id: item for item in (*context.current_saved, context.draft)}
+        projected: dict[str, SketchEntity] = {}
+        overlay: list[tuple[SketchEntity, SketchLayer]] = []
+        background_ids = {entity.entity_id for entity, _layer in context.background}
+        for sketch in (*saved, draft):
+            for original, entity in zip(
+                before[sketch.sketch_id].entities, sketch.entities, strict=True
+            ):
+                if entity == original and (
+                    sketch.sketch_id == draft.sketch_id or entity.entity_id not in background_ids
+                ):
+                    continue
+                if isinstance(entity, PolylineEntity):
+                    view_entity = project_polyline_entity(entity, sketch.frame, frame)
+                elif isinstance(entity, RectangleEntity | PointEntity | SplineEntity):
+                    view_entity = project_coplanar_entity(entity, sketch.frame, frame)
+                else:
+                    view_entity = project_tangent_entity(entity, sketch.frame, frame)
+                if sketch.sketch_id != draft.sketch_id:
+                    if entity.entity_id in projected:
+                        raise ValueError("关联图元身份重复。")
+                    projected[entity.entity_id] = view_entity
+                if entity != original:
+                    overlay.append((view_entity, sketch.layers.get(entity.layer_name)))
+        background = tuple(
+            (projected.get(item.entity_id, item), layer) for item, layer in context.background
+        )
+        previous = context.previous
+        state = MixedMoveState(
+            previous.transaction_id if previous else uuid4().hex,
+            revision,
+            context.original_draft,
+            context.original_saved,
+            saved,
+            previous.base_background if previous else context.background,
+            background,
+            previous.original_cross_tangencies if previous else context.pairs,
+            previous.original_associative_arrays if previous else context.arrays,
+        )
+        steps = tuple((items, item) for items, item, _pairs in context.history) + ((saved, draft),)
+        pairs_by_step = tuple(pairs for _items, _item, pairs in context.history) + (context.pairs,)
+        candidate = mycad_app.stage_mixed_drawing_timeline(
+            services,
+            loaded,
+            context.original_draft,
+            context.original_saved,
+            steps,
+            session_identity=session_id,
+            cross_pairs_by_step=pairs_by_step,
+            arrays_by_step=(*context.array_history, context.arrays),
+            initial_cross_pairs=state.original_cross_tangencies,
+            initial_associative_arrays=state.original_associative_arrays,
+            rectangle_transforms_by_step=(*context.transform_history, ()),
+        )
+        try:
+            result = candidate.preview(current_session_identity=session_id)
+            if result.state != "succeeded":
+                raise ValueError(str(result.failure or "混合拖动预览失败。"))
+        finally:
+            candidate.cancel()
+        return SavedHandlePreview(
+            (*context.current_saved, context.draft),
+            (*saved, draft),
+            anchors,
+            tuple(overlay),
+            state,
+            draft,
+            previous,
+            context.draft,
+            context.pairs,
+            context.history_position,
+        )
+
+    def _on_saved_handle_commit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_token: object,
+        raw_preview: object,
+        raw_revision: object,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if (
+            loaded is None
+            or services is None
+            or unit is None
+            or session_id != self._session_id
+            or not isinstance(raw_token, str)
+            or not isinstance(raw_preview, SavedHandlePreview)
+            or not isinstance(raw_revision, int)
+        ):
+            return
+        token, preview, revision = raw_token, raw_preview, raw_revision
+
+        def still_current() -> bool:
+            return (
+                self._loaded is loaded
+                and self._session_id == session_id
+                and editor.canvas.saved_handle_commit_is_current(token, revision)
+            )
+
+        if preview.mixed_state is not None:
+            before = preview.draft_before
+            canvas = editor.canvas
+            if (
+                not still_current()
+                or before is None
+                or preview.mixed_draft is None
+                or canvas.mixed_move != preview.mixed_before
+                or tuple(canvas.entities) != before.entities
+                or tuple(canvas.constraints) != before.constraints
+                or canvas.layer_table != before.layers
+                or editor.current_frame() != before.frame
+                or tuple(canvas.pending_cross_tangencies) != preview.pairs_before
+                or canvas.history_position != preview.history_before
+            ):
+                canvas.finish_saved_handle_commit(token, "草稿或来源已变化，请重新拖动。")
+                return
+            try:
+                canvas.apply_mixed_move(
+                    preview.mixed_state,
+                    preview.mixed_draft.entities,
+                    constraints=preview.mixed_draft.constraints,
+                )
+            except (KeyError, ValueError) as exc:
+                canvas.finish_saved_handle_commit(token, str(exc))
+                return
+            canvas.finish_saved_handle_commit(token, None)
+            canvas.message = "混合控制点拖动已暂存；完成草图时提交，可撤销。"
+            canvas.changed.emit()
+            return
+
+        def commit() -> object:
+            return mycad_app.commit_cross_sketch_drag(
+                services,
+                loaded,
+                preview.original,
+                preview.solved,
+                preview.anchors,
+                session_identity=session_id,
+                still_current=still_current,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._sketch_dialog is not editor
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            editor.canvas.finish_saved_handle_commit(token, result.error)
+            if result.error is None:
+                self._sync_drawing_layers()
+                editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                    editor.canvas.history_position
+                )
+                editor.layer_history_redo.clear()
+                editor.canvas.discard_redo_history()
+
+        if not unit.submit(
+            commit, operation="saved-handle-commit", session_id=session_id, on_complete=finish
+        ):
+            editor.canvas.finish_saved_handle_commit(token, "几何工作线程忙碌，请重试。")
+
+    def _submit_cross_sketch_edit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        original: tuple[Sketch, ...],
+        proposed: tuple[Sketch, ...],
+        anchors: tuple[CrossSketchRef, ...],
+        action: str,
+        rectangle_transforms: tuple[RectangleTransformEvidence, ...] = (),
+        polyline_transforms: tuple[RectangleTransformEvidence, ...] = (),
+        line_transforms: tuple[RectangleTransformEvidence, ...] = (),
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            return
+        editor.setEnabled(False)
+
+        def update() -> object:
+            return mycad_app.commit_cross_sketch_edit(
+                services,
+                loaded,
+                original,
+                proposed,
+                anchors,
+                session_identity=session_id,
+                rectangle_transforms=rectangle_transforms,
+                polyline_transforms=polyline_transforms,
+                line_transforms=line_transforms,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            editor.setEnabled(True)
+            if self._loaded is not loaded or self._session_id != session_id:
+                return
+            self._sync_drawing_layers()
+            if result.error is not None:
+                editor.status_label.setText(f"{action}失败：{result.error}")
+                return
+            editor.layer_history_boundaries[len(loaded.document.commands)] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            editor.status_label.setText(f"已{action}所选对象及其相切关联；可撤销。")
+
+        if not unit.submit(
+            update, operation="drawing-move", session_id=session_id, on_complete=finish
+        ):
+            editor.setEnabled(True)
+            editor.status_label.setText(f"几何工作线程忙碌，{action}未应用。")
+
+    def _undo_saved_line_edit(
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        identity: str,
+        position: int,
+        revision: int,
+        *,
+        mixed_copy: bool = False,
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        commands = loaded.document.commands if loaded is not None else ()
+        matching = [
+            index for index, command in enumerate(commands) if command.instance_id == identity
+        ]
+        trailing = commands[matching[0] + 1 :] if len(matching) == 1 else ()
+        settings_only = bool(trailing) and all(
+            command.id in {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+            for command in trailing
+        )
+        current_revision = loaded.document.revision if loaded is not None else -1
+        valid_history = (
+            len(matching) == 1 and current_revision == revision and (not trailing or settings_only)
+        )
+        mixed_draft = (
+            editor.mixed_draft_history.get(matching[0] + 1)
+            if mixed_copy and len(matching) == 1 and not trailing
+            else None
+        )
+        if mixed_draft is not None and mixed_draft[2] != identity:
+            mixed_draft = None
+        requires_mixed_draft = (
+            mixed_copy
+            and len(matching) == 1
+            and (
+                commands[matching[0]].id == "drawing.raster.batch"
+                or editor.canvas.has_mixed_draft_copy(identity)
+            )
+        )
+        if (
+            loaded is None
+            or services is None
+            or unit is None
+            or session_id != self._session_id
+            or self._sketch_dialog is not editor
+            or unit.is_busy
+            or unit.is_delivering_result
+            or editor.canvas.history_position != position
+            or not valid_history
+            or (requires_mixed_draft and mixed_draft is None)
+            or (
+                mixed_draft is not None
+                and not editor.canvas.mixed_draft_history_matches(
+                    mixed_draft[0], mixed_draft[1], redo=False
+                )
+            )
+        ):
+            editor.status_label.setText("文档或草稿历史已变化；不能撤销当前命令的编辑。")
+            return
+
+        def undo() -> None:
+            if loaded.document.revision != current_revision:
+                raise ValueError("文档历史已变化，撤销未执行。")
+            if settings_only:
+                loaded.bus.undo_operation_before_drawing_settings(identity, current_revision)
+            else:
+                loaded.bus.undo_operation()
+            services.kernel.viewport_data()
+
+        def finish(result: ExecutionResult) -> None:
+            if mixed_draft is not None:
+                editor.setEnabled(True)
+            if self._loaded is not loaded or self._session_id != session_id:
+                return
+            if result.error is None and self._sketch_dialog is editor:
+                if mixed_draft is not None:
+                    editor.canvas.undo_mixed_draft_copy(mixed_draft[0], mixed_draft[1])
+                    editor.layer_history_redo.append((matching[0] + 1, mixed_draft[0]))
+                previous = next(
+                    (
+                        command.instance_id
+                        for command in reversed(loaded.document.commands)
+                        if command.id
+                        not in {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+                    ),
+                    None,
+                )
+                if mixed_copy:
+                    editor.canvas.finish_mixed_copy_undo(identity, loaded.document.revision)
+                else:
+                    editor.canvas.finish_saved_line_edit_undo(
+                        identity, previous, loaded.document.revision
+                    )
+            self._finish_worker_action(result, "撤销")
+
+        if mixed_draft is not None:
+            editor.setEnabled(False)
+        if not unit.submit(undo, operation="undo", session_id=session_id, on_complete=finish):
+            if mixed_draft is not None:
+                editor.setEnabled(True)
+            editor.status_label.setText("几何工作线程忙碌，请稍后重试撤销。")
 
     def _on_saved_line_edit(
         self,
@@ -1934,26 +4606,33 @@ class MainWindow(QMainWindow):
             or loaded is None
             or session_id != self._session_id
             or not isinstance(mode, str)
-            or mode not in {"修剪", "延伸", "分割"}
+            or mode not in {"修剪", "延伸", "分割", "单点打断"}
             or not isinstance(identity, str)
             or not isinstance(edited, tuple)
         ):
             return
         canvas = editor.canvas
+
+        def reject(message: str) -> None:
+            if mode == "单点打断":
+                canvas.message = message
+                self.status_command.setText(message)
+            editor.status_label.setText(message)
+
         previous = canvas.mixed_move
         if previous is None and (
             canvas.source_context_revision != loaded.document.revision
             or tuple(editor.dimension_sources()[1:]) != services.kernel.sketches
         ):
             self._sync_drawing_layers()
-            editor.status_label.setText("文档已变化；图元未修改。")
+            reject("文档已变化；图元未修改。")
             return
         if previous is not None and (
             loaded.document.revision != previous.source_revision
             or editor.current_frame() != previous.original_draft.frame
             or not canvas.mixed_move_is_valid
         ):
-            editor.status_label.setText("文档或工作平面已变化；暂存修改未应用。")
+            reject("文档或工作平面已变化；暂存修改未应用。")
             return
         current_saved = previous.current_saved if previous else services.kernel.sketches
         candidates = [
@@ -1962,13 +4641,19 @@ class MainWindow(QMainWindow):
             if any(entity.entity_id == identity for entity in sketch.entities)
         ]
         if len(candidates) != 1:
-            editor.status_label.setText("目标身份不唯一或已变化；图元未修改。")
+            reject("目标身份不唯一或已变化；图元未修改。")
             return
         sketch = candidates[0]
         fragments = cast("tuple[SketchEntity, ...]", edited)
         if fragments:
-            shift = sketch.frame.world_to_local(editor.current_frame().local_to_world((0.0, 0.0)))
-            fragments = move_entities(fragments, tuple(e.entity_id for e in fragments), shift)
+            try:
+                fragments = tuple(
+                    project_coplanar_entity(entity, editor.current_frame(), sketch.frame)
+                    for entity in fragments
+                )
+            except ValueError as exc:
+                reject(f"编辑结果无法映射到来源草图；图元未修改：{exc}")
+                return
         revised_entities: list[SketchEntity] = []
         for entity in sketch.entities:
             if entity.entity_id == identity:
@@ -1976,8 +4661,44 @@ class MainWindow(QMainWindow):
             else:
                 revised_entities.append(entity)
         revised = replace(sketch, entities=tuple(revised_entities))
+        original_target = next(
+            (entity for entity in sketch.entities if entity.entity_id == identity), None
+        )
+        if mode == "单点打断" and isinstance(original_target, LineEntity | ArcEntity):
+            proof = (
+                unique_split_line_relation_fragment
+                if isinstance(original_target, LineEntity)
+                else unique_split_arc_relation_fragment
+            )
+            updated_saved = tuple(
+                revised if item.sketch_id == sketch.sketch_id else item for item in current_saved
+            )
+            for relation in services.kernel.cross_sketch_tangencies:
+                for ref in (relation.first, relation.second):
+                    if (
+                        ref.sketch_id == sketch.sketch_id
+                        and ref.entity_id == identity
+                        and proof(current_saved, updated_saved, relation, ref) is None
+                    ):
+                        reject("无法唯一确定打断后的相切片段；图元未修改。")
+                        return
+        if mode in {"修剪", "单点打断"}:
+            try:
+                revised = replace(
+                    revised,
+                    constraints=rebind_retained_local_tangencies(
+                        sketch,
+                        revised,
+                        allow_fragment_rebind=True,
+                        allow_split_lines=mode == "单点打断",
+                        allow_split_arcs=mode == "单点打断",
+                    ),
+                )
+            except ValueError as exc:
+                reject(f"{mode}无法保留相切关系；图元未修改：{exc}")
+                return
         if revised == sketch:
-            editor.status_label.setText(f"{mode}未改变图元。")
+            reject(f"{mode}未改变图元。")
             return
         if canvas.entities or previous is not None:
             original_draft = (
@@ -1997,7 +4718,7 @@ class MainWindow(QMainWindow):
                 (layer for entity, layer in background if entity.entity_id == identity), None
             )
             if layer is None:
-                editor.status_label.setText("目标图元已变化；暂存修改未应用。")
+                reject("目标图元已变化；暂存修改未应用。")
                 return
             overlay: list[tuple[SketchEntity, SketchLayer]] = []
             for entity, item_layer in background:
@@ -2018,6 +4739,12 @@ class MainWindow(QMainWindow):
                 ),
                 previous.base_background if previous else background,
                 tuple(overlay),
+                previous.original_cross_tangencies
+                if previous
+                else tuple(canvas.pending_cross_tangencies),
+                previous.original_associative_arrays
+                if previous
+                else tuple(canvas.pending_associative_arrays),
             )
             draft = replace(
                 original_draft,
@@ -2025,7 +4752,7 @@ class MainWindow(QMainWindow):
                 constraints=tuple(canvas.constraints),
                 layers=canvas.layer_table,
             )
-            self._preview_mixed_drawing_change(editor, session_id, proposed, draft)
+            self._preview_mixed_drawing_change(editor, session_id, proposed, draft, action=mode)
             return
         frozen = revised.to_state_mapping()
         revisions: list[dict[str, object]] = [
@@ -2043,6 +4770,271 @@ class MainWindow(QMainWindow):
             any(isinstance(entity, PointEntity) for entity in revised.entities),
             mode,
         )
+
+    def _on_delete_drawing_dimensions(
+        self, editor: SketchEditorDialog, session_id: int, raw_ids: object
+    ) -> None:
+        loaded, services = self._loaded, self._services
+        if (
+            loaded is None
+            or services is None
+            or session_id != self._session_id
+            or not isinstance(raw_ids, tuple)
+        ):
+            return
+        raw_values = cast("tuple[object, ...]", raw_ids)
+        if not raw_values or any(not isinstance(identity, str) for identity in raw_values):
+            return
+        ids = set(cast("tuple[str, ...]", raw_values))
+        canvas = editor.canvas
+        previous = canvas.mixed_move
+        image_ids = set(canvas.selected_raster_ids)
+        images = tuple(image for image in canvas.drawing_rasters if image.image_id in image_ids)
+        if image_ids and (
+            len(images) != len(image_ids)
+            or any(
+                canvas.layer_table.get(image.layer_name).locked
+                or not canvas.layer_table.get(image.layer_name).displayed
+                for image in images
+            )
+            or previous is not None
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+        ):
+            editor.status_label.setText("图片不可编辑或存在暂存关联；所选对象未删除。")
+            return
+        if previous is not None and (
+            loaded.document.revision != previous.source_revision
+            or not canvas.mixed_move_is_valid
+            or editor.current_frame() != previous.original_draft.frame
+        ):
+            editor.status_label.setText("文档或工作平面已变化；标注未删除。")
+            return
+        if previous is None and canvas.source_context_revision != loaded.document.revision:
+            self._sync_drawing_layers()
+            editor.status_label.setText("文档已变化；所选对象未删除。")
+            return
+        originals = previous.current_saved if previous else services.kernel.sketches
+        entity_ids = set(canvas.selected_entity_ids)
+        if image_ids and any(
+            constraint.constraint_id in ids
+            or any(ref.entity_id in entity_ids for ref in constraint.references)
+            for constraint in canvas.constraints
+        ):
+            editor.status_label.setText("所选对象涉及暂存标注或约束；请先完成草稿。")
+            return
+        selected_entities = [
+            entity for entity in canvas.selectable_entities() if entity.entity_id in entity_ids
+        ]
+        if (
+            len(selected_entities) != len(entity_ids)
+            or {entity.entity_id for entity in selected_entities} != entity_ids
+        ):
+            editor.status_label.setText("图元不可编辑或身份不唯一；所选对象未删除。")
+            return
+        if any(
+            entity.entity_id in entity_ids and (layer.locked or not layer.displayed)
+            for entity, layer in canvas.background_entities
+        ) or any(
+            entity.entity_id in entity_ids
+            and (
+                canvas.layer_table.get(entity.layer_name).locked
+                or not canvas.layer_table.get(entity.layer_name).displayed
+            )
+            for entity in canvas.entities
+        ):
+            editor.status_label.setText("所选图元所在图层隐藏或已锁定；对象未删除。")
+            return
+        if entity_ids:
+            arrays = (*services.kernel.associative_arrays, *canvas.pending_associative_arrays)
+            array_targets = {
+                ref.entity_id
+                for array in arrays
+                for ref in (
+                    *(member.target for member in array.members if member.erased_index is None),
+                    *(output.target for output in array.extra_outputs),
+                )
+            }
+            array_refs = {
+                ref.entity_id
+                for array in arrays
+                for ref in (
+                    *array.sources,
+                    *(member.source for member in array.members),
+                    *(member.target for member in array.members),
+                    *(member.replacement.source for member in array.members if member.replacement),
+                    *(output.source for output in array.extra_outputs),
+                    *(output.target for output in array.extra_outputs),
+                    *(output.anchor_source for output in array.extra_outputs),
+                )
+            }
+            if entity_ids & (array_refs - array_targets):
+                editor.status_label.setText("所选图元有关联阵列；请分别处理。")
+                return
+        matches = [
+            constraint
+            for sketch in originals
+            for constraint in sketch.constraints
+            if constraint.constraint_id in ids
+        ]
+        matches.extend(
+            constraint for constraint in canvas.constraints if constraint.constraint_id in ids
+        )
+        if len(matches) != len(ids) or any(
+            constraint.kind not in DIMENSION_KINDS and constraint.kind != "tangent"
+            for constraint in matches
+        ):
+            editor.status_label.setText("约束身份不唯一、不受支持或已变化；请重新选择。")
+            return
+        if any(
+            canvas.annotation_layer(item).locked or not canvas.annotation_layer(item).displayed
+            for item in matches
+        ):
+            editor.status_label.setText("标注图层隐藏或已锁定；标注未删除。")
+            return
+        if any(
+            any(ref.entity_id in entity_ids for ref in constraint.references)
+            and (
+                canvas.annotation_layer(constraint).locked
+                or not canvas.annotation_layer(constraint).displayed
+            )
+            for constraint in (
+                *canvas.constraints,
+                *(constraint for sketch in originals for constraint in sketch.constraints),
+            )
+        ):
+            editor.status_label.setText("相关约束位于已锁定或隐藏图层；所选对象未删除。")
+            return
+        current = tuple(
+            replace(
+                sketch,
+                entities=tuple(
+                    entity for entity in sketch.entities if entity.entity_id not in entity_ids
+                ),
+                constraints=tuple(
+                    c
+                    for c in sketch.constraints
+                    if c.constraint_id not in ids
+                    and not any(ref.entity_id in entity_ids for ref in c.references)
+                ),
+            )
+            for sketch in originals
+        )
+        if (canvas.entities or canvas.constraints or previous is not None) and not image_ids:
+            original_draft = (
+                previous.original_draft
+                if previous
+                else Sketch(
+                    editor.draft_sketch_id,
+                    editor.current_frame(),
+                    tuple(canvas.entities),
+                    constraints=tuple(canvas.constraints),
+                    layers=canvas.layer_table,
+                )
+            )
+            draft = replace(
+                original_draft,
+                entities=tuple(
+                    entity for entity in canvas.entities if entity.entity_id not in entity_ids
+                ),
+                constraints=tuple(
+                    c
+                    for c in canvas.constraints
+                    if c.constraint_id not in ids
+                    and not any(ref.entity_id in entity_ids for ref in c.references)
+                ),
+                layers=canvas.layer_table,
+            )
+            proposed = MixedMoveState(
+                previous.transaction_id if previous else uuid4().hex,
+                previous.source_revision if previous else loaded.document.revision,
+                original_draft,
+                previous.original_saved if previous else services.kernel.sketches,
+                current,
+                previous.base_background if previous else canvas.background_entities,
+                tuple(
+                    (entity, layer)
+                    for entity, layer in canvas.background_entities
+                    if entity.entity_id not in entity_ids
+                ),
+                previous.original_cross_tangencies
+                if previous
+                else tuple(canvas.pending_cross_tangencies),
+                previous.original_associative_arrays
+                if previous
+                else tuple(canvas.pending_associative_arrays),
+            )
+            pending_targets = tuple(
+                ref
+                for array in canvas.pending_associative_arrays
+                for ref in (
+                    *(member.target for member in array.members if member.erased_index is None),
+                    *(output.target for output in array.extra_outputs),
+                )
+                if ref.entity_id in entity_ids
+            )
+            pending_arrays = None
+            if pending_targets:
+                try:
+                    prior_draft = replace(
+                        original_draft,
+                        entities=tuple(canvas.entities),
+                        constraints=tuple(canvas.constraints),
+                        layers=canvas.layer_table,
+                    )
+                    _, pending_arrays = erase_drawing_entities(
+                        strip_erased_member_dimensions(
+                            (prior_draft, *originals), (draft, *current), pending_targets
+                        ),
+                        tuple(canvas.pending_associative_arrays),
+                        pending_targets,
+                    )
+                except (KeyError, ValueError) as exc:
+                    editor.status_label.setText(f"混合删除失败：{exc}")
+                    return
+            self._preview_mixed_drawing_change(
+                editor, session_id, proposed, draft, erase=True, pending_arrays=pending_arrays
+            )
+            return
+        revisions: list[dict[str, object]] = []
+        for before, after in zip(originals, current, strict=True):
+            if before != after:
+                state = after.to_state_mapping()
+                revisions.append(
+                    {
+                        "sketch_id": before.sketch_id,
+                        "base_state_sha256": before.local_state_digest(),
+                        "entities": state["entities"],
+                        "constraints": state["constraints"],
+                    }
+                )
+        if revisions:
+            self._submit_drawing_revisions(
+                editor,
+                session_id,
+                revisions,
+                any(
+                    isinstance(entity, PointEntity)
+                    for sketch in current
+                    for entity in sketch.entities
+                ),
+                "删除约束" if any(item.kind == "tangent" for item in matches) else "删除标注",
+                tuple(
+                    relation.relation_id
+                    for relation in services.kernel.cross_sketch_tangencies
+                    if any(ref.entity_id in entity_ids for ref in (relation.first, relation.second))
+                ),
+                tuple(
+                    ref
+                    for array in services.kernel.associative_arrays
+                    for ref in (
+                        *(member.target for member in array.members if member.erased_index is None),
+                        *(output.target for output in array.extra_outputs),
+                    )
+                    if ref.entity_id in entity_ids
+                ),
+                raster_remove_ids=tuple(sorted(image_ids)),
+            )
 
     def _on_saved_drag_trim(
         self,
@@ -2066,9 +5058,20 @@ class MainWindow(QMainWindow):
             or not isinstance(raw_revision, int)
         ):
             return
+        action = (
+            "直线圆角"
+            if editor.canvas.tool == "二维圆角"
+            else "二维倒角"
+            if editor.canvas.tool == "二维倒角"
+            else "偏移删除源"
+            if editor.canvas.active_transform == "offset"
+            else "围栏延伸"
+            if editor.canvas.tool == "延伸"
+            else "拖动修剪"
+        )
         if loaded.document.revision != raw_revision:
             self._sync_drawing_layers()
-            editor.status_label.setText("文档已变化；拖动修剪未应用。")
+            editor.status_label.setText(f"文档已变化；{action}未应用。")
             return
         canvas = editor.canvas
         previous = canvas.mixed_move
@@ -2078,12 +5081,12 @@ class MainWindow(QMainWindow):
             or not canvas.mixed_move_is_valid
         ):
             self._sync_drawing_layers()
-            editor.status_label.setText("文档或工作平面已变化；拖动修剪未应用。")
+            editor.status_label.setText(f"文档或工作平面已变化；{action}未应用。")
             return
         original = previous.current_saved if previous else services.kernel.sketches
         if previous is None and tuple(editor.dimension_sources()[1:]) != original:
             self._sync_drawing_layers()
-            editor.status_label.setText("文档已变化；拖动修剪未应用。")
+            editor.status_label.setText(f"文档已变化；{action}未应用。")
             return
         events = cast("tuple[tuple[str, tuple[SketchEntity, ...]], ...]", raw_events)
         current = list(original)
@@ -2094,23 +5097,51 @@ class MainWindow(QMainWindow):
                 if any(entity.entity_id == identity for entity in sketch.entities)
             ]
             if len(owners) != 1:
-                editor.status_label.setText("目标身份不唯一或已变化；拖动修剪未应用。")
+                editor.status_label.setText(f"目标身份不唯一或已变化；{action}未应用。")
                 return
             index, sketch = owners[0]
             fragments = projected
             if fragments:
-                shift = sketch.frame.world_to_local(
-                    editor.current_frame().local_to_world((0.0, 0.0))
-                )
-                fragments = move_entities(fragments, tuple(e.entity_id for e in fragments), shift)
+                try:
+                    fragments = tuple(
+                        project_coplanar_entity(entity, editor.current_frame(), sketch.frame)
+                        for entity in fragments
+                    )
+                except ValueError as exc:
+                    editor.status_label.setText(f"编辑结果无法映射到来源草图；图元未修改：{exc}")
+                    return
             result: list[SketchEntity] = []
             for entity in sketch.entities:
                 if entity.entity_id == identity:
                     result.extend(fragments)
                 else:
                     result.append(entity)
-            current[index] = replace(sketch, entities=tuple(result))
-        if canvas.entities or previous is not None:
+            revised = replace(sketch, entities=tuple(result))
+            if action == "拖动修剪":
+                try:
+                    revised = replace(
+                        revised,
+                        constraints=rebind_retained_local_tangencies(
+                            sketch, revised, allow_fragment_rebind=True
+                        ),
+                    )
+                except ValueError as exc:
+                    editor.status_label.setText(f"修剪无法保留相切关系；图元未修改：{exc}")
+                    return
+            if action in {"直线圆角", "二维倒角"}:
+                try:
+                    revised = replace(
+                        revised,
+                        constraints=rebind_unchanged_user_polyline_constraints(
+                            sketch, revised, include_inferred=True
+                        ),
+                    )
+                except ValueError as exc:
+                    editor.canvas.finish_fillet_candidate(success=False)
+                    editor.status_label.setText(f"{action}无法保留约束；图元未修改：{exc}")
+                    return
+            current[index] = revised
+        if canvas.entities or raw_draft or previous is not None:
             original_draft = (
                 previous.original_draft
                 if previous
@@ -2131,6 +5162,12 @@ class MainWindow(QMainWindow):
                 tuple(current),
                 previous.base_background if previous else canvas.background_entities,
                 cast("tuple[tuple[SketchEntity, SketchLayer], ...]", raw_background),
+                previous.original_cross_tangencies
+                if previous
+                else tuple(canvas.pending_cross_tangencies),
+                previous.original_associative_arrays
+                if previous
+                else tuple(canvas.pending_associative_arrays),
             )
             draft = replace(
                 original_draft,
@@ -2160,7 +5197,13 @@ class MainWindow(QMainWindow):
         if not revisions:
             editor.status_label.setText("拖动修剪未改变图元。")
             return
-        self._submit_drawing_revisions(editor, session_id, revisions, includes_points, "修剪")
+        self._submit_drawing_revisions(
+            editor,
+            session_id,
+            revisions,
+            includes_points,
+            action,
+        )
 
     def _submit_drawing_revisions(
         self,
@@ -2169,13 +5212,280 @@ class MainWindow(QMainWindow):
         revisions: list[dict[str, object]],
         includes_points: bool,
         action: str,
+        removed_relations: tuple[str, ...] = (),
+        erased_members: tuple[ArrayEntityRef, ...] = (),
+        raster_remove_ids: tuple[str, ...] = (),
+        raster_updates: tuple[DrawingRaster, ...] = (),
+        raster_additions: tuple[DrawingRaster, ...] = (),
+        draft_candidate: tuple[SketchEntity, ...] | None = None,
+        draft_constraint_candidate: tuple[SketchConstraint, ...] | None = None,
+        dimension_layer_updates: bool = False,
+        draft_remove_constraint_ids: frozenset[str] = frozenset(),
+        preserve_pending_tangencies: bool = False,
+        copy_omitted_constraints: bool = False,
+        copy_omitted_array: bool = False,
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
             return
+        source_revision = loaded.document.revision
+        has_curves = mycad_app.revisions_include_curved_polylines(revisions)
+        has_local_endpoints = mycad_app.revisions_include_local_endpoint_constraints(revisions)
+        has_projection_axes = mycad_app.revisions_include_projection_axes(revisions)
+        has_dimension_text = mycad_app.revisions_include_dimension_text(revisions)
+        has_dimension_styles = mycad_app.revisions_include_dimension_styles(revisions)
+        draft_before = editor.canvas.history_position
+        draft_entities_before = tuple(editor.canvas.entities)
+        draft_constraints_before = tuple(editor.canvas.constraints)
+        checkpoint = loaded.bus.create_save_checkpoint() if draft_candidate is not None else None
+        committed_revision: int | None = None
         editor.setEnabled(False)
 
         def update() -> object:
+            nonlocal committed_revision
+            if not revisions and raster_updates:
+                candidate = mycad_app.create_replay_candidate(
+                    services, loaded, session_identity=session_id
+                )
+                candidate.stage(
+                    ReplayChangeSet(
+                        (),
+                        (
+                            ReplayAppend(
+                                "drawing.raster.batch",
+                                1,
+                                {
+                                    "action": "update",
+                                    "images": [
+                                        image.to_mapping(version=2) for image in raster_updates
+                                    ],
+                                },
+                                "local",
+                            ),
+                        ),
+                        False,
+                        8 if loaded.document.archive_version < 8 else None,
+                    ),
+                    current_session_identity=session_id,
+                )
+                preview = candidate.preview(current_session_identity=session_id)
+                if preview.state != "succeeded":
+                    raise ValueError(str(preview.failure or "图片修订预览失败"))
+                committed = candidate.commit(
+                    candidate.authorize_commit(current_session_identity=session_id),
+                    current_session_identity=session_id,
+                )
+                committed_revision = loaded.document.revision
+                return committed
+            original = services.kernel.sketches
+            revisions_by_id = {revision["sketch_id"]: revision for revision in revisions}
+            updated: list[Sketch] = []
+            for sketch in original:
+                revision = revisions_by_id.get(sketch.sketch_id)
+                if revision is None:
+                    updated.append(sketch)
+                    continue
+                state = sketch.to_state_mapping()
+                state["entities"] = revision["entities"]
+                state["constraints"] = revision["constraints"]
+                updated.append(Sketch.from_mapping(state))
+            existing = tuple(
+                relation
+                for relation in services.kernel.cross_sketch_tangencies
+                if relation.relation_id not in removed_relations
+            )
+            rebound, rebind_version = rebind_committed_tangencies_for_edit(
+                original, tuple(updated), existing
+            )
+            replacements = tuple(
+                after for before, after in zip(existing, rebound, strict=True) if before != after
+            )
+            removals = (*removed_relations, *(relation.relation_id for relation in replacements))
+            updated_by_id = {sketch.sketch_id: sketch for sketch in updated}
+            has_inferred_rebind = any(
+                before.source == "inferred"
+                and before.constraint_id == after.constraint_id
+                and before.references != after.references
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            original_circles = {
+                (sketch.sketch_id, entity.entity_id)
+                for sketch in original
+                for entity in sketch.entities
+                if isinstance(entity, CircleEntity)
+            }
+            has_trimmed_circle = any(
+                isinstance(entity, ArcEntity)
+                and (sketch.sketch_id, entity.entity_id) in original_circles
+                for sketch in updated
+                for entity in sketch.entities
+            )
+            has_local_tangent_rebind = action in {"修剪", "拖动修剪", "单点打断"} and any(
+                before.kind == "tangent"
+                and before.source == "user"
+                and before.constraint_id == after.constraint_id
+                and before.references != after.references
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            has_local_fragment_rebind = has_local_tangent_rebind and any(
+                before.kind == "tangent"
+                and before.source == "user"
+                and before.constraint_id == after.constraint_id
+                and any(
+                    a.entity_id != b.entity_id
+                    for a, b in zip(before.references, after.references, strict=True)
+                )
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            has_local_split_line_rebind = has_local_tangent_rebind and any(
+                before.kind == "tangent"
+                and before.source == "user"
+                and before.constraint_id == after.constraint_id
+                and any(
+                    a.entity_id != b.entity_id
+                    and any(
+                        isinstance(entity, LineEntity) and entity.entity_id == a.entity_id
+                        for entity in sketch.entities
+                    )
+                    for a, b in zip(before.references, after.references, strict=True)
+                )
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            has_local_split_arc_rebind = has_local_tangent_rebind and any(
+                before.kind == "tangent"
+                and before.source == "user"
+                and before.constraint_id == after.constraint_id
+                and any(
+                    a.entity_id != b.entity_id
+                    and any(
+                        isinstance(entity, ArcEntity) and entity.entity_id == a.entity_id
+                        for entity in sketch.entities
+                    )
+                    for a, b in zip(before.references, after.references, strict=True)
+                )
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            batch = (
+                dimension_layer_updates
+                or bool(raster_remove_ids or raster_updates or raster_additions)
+                or has_trimmed_circle
+                or has_local_tangent_rebind
+                or bool(rebind_version)
+                or len(revisions) > 1
+                or bool(removals)
+                or bool(replacements)
+                or bool(erased_members)
+                or has_inferred_rebind
+            )
+            params: dict[str, object] = {"revisions": revisions} if batch else dict(revisions[0])
+            if raster_remove_ids:
+                params["raster_batch"] = {"action": "remove", "image_ids": list(raster_remove_ids)}
+            elif raster_updates:
+                params["raster_batch"] = {
+                    "action": "update",
+                    "images": [image.to_mapping(version=2) for image in raster_updates],
+                }
+            elif raster_additions:
+                params["raster_batch"] = {
+                    "action": "add",
+                    "images": [image.to_mapping(version=2) for image in raster_additions],
+                }
+            if removals:
+                params["remove_tangencies"] = list(removals)
+            if replacements:
+                params["cross_tangencies"] = [relation.to_mapping() for relation in replacements]
+            if erased_members:
+                params["erase_array_members"] = [ref.to_mapping() for ref in erased_members]
+            erased_set = set(erased_members)
+            has_user_rebind = any(
+                before.source == "user"
+                and before.constraint_id == after.constraint_id
+                and before.references != after.references
+                for sketch in original
+                for before in sketch.constraints
+                for after in updated_by_id[sketch.sketch_id].constraints
+            )
+            removes_member_dimension = any(
+                constraint.kind in DIMENSION_KINDS
+                and constraint.constraint_id
+                not in {item.constraint_id for item in updated_by_id[sketch.sketch_id].constraints}
+                and any(
+                    ArrayEntityRef(sketch.sketch_id, ref.entity_id) in erased_set
+                    for ref in constraint.references
+                )
+                for sketch in original
+                for constraint in sketch.constraints
+            )
+            version = (
+                52
+                if dimension_layer_updates
+                else 51
+                if has_dimension_styles
+                and (raster_remove_ids or raster_updates or raster_additions)
+                else (50 if batch else 8)
+                if has_dimension_styles
+                else 49
+                if has_dimension_text and (raster_remove_ids or raster_updates or raster_additions)
+                else (48 if batch else 7)
+                if has_dimension_text
+                else 47
+                if raster_remove_ids or raster_updates or raster_additions
+                else max(46, rebind_version)
+                if has_local_split_arc_rebind
+                else max(45, rebind_version)
+                if has_local_split_line_rebind
+                else max(42, rebind_version)
+                if has_local_fragment_rebind
+                else max(41, rebind_version)
+                if has_local_tangent_rebind
+                else max(39, rebind_version)
+                if has_trimmed_circle
+                else rebind_version
+                if rebind_version
+                else (32 if batch else 6)
+                if has_user_rebind or has_inferred_rebind
+                else (31 if batch else 5)
+                if has_projection_axes
+                else 26
+                if removes_member_dimension
+                else 23
+                if any(
+                    output.target in erased_members
+                    for array in services.kernel.associative_arrays
+                    for output in array.extra_outputs
+                )
+                else 20
+                if erased_members
+                else 8
+                if has_local_endpoints and batch
+                else 4
+                if has_local_endpoints
+                else 7
+                if any(
+                    relation.first_endpoint or relation.second_endpoint for relation in replacements
+                )
+                else 5
+                if replacements
+                else 3
+                if has_curves
+                else 2
+                if removals
+                else 1
+                if batch
+                else 2
+                if includes_points
+                else 1
+            )
             candidate = mycad_app.create_replay_candidate(
                 services, loaded, session_identity=session_id
             )
@@ -2184,45 +5494,172 @@ class MainWindow(QMainWindow):
                     (),
                     (
                         ReplayAppend(
-                            "drawing.sketch.revise" if len(revisions) > 1 else "sketch.revise",
-                            1 if len(revisions) > 1 else 2 if includes_points else 1,
-                            {"revisions": revisions} if len(revisions) > 1 else revisions[0],
+                            "drawing.sketch.revise" if batch else "sketch.revise",
+                            version,
+                            params,
                             "local",
                         ),
                     ),
                     False,
-                    6 if loaded.document.archive_version < 6 else None,
+                    8
+                    if (
+                        dimension_layer_updates
+                        or raster_remove_ids
+                        or raster_updates
+                        or raster_additions
+                    )
+                    and loaded.document.archive_version < 8
+                    else 6
+                    if loaded.document.archive_version < 6
+                    else None,
                 ),
                 current_session_identity=session_id,
             )
             preview = candidate.preview(current_session_identity=session_id)
             if preview.state != "succeeded":
+                if (
+                    preview.failure is not None
+                    and preview.failure.reason == "revised geometry violates existing constraints"
+                ):
+                    raise ValueError("修改与现有尺寸或约束冲突；图形保持原状。")
                 raise ValueError(str(preview.failure or "草图修订预览失败"))
-            return candidate.commit(
+            committed = candidate.commit(
                 candidate.authorize_commit(current_session_identity=session_id),
                 current_session_identity=session_id,
             )
+            committed_revision = loaded.document.revision
+            return committed
 
         def finish(result: ExecutionResult) -> None:
             editor.setEnabled(True)
             if self._loaded is not loaded or self._session_id != session_id:
+                if checkpoint is not None:
+                    loaded.bus.release_save_checkpoint(checkpoint)
                 return
+            if checkpoint is not None:
+                if result.error is not None:
+                    loaded.bus.restore_save_checkpoint(
+                        checkpoint, expected_revision=source_revision
+                    )
+                else:
+                    previous_layer_redo = list(editor.layer_history_redo)
+                    try:
+                        if preserve_pending_tangencies:
+                            self._sync_drawing_layers()
+                        draft_unchanged = (
+                            editor.canvas.history_position == draft_before
+                            and tuple(editor.canvas.entities) == draft_entities_before
+                            and tuple(editor.canvas.constraints) == draft_constraints_before
+                            and draft_candidate is not None
+                        )
+                        if draft_unchanged and draft_constraint_candidate is not None:
+                            original_draft = editor.dimension_sources()[0]
+                            draft_applied = editor.canvas.apply_constraint_solution(
+                                original_draft,
+                                replace(
+                                    original_draft,
+                                    entities=draft_candidate,
+                                    constraints=draft_constraint_candidate,
+                                ),
+                            )
+                        else:
+                            draft_applied = bool(
+                                draft_unchanged
+                                and draft_candidate is not None
+                                and editor.canvas.replace_draft_entities_atomically(
+                                    draft_candidate,
+                                    remove_dependent_constraints=action == "删除",
+                                    remove_constraint_ids=draft_remove_constraint_ids,
+                                    preserve_pending_tangencies=preserve_pending_tangencies,
+                                )
+                            )
+                    except Exception as exc:
+                        draft_applied = False
+                        editor.canvas.message = f"草稿更新失败：{exc}"
+                    if not draft_applied:
+                        editor.layer_history_redo[:] = previous_layer_redo
+                        assert committed_revision is not None
+                        loaded.bus.restore_save_checkpoint(
+                            checkpoint, expected_revision=committed_revision
+                        )
+                        if action == "复制":
+                            editor.canvas.cancel_transform()
+                        self._sync_drawing_layers()
+                        editor.status_label.setText(f"草稿已变化或无法修改；本次{action}已回滚。")
+                        return
+                    loaded.bus.release_save_checkpoint(checkpoint)
+                    count = loaded.document.command_count
+                    editor.mixed_draft_history[count] = (
+                        draft_before,
+                        editor.canvas.history_position,
+                        loaded.document.commands[-1].instance_id,
+                    )
             self._sync_drawing_layers()
             if result.error is not None:
-                editor.status_label.setText(f"{action}失败：{result.error}")
+                if action == "复制" and raster_additions:
+                    editor.canvas.finish_mixed_copy_commit(None, loaded.document.revision)
+                if action in {"直线圆角", "二维倒角"}:
+                    editor.canvas.finish_fillet_candidate(success=False)
+                message = f"{action}失败：{result.error}"
+                if action == "单点打断":
+                    editor.canvas.message = message
+                    editor.drawing_command_bar.status.setText(message)
+                editor.status_label.setText(message)
                 return
+            if action == "复制" and raster_additions:
+                identity = (
+                    loaded.document.commands[-1].instance_id if loaded.document.commands else None
+                )
+                editor.canvas.finish_mixed_copy_commit(
+                    identity, loaded.document.revision, includes_draft=draft_candidate is not None
+                )
+            if raster_remove_ids:
+                editor.canvas.selected_raster_ids.difference_update(raster_remove_ids)
+            if action in {"直线圆角", "二维倒角"}:
+                editor.canvas.finish_fillet_candidate(success=True)
+            if action in {"修剪", "延伸", "拖动修剪", "围栏延伸"}:
+                editor.canvas.acknowledge_line_edit_revision(
+                    source_revision, loaded.document.revision
+                )
+            if (
+                (
+                    action in {"修剪", "延伸", "拖动修剪", "围栏延伸", "二维倒角", "直线圆角"}
+                    or (action == "删除" and editor.canvas.tool == "修剪")
+                )
+                and loaded.document.commands
+                and loaded.document.commands[-1].instance_id
+            ):
+                editor.canvas.record_saved_line_edit(
+                    loaded.document.commands[-1].instance_id, loaded.document.revision
+                )
             editor.layer_history_boundaries[len(loaded.document.commands)] = (
                 editor.canvas.history_position
             )
             editor.layer_history_redo.clear()
             editor.canvas.discard_redo_history()
-            editor.status_label.setText(f"已{action}所选对象；可撤销。")
+            message = f"已{action}所选对象；可撤销。"
+            if copy_omitted_constraints:
+                message += "副本未继承原对象的约束关系。"
+            if copy_omitted_array:
+                message += "副本未继承原对象的阵列关联。"
+            if action == "单点打断":
+                editor.canvas.message = message
+                editor.drawing_command_bar.status.setText(message)
+            editor.status_label.setText(message)
 
         if not unit.submit(
             update, operation="drawing-move", session_id=session_id, on_complete=finish
         ):
             editor.setEnabled(True)
-            editor.status_label.setText(f"几何工作线程忙碌，{action}未应用。")
+            if checkpoint is not None:
+                loaded.bus.release_save_checkpoint(checkpoint)
+            if action in {"直线圆角", "二维倒角"}:
+                editor.canvas.finish_fillet_candidate(success=False)
+            message = f"几何工作线程忙碌，{action}未应用。"
+            if action == "单点打断":
+                editor.canvas.message = message
+                editor.drawing_command_bar.status.setText(message)
+            editor.status_label.setText(message)
 
     def _stage_drawing_mixed_move(
         self,
@@ -2232,8 +5669,10 @@ class MainWindow(QMainWindow):
         displacement: tuple[float, float],
         *,
         angle: float | None = None,
+        scale: float | None = None,
         mirror_end: tuple[float, float] | None = None,
         erase: bool = False,
+        raster_updates: tuple[DrawingRaster, ...] = (),
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
@@ -2281,25 +5720,62 @@ class MainWindow(QMainWindow):
         ):
             editor.status_label.setText("相关约束位于已锁定或隐藏图层；图元未修改。")
             return
+        pending_arrays: tuple[AssociativeRectArray, ...] | None = None
         draft_entities = tuple(canvas.entities)
         if draft_ids:
             if erase:
-                draft_entities = tuple(
-                    entity for entity in draft_entities if entity.entity_id not in draft_ids
-                )
+                if canvas.pending_associative_arrays:
+                    try:
+                        prior_draft = replace(
+                            original_draft,
+                            entities=draft_entities,
+                            constraints=tuple(canvas.constraints),
+                            layers=canvas.layer_table,
+                        )
+                        states, arrays = erase_drawing_entities(
+                            (prior_draft, *current_saved),
+                            tuple(canvas.pending_associative_arrays),
+                            tuple(
+                                ArrayEntityRef(prior_draft.sketch_id, item) for item in draft_ids
+                            ),
+                        )
+                        pending_ids = {
+                            array.array_id for array in canvas.pending_associative_arrays
+                        }
+                        pending_arrays = tuple(
+                            array for array in arrays if array.array_id in pending_ids
+                        )
+                        draft_entities = states[0].entities
+                    except (KeyError, ValueError) as exc:
+                        editor.status_label.setText(f"混合删除失败：{exc}")
+                        return
+                else:
+                    draft_entities = tuple(
+                        entity for entity in draft_entities if entity.entity_id not in draft_ids
+                    )
             elif mirror_end is not None:
                 draft_entities = mirror_entities(
                     draft_entities, draft_ids, displacement, mirror_end
                 )
             elif angle is not None:
                 draft_entities = rotate_entities(draft_entities, draft_ids, displacement, angle)
+            elif scale is not None:
+                draft_entities = scale_entities(draft_entities, draft_ids, displacement, scale)
             else:
-                draft_entities = move_entities(draft_entities, draft_ids, displacement)
+                draft_entities = move_entities(
+                    draft_entities, draft_ids, displacement, preserve_rectangle_order=True
+                )
         revised_saved: list[Sketch] = []
         for sketch in current_saved:
             ids = tuple(
                 entity.entity_id for entity in sketch.entities if entity.entity_id in saved_ids
             )
+            if ids and not erase:
+                try:
+                    project_coplanar_vector((0.0, 0.0), editor.current_frame(), sketch.frame)
+                except ValueError:
+                    editor.status_label.setText("所选对象不在当前工作平面；图元未修改。")
+                    return
             if ids and erase:
                 changed = tuple(entity for entity in sketch.entities if entity.entity_id not in ids)
             elif ids and mirror_end is not None:
@@ -2312,9 +5788,20 @@ class MainWindow(QMainWindow):
                 center = sketch.frame.world_to_local(
                     editor.current_frame().local_to_world(displacement)
                 )
-                changed = rotate_entities(sketch.entities, ids, center, angle)
+                local_angle = project_coplanar_rotation(angle, editor.current_frame(), sketch.frame)
+                changed = rotate_entities(sketch.entities, ids, center, local_angle)
+            elif ids and scale is not None:
+                center = sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world(displacement)
+                )
+                changed = scale_entities(sketch.entities, ids, center, scale)
             elif ids:
-                changed = move_entities(sketch.entities, ids, displacement)
+                changed = move_entities(
+                    sketch.entities,
+                    ids,
+                    project_coplanar_vector(displacement, editor.current_frame(), sketch.frame),
+                    preserve_rectangle_order=True,
+                )
             else:
                 changed = sketch.entities
             constraints = tuple(
@@ -2323,12 +5810,36 @@ class MainWindow(QMainWindow):
                 if not erase or all(ref.entity_id not in ids for ref in constraint.references)
             )
             revised_saved.append(replace(sketch, entities=changed, constraints=constraints))
+        if scale is not None and canvas.pending_associative_arrays:
+            prior_draft = replace(
+                original_draft,
+                entities=tuple(canvas.entities),
+                constraints=tuple(canvas.constraints),
+                layers=canvas.layer_table,
+            )
+            proposed_draft = replace(prior_draft, entities=draft_entities)
+            try:
+                propagated = propagate_array_changes(
+                    (prior_draft, *current_saved),
+                    (proposed_draft, *revised_saved),
+                    tuple(canvas.pending_associative_arrays),
+                )
+                if propagated[1:] != tuple(revised_saved):
+                    raise ValueError("请先完成草图，再修改关联的已保存对象。")
+                draft_entities = propagated[0].entities
+            except (KeyError, ValueError) as exc:
+                editor.status_label.setText(f"关联阵列缩放失败：{exc}")
+                return
         if tuple(revised_saved) == tuple(current_saved):
             if draft_entities == tuple(canvas.entities):
                 editor.status_label.setText("变换未改变图元。")
-            else:
+                return
+            if not any(
+                draft_tangent_reference(target).entity_id in draft_ids
+                for _source, target in canvas.pending_cross_tangencies
+            ):
                 canvas.replace_draft_entities(draft_entities)
-            return
+                return
         background = canvas.background_entities
         overlay_source = tuple(entity for entity, _layer in background)
         if erase:
@@ -2339,8 +5850,112 @@ class MainWindow(QMainWindow):
             overlay = mirror_entities(overlay_source, tuple(saved_ids), displacement, mirror_end)
         elif angle is not None:
             overlay = rotate_entities(overlay_source, tuple(saved_ids), displacement, angle)
+        elif scale is not None:
+            overlay = scale_entities(overlay_source, tuple(saved_ids), displacement, scale)
         else:
-            overlay = move_entities(overlay_source, tuple(saved_ids), displacement)
+            overlay = move_entities(
+                overlay_source, tuple(saved_ids), displacement, preserve_rectangle_order=True
+            )
+        rectangle_transforms: list[RectangleTransformEvidence] = []
+        if angle is not None or mirror_end is not None:
+            committed_related = {
+                (ref.sketch_id, ref.entity_id)
+                for relation in services.kernel.cross_sketch_tangencies
+                for ref in (relation.first, relation.second)
+            }
+            related = {
+                (ref.sketch_id, ref.entity_id)
+                for relation in services.kernel.cross_sketch_tangencies
+                for ref in (relation.first, relation.second)
+                if ref.segment_index is not None
+            }
+            related.update(
+                (sketch.sketch_id, entity.entity_id)
+                for sketch in current_saved
+                for entity in sketch.entities
+                if any(
+                    draft_tangent_reference(source).entity_id == entity.entity_id
+                    and draft_tangent_reference(source).kind == "segment"
+                    for source, _target in canvas.pending_cross_tangencies
+                )
+            )
+            draft_source = replace(
+                original_draft,
+                entities=tuple(canvas.entities),
+                constraints=tuple(canvas.constraints),
+                layers=canvas.layer_table,
+            )
+            committed_related.update(
+                (sketch.sketch_id, entity.entity_id)
+                for sketch in current_saved
+                for entity in sketch.entities
+                if any(
+                    draft_tangent_reference(source).entity_id == entity.entity_id
+                    for source, _target in canvas.pending_cross_tangencies
+                )
+            )
+            committed_related.update(
+                (draft_source.sketch_id, draft_tangent_reference(target).entity_id)
+                for _source, target in canvas.pending_cross_tangencies
+            )
+            related.update(
+                (draft_source.sketch_id, reference.entity_id)
+                for constraint in draft_source.constraints
+                for reference in constraint.references
+            )
+            for sketch in (*current_saved, draft_source):
+                targets = tuple(
+                    entity
+                    for entity in sketch.entities
+                    if (
+                        isinstance(entity, RectangleEntity)
+                        and (sketch.sketch_id, entity.entity_id) in related
+                        or isinstance(entity, PolylineEntity | LineEntity)
+                        and (sketch.sketch_id, entity.entity_id) in committed_related
+                    )
+                    and entity.entity_id in selected
+                )
+                if not targets:
+                    continue
+                start = sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world(displacement)
+                )
+                if mirror_end is not None:
+                    end = sketch.frame.world_to_local(
+                        editor.current_frame().local_to_world(mirror_end)
+                    )
+                    dx, dy = end[0] - start[0], end[1] - start[1]
+                    length = hypot(dx, dy)
+                    if length <= 1e-12:
+                        editor.status_label.setText("镜像轴必须有非零长度。")
+                        return
+                    ux, uy = dx / length, dy / length
+                    a, b, c, d = 2 * ux * ux - 1, 2 * ux * uy, 2 * ux * uy, 2 * uy * uy - 1
+                else:
+                    assert angle is not None
+                    local_angle = project_coplanar_rotation(
+                        angle, editor.current_frame(), sketch.frame
+                    )
+                    a, b, c, d = (
+                        cos(radians(local_angle)),
+                        -sin(radians(local_angle)),
+                        sin(radians(local_angle)),
+                        cos(radians(local_angle)),
+                    )
+                matrix = (
+                    a,
+                    b,
+                    c,
+                    d,
+                    start[0] - a * start[0] - b * start[1],
+                    start[1] - c * start[0] - d * start[1],
+                )
+                rectangle_transforms.extend(
+                    RectangleTransformEvidence(
+                        CrossSketchRef(sketch.sketch_id, entity.entity_id), matrix
+                    )
+                    for entity in targets
+                )
         proposed = MixedMoveState(
             previous.transaction_id if previous else uuid4().hex,
             previous.source_revision if previous else loaded.document.revision,
@@ -2360,6 +5975,13 @@ class MainWindow(QMainWindow):
                     strict=True,
                 )
             ),
+            previous.original_cross_tangencies
+            if previous
+            else tuple(canvas.pending_cross_tangencies),
+            previous.original_associative_arrays
+            if previous
+            else tuple(canvas.pending_associative_arrays),
+            tuple(rectangle_transforms),
         )
         draft = replace(
             original_draft,
@@ -2371,7 +5993,28 @@ class MainWindow(QMainWindow):
             ),
             layers=canvas.layer_table,
         )
-        self._preview_mixed_drawing_change(editor, session_id, proposed, draft, erase=erase)
+        prior_draft = replace(
+            original_draft,
+            entities=tuple(canvas.entities),
+            constraints=tuple(canvas.constraints),
+            layers=canvas.layer_table,
+        )
+        anchors = tuple(
+            CrossSketchRef(sketch.sketch_id, entity.entity_id)
+            for sketch in (*current_saved, prior_draft)
+            for entity in sketch.entities
+            if entity.entity_id in selected
+        )
+        self._preview_mixed_drawing_change(
+            editor,
+            session_id,
+            proposed,
+            draft,
+            erase=erase,
+            solve_base=(tuple(current_saved), prior_draft, anchors) if not erase else None,
+            pending_arrays=pending_arrays,
+            raster_updates=raster_updates,
+        )
 
     def _preview_mixed_drawing_change(
         self,
@@ -2380,29 +6023,174 @@ class MainWindow(QMainWindow):
         proposed: MixedMoveState,
         draft: Sketch,
         *,
+        action: str = "",
         erase: bool = False,
+        solve_base: tuple[tuple[Sketch, ...], Sketch, tuple[CrossSketchRef, ...]] | None = None,
+        pending_arrays: tuple[AssociativeRectArray, ...] | None = None,
+        raster_updates: tuple[DrawingRaster, ...] = (),
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
             return
         canvas = editor.canvas
-        steps = (*canvas.mixed_move_timeline(), (proposed.current_saved, draft))
+
+        def report_failure(message: str) -> None:
+            if action == "单点打断":
+                canvas.message = message
+                canvas.changed.emit()
+            editor.status_label.setText(message)
+
+        history = canvas.mixed_move_timeline_with_transforms()
+        steps = tuple(
+            (saved, old_draft) for saved, old_draft, _pairs, _arrays, _transforms in history
+        ) + ((proposed.current_saved, draft),)
+        surviving_sources = {
+            entity.entity_id for sketch in proposed.current_saved for entity in sketch.entities
+        }
+        surviving_targets = {entity.entity_id for entity in draft.entities}
+        current_pairs = tuple(
+            (source, target)
+            for source, target in canvas.pending_cross_tangencies
+            if draft_tangent_reference(source).entity_id in surviving_sources
+            and draft_tangent_reference(target).entity_id in surviving_targets
+        )
+        previous_saved = (
+            canvas.mixed_move.current_saved
+            if canvas.mixed_move is not None
+            else proposed.original_saved
+        )
+        old_pairs: list[DraftTangentPair] = []
+        rebound_pairs: list[DraftTangentPair] = []
+        try:
+            rectangle_proofs, _polyline_proofs, _line_proofs = split_transform_evidence(
+                (
+                    *previous_saved,
+                    replace(proposed.original_draft, entities=tuple(canvas.entities)),
+                ),
+                proposed.step_rectangle_transforms,
+            )
+        except ValueError as exc:
+            report_failure(f"暂存变换依据无效：{exc}")
+            return
+        for pair in current_pairs:
+            try:
+                mapped = rebind_pending_saved_sources(
+                    previous_saved,
+                    proposed.current_saved,
+                    (pair,),
+                    rectangle_proofs,
+                    previous_draft=replace(
+                        proposed.original_draft,
+                        entities=tuple(canvas.entities),
+                        constraints=tuple(canvas.constraints),
+                        layers=canvas.layer_table,
+                    ),
+                    updated_draft=draft,
+                )
+            except ValueError as exc:
+                report_failure(f"暂存相切关系无法重绑定：{exc}")
+                return
+            if mapped:
+                old_pairs.append(pair)
+                rebound_pairs.append(mapped[0])
+        current_pairs = tuple(rebound_pairs)
+        solve_pairs = tuple(old_pairs)
+        pairs_by_step = tuple(pairs for _saved, _draft, pairs, _arrays, _transforms in history) + (
+            current_pairs,
+        )
+        arrays_by_step = tuple(
+            arrays for _saved, _draft, _pairs, arrays, _transforms in history
+        ) + (
+            pending_arrays
+            if pending_arrays is not None
+            else tuple(canvas.pending_associative_arrays),
+        )
+        layers = {entity.entity_id: layer for entity, layer in canvas.background_entities}
+        relations = services.kernel.cross_sketch_tangencies
+        try:
+            relations = _staged_committed_tangencies(
+                proposed.original_saved,
+                relations,
+                tuple(
+                    (saved, transforms) for saved, _draft, _pairs, _arrays, transforms in history
+                ),
+            )
+        except ValueError as exc:
+            report_failure(f"暂存相切关系失效：{exc}")
+            return
         editor.setEnabled(False)
 
         def preview() -> object:
+            solved_proposed, solved_draft = proposed, draft
+            if solve_base is not None and (current_pairs or relations):
+                previous_saved, previous_draft, anchors = solve_base
+                saved, solved_draft = mycad_app.solve_mixed_draft_tangencies(
+                    previous_saved,
+                    previous_draft,
+                    proposed.current_saved,
+                    draft,
+                    solve_pairs,
+                    relations,
+                    anchors,
+                    proposed_pairs=current_pairs,
+                    rectangle_transforms=proposed.step_rectangle_transforms,
+                )
+                previous_entities = {
+                    entity.entity_id: entity
+                    for sketch in (*previous_saved, previous_draft)
+                    for entity in sketch.entities
+                }
+                if len(previous_entities) != sum(
+                    len(sketch.entities) for sketch in (*previous_saved, previous_draft)
+                ):
+                    raise ValueError("图元标识重复，无法安全联动编辑。")
+                projected: dict[str, SketchEntity] = {}
+                overlay_ids = {entity.entity_id for entity, _layer in proposed.overlay_background}
+                for sketch in saved:
+                    for entity in sketch.entities:
+                        if entity != previous_entities.get(entity.entity_id):
+                            layer = layers.get(entity.entity_id)
+                            if layer is None or layer.locked or not layer.displayed:
+                                raise ValueError("关联图元位于锁定或隐藏图层。")
+                        if entity.entity_id in overlay_ids:
+                            projected[entity.entity_id] = project_coplanar_entity(
+                                entity, sketch.frame, draft.frame
+                            )
+                for entity in solved_draft.entities:
+                    if entity != previous_entities.get(entity.entity_id):
+                        layer = solved_draft.layers.get(entity.layer_name)
+                        if layer.locked or not layer.displayed:
+                            raise ValueError("关联图元位于锁定或隐藏图层。")
+                solved_proposed = replace(
+                    proposed,
+                    current_saved=saved,
+                    overlay_background=tuple(
+                        (projected.get(entity.entity_id, entity), layer)
+                        for entity, layer in proposed.overlay_background
+                    ),
+                )
+            solved_steps = (*steps[:-1], (solved_proposed.current_saved, solved_draft))
             candidate = mycad_app.stage_mixed_drawing_timeline(
                 services,
                 loaded,
                 proposed.original_draft,
                 proposed.original_saved,
-                steps,
+                solved_steps,
                 session_identity=session_id,
+                cross_pairs_by_step=pairs_by_step,
+                arrays_by_step=arrays_by_step,
+                initial_cross_pairs=proposed.original_cross_tangencies,
+                initial_associative_arrays=proposed.original_associative_arrays,
+                rectangle_transforms_by_step=(
+                    *(transforms for _saved, _draft, _pairs, _arrays, transforms in history),
+                    proposed.step_rectangle_transforms,
+                ),
             )
             result = candidate.preview(current_session_identity=session_id)
             candidate.cancel()
             if result.state != "succeeded":
                 raise ValueError(str(result.failure or "混合变换预览失败"))
-            return None
+            return solved_proposed, solved_draft
 
         def finish(result: ExecutionResult) -> None:
             editor.setEnabled(True)
@@ -2413,18 +6201,362 @@ class MainWindow(QMainWindow):
             ):
                 return
             if result.error is not None:
-                editor.status_label.setText(f"混合变换失败：{result.error}")
+                canvas.finish_fillet_candidate(success=False)
+                report_failure(f"混合变换失败：{result.error}")
                 return
             if loaded.document.revision != proposed.source_revision:
-                editor.status_label.setText("文档已变化；混合变换未应用。")
+                report_failure("文档已变化；混合变换未应用。")
                 return
-            canvas.apply_mixed_move(proposed, draft.entities, erase=erase)
+            accepted, accepted_draft = cast("tuple[MixedMoveState, Sketch]", result.value)
+            if not raster_updates:
+                canvas.apply_mixed_move(
+                    accepted,
+                    accepted_draft.entities,
+                    erase=erase,
+                    constraints=accepted_draft.constraints,
+                    pending_arrays=pending_arrays,
+                    pending_pairs=current_pairs,
+                )
+                return
+            checkpoint = loaded.bus.create_save_checkpoint()
+            before = canvas.history_position
+            old_revision = loaded.document.revision
+            previous_layer_redo = list(editor.layer_history_redo)
+            try:
+                loaded.bus.execute(
+                    "drawing.raster.batch",
+                    {
+                        "action": "update",
+                        "images": [item.to_mapping(version=2) for item in raster_updates],
+                    },
+                    "local",
+                    version=1,
+                )
+                new_revision = loaded.document.revision
+                canvas.rebind_restored_source(old_revision, new_revision)
+                canvas.apply_mixed_move_atomically(
+                    replace(accepted, source_revision=new_revision),
+                    accepted_draft.entities,
+                    constraints=accepted_draft.constraints,
+                    pending_arrays=pending_arrays,
+                    pending_pairs=current_pairs,
+                )
+            except Exception as exc:
+                editor.layer_history_redo[:] = previous_layer_redo
+                current_revision = loaded.document.revision
+                loaded.bus.restore_save_checkpoint(checkpoint, expected_revision=current_revision)
+                canvas.rebind_restored_source(current_revision, loaded.document.revision)
+                self._sync_drawing_layers()
+                report_failure(f"混合移动失败，已回滚：{exc}")
+                return
+            loaded.bus.release_save_checkpoint(checkpoint)
+            count = loaded.document.command_count
+            editor.mixed_draft_history[count] = (
+                before,
+                canvas.history_position,
+                loaded.document.commands[-1].instance_id,
+            )
+            editor.layer_history_boundaries[count] = canvas.history_position
+            editor.layer_history_redo.clear()
+            canvas.discard_redo_history()
+            self._sync_drawing_layers()
 
         if not unit.submit(
             preview, operation="drawing-mixed-move", session_id=session_id, on_complete=finish
         ):
             editor.setEnabled(True)
-            editor.status_label.setText("几何工作线程忙碌，变换未应用。")
+            canvas.finish_fillet_candidate(success=False)
+            report_failure("几何工作线程忙碌，变换未应用。")
+
+    def _on_drawing_assign_construction(
+        self, editor: SketchEditorDialog, session_id: int, raw_ids: object, construction: bool
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            return
+        if unit.is_busy or unit.is_delivering_result:
+            editor.status_label.setText("几何工作线程忙碌，请稍后更改构造几何。")
+            return
+        if not isinstance(raw_ids, tuple):
+            return
+        identities = cast("tuple[object, ...]", raw_ids)
+        if not all(isinstance(item, str) for item in identities):
+            return
+        ids = set(cast("tuple[str, ...]", identities))
+        canvas = editor.canvas
+        if (
+            canvas.mixed_move
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+        ):
+            editor.status_label.setText("请先完成或撤销当前暂存关联编辑，再更改构造几何。")
+            return
+        if canvas.source_context_revision != loaded.document.revision:
+            self._sync_drawing_layers()
+            editor.status_label.setText("图纸已变化，请重新选择对象。")
+            return
+        draft = tuple(entity for entity in canvas.entities if entity.entity_id in ids)
+        saved = tuple(
+            (sketch, entity)
+            for sketch in services.kernel.sketches
+            for entity in sketch.entities
+            if entity.entity_id in ids
+        )
+        found = [entity.entity_id for entity in draft] + [entity.entity_id for _, entity in saved]
+        if not ids or len(found) != len(ids) or set(found) != ids:
+            editor.status_label.setText("所选图元已变化或身份不唯一，请重新选择。")
+            return
+        try:
+            if any(
+                (layer := canvas.layer_table.get(entity.layer_name)).locked or not layer.displayed
+                for entity in (*draft, *(entity for _, entity in saved))
+            ):
+                editor.status_label.setText("所选图元位于隐藏、冻结或锁定的图层。")
+                return
+        except KeyError:
+            editor.status_label.setText("所选图元的图层已变化，请重新选择。")
+            return
+        draft_candidate = tuple(
+            replace(entity, construction=construction) if entity.entity_id in ids else entity
+            for entity in canvas.entities
+        )
+        try:
+            canvas.validate_draft_constraint_edits(
+                draft_candidate, removed_constraint_ids=frozenset()
+            )
+        except ValueError as exc:
+            editor.status_label.setText(str(exc))
+            return
+        revisions: list[dict[str, object]] = []
+        includes_points = False
+        for sketch in services.kernel.sketches:
+            if not any(entity.entity_id in ids for entity in sketch.entities):
+                continue
+            revised = replace(
+                sketch,
+                entities=tuple(
+                    replace(entity, construction=construction)
+                    if entity.entity_id in ids
+                    else entity
+                    for entity in sketch.entities
+                ),
+            )
+            if revised == sketch:
+                continue
+            state = revised.to_state_mapping()
+            revisions.append(
+                {
+                    "sketch_id": sketch.sketch_id,
+                    "base_state_sha256": sketch.local_state_digest(),
+                    "entities": state["entities"],
+                    "constraints": state["constraints"],
+                }
+            )
+            includes_points = includes_points or any(
+                isinstance(entity, PointEntity) for entity in revised.entities
+            )
+        if not revisions:
+            if draft_candidate == tuple(canvas.entities):
+                editor.status_label.setText("所选图元的构造几何状态未改变。")
+            elif canvas.replace_draft_entities(draft_candidate):
+                editor.status_label.setText("已更改构造几何；可撤销。")
+            else:
+                editor.status_label.setText(canvas.message)
+            return
+        self._submit_drawing_revisions(
+            editor,
+            session_id,
+            revisions,
+            includes_points,
+            "更改构造几何",
+            draft_candidate=draft_candidate if draft_candidate != tuple(canvas.entities) else None,
+        )
+
+    def _on_drawing_assign_layer(
+        self, editor: SketchEditorDialog, session_id: int, raw_ids: object, layer_name: str
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            return
+        if unit.is_busy or unit.is_delivering_result:
+            editor.status_label.setText("几何工作线程忙碌，请稍后更改图层。")
+            return
+        if not isinstance(raw_ids, tuple):
+            return
+        identities = cast("tuple[object, ...]", raw_ids)
+        if not all(isinstance(item, str) for item in identities):
+            return
+        ids = set(cast("tuple[str, ...]", identities))
+        canvas = editor.canvas
+        if (
+            canvas.mixed_move
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+        ):
+            editor.status_label.setText("请先完成或撤销当前暂存关联编辑，再更改图层。")
+            return
+        if canvas.source_context_revision != loaded.document.revision:
+            self._sync_drawing_layers()
+            editor.status_label.setText("图纸已变化，请重新选择对象。")
+            return
+        try:
+            target = canvas.layer_table.get(layer_name)
+        except KeyError:
+            editor.status_label.setText("目标图层已不存在，请重新选择。")
+            return
+        if target.locked or not target.displayed:
+            editor.status_label.setText("目标图层隐藏、冻结或已锁定，无法移入。")
+            return
+        draft = tuple(entity for entity in canvas.entities if entity.entity_id in ids)
+        dimension_ids = set(canvas.selected_constraint_ids)
+        draft_dimensions = tuple(
+            item for item in canvas.constraints if item.constraint_id in dimension_ids
+        )
+        saved_dimensions = tuple(
+            item
+            for sketch in services.kernel.sketches
+            for item in sketch.constraints
+            if item.constraint_id in dimension_ids
+        )
+        dimensions = (*draft_dimensions, *saved_dimensions)
+        if (
+            len(dimensions) != len(dimension_ids)
+            or {item.constraint_id for item in dimensions} != dimension_ids
+            or any(item.kind not in DIMENSION_KINDS for item in dimensions)
+        ):
+            editor.status_label.setText("所选尺寸已变化或身份不唯一，请重新选择。")
+            return
+        image_ids = set(canvas.selected_raster_ids)
+        images = tuple(
+            image for image in services.kernel.drawing_rasters if image.image_id in image_ids
+        )
+        if len(images) != len(image_ids):
+            editor.status_label.setText("所选图片已变化，请重新选择。")
+            return
+        saved = tuple(
+            (sketch, entity)
+            for sketch in services.kernel.sketches
+            for entity in sketch.entities
+            if entity.entity_id in ids
+        )
+        found = [entity.entity_id for entity in draft] + [entity.entity_id for _, entity in saved]
+        if (
+            (not ids and not image_ids and not dimension_ids)
+            or len(found) != len(ids)
+            or set(found) != ids
+        ):
+            editor.status_label.setText("所选图元已变化或身份不唯一，请重新选择。")
+            return
+        try:
+            if any(
+                (layer := canvas.layer_table.get(entity.layer_name)).locked or not layer.displayed
+                for entity in (*draft, *(entity for _, entity in saved), *images)
+            ) or any(
+                (layer := canvas.annotation_layer(item)).locked or not layer.displayed
+                for item in dimensions
+            ):
+                editor.status_label.setText("所选图元位于隐藏、冻结或锁定的图层。")
+                return
+        except KeyError:
+            editor.status_label.setText("所选图元的图层已变化，请重新选择。")
+            return
+        draft_candidate = tuple(
+            replace(entity, layer_name=target.name) if entity.entity_id in ids else entity
+            for entity in canvas.entities
+        )
+        draft_constraint_candidate = tuple(
+            replace(item, layer_name=target.name) if item.constraint_id in dimension_ids else item
+            for item in canvas.constraints
+        )
+        try:
+            canvas.validate_draft_constraint_edits(
+                draft_candidate, removed_constraint_ids=frozenset()
+            )
+        except ValueError as exc:
+            editor.status_label.setText(str(exc))
+            return
+        revisions: list[dict[str, object]] = []
+        includes_points = False
+        for sketch in services.kernel.sketches:
+            if not any(entity.entity_id in ids for entity in sketch.entities) and not any(
+                item.constraint_id in dimension_ids for item in sketch.constraints
+            ):
+                continue
+            revised = replace(
+                sketch,
+                entities=tuple(
+                    replace(entity, layer_name=target.name) if entity.entity_id in ids else entity
+                    for entity in sketch.entities
+                ),
+                constraints=tuple(
+                    replace(item, layer_name=target.name)
+                    if item.constraint_id in dimension_ids
+                    else item
+                    for item in sketch.constraints
+                ),
+            )
+            if revised == sketch:
+                continue
+            state = revised.to_state_mapping()
+            revisions.append(
+                {
+                    "sketch_id": sketch.sketch_id,
+                    "base_state_sha256": sketch.local_state_digest(),
+                    "entities": state["entities"],
+                    "constraints": state["constraints"],
+                }
+            )
+            includes_points = includes_points or any(
+                isinstance(entity, PointEntity) for entity in revised.entities
+            )
+        raster_updates = tuple(
+            replace(image, layer_name=target.name)
+            for image in images
+            if image.layer_name != target.name
+        )
+        if not revisions and not raster_updates:
+            if draft_candidate == tuple(canvas.entities) and draft_constraint_candidate == tuple(
+                canvas.constraints
+            ):
+                editor.status_label.setText("所选图元已经位于当前图层。")
+            elif draft_constraint_candidate != tuple(canvas.constraints):
+                original = editor.dimension_sources()[0]
+                if canvas.apply_constraint_solution(
+                    original,
+                    replace(
+                        original, entities=draft_candidate, constraints=draft_constraint_candidate
+                    ),
+                ):
+                    editor.status_label.setText(f"已将选中对象移至图层 {target.name}；可撤销。")
+                else:
+                    editor.status_label.setText("草稿已变化，请重新选择。")
+            elif canvas.replace_draft_entities(draft_candidate):
+                editor.status_label.setText(f"已将选中图元移至图层 {target.name}；可撤销。")
+            else:
+                editor.status_label.setText(canvas.message)
+            return
+        self._submit_drawing_revisions(
+            editor,
+            session_id,
+            revisions,
+            includes_points,
+            "更改图层",
+            raster_updates=raster_updates,
+            draft_candidate=(
+                draft_candidate
+                if draft_candidate != tuple(canvas.entities)
+                or draft_constraint_candidate != tuple(canvas.constraints)
+                else None
+            ),
+            draft_constraint_candidate=(
+                draft_constraint_candidate
+                if draft_constraint_candidate != tuple(canvas.constraints)
+                else None
+            ),
+            dimension_layer_updates=any(
+                item.layer_name != target.name for item in saved_dimensions
+            ),
+        )
 
     def _on_drawing_layer_update(
         self, editor: SketchEditorDialog, session_id: int, payload: object
@@ -2507,8 +6639,55 @@ class MainWindow(QMainWindow):
         commands = tuple(loaded.document.commands)
         source_archive_version = loaded.document.archive_version
         updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
+        linked = any(
+            sketch.sketch_id in (relation.first.sketch_id, relation.second.sketch_id)
+            for relation in services.kernel.cross_sketch_tangencies
+        )
 
         def solve() -> _SketchConstraintPreview:
+            if linked:
+                params, solved, branch_changes = mycad_app.prepare_cross_sketch_dimension(
+                    services, sketch.sketch_id, constraint
+                )
+                target = next(item for item in solved if item.sketch_id == sketch.sketch_id)
+                snapshot, previews = mycad_app.preview_command_with_sketches(
+                    services,
+                    commands,
+                    "drawing.sketch.revise",
+                    params,
+                    source_archive_version=source_archive_version,
+                    source_document_type=loaded.document.document_type,
+                    source_document_kind=loaded.document.document_kind,
+                    source_drawing_fillet_baseline=loaded.document.drawing_fillet_baseline,
+                    source_drawing_chamfer_angle_baseline=(
+                        loaded.document.drawing_chamfer_angle_baseline
+                    ),
+                    command_version=50
+                    if mycad_app.revisions_include_dimension_styles(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 48
+                    if mycad_app.revisions_include_dimension_text(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 31
+                    if mycad_app.revisions_include_projection_axes(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 9
+                    if mycad_app.revisions_include_local_endpoint_constraints(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 4,
+                )
+                return _SketchConstraintPreview(
+                    SketchConstraintSolveResult(
+                        "success", target, None, branch_changes=branch_changes
+                    ),
+                    snapshot,
+                    previews,
+                    tuple(item for item in solved if item.sketch_id != sketch.sketch_id),
+                )
             result = (
                 services.kernel.preview_sketch_constraint_update(sketch, constraint)
                 if updating
@@ -2520,8 +6699,37 @@ class MainWindow(QMainWindow):
                 services,
                 commands,
                 "sketch.constraint.update" if updating else "sketch.constraint.add",
-                result.command_params(sketch, constraint),
+                result.command_params(
+                    sketch,
+                    constraint,
+                    local_frame=(
+                        constraint.projection_axis is not None
+                        or constraint.text_override is not None
+                        or constraint.style_name is not None
+                    ),
+                ),
                 source_archive_version=source_archive_version,
+                source_document_type=loaded.document.document_type,
+                source_document_kind=loaded.document.document_kind,
+                source_drawing_fillet_baseline=loaded.document.drawing_fillet_baseline,
+                source_drawing_chamfer_angle_baseline=(
+                    loaded.document.drawing_chamfer_angle_baseline
+                ),
+                command_version=(6 if updating else 8)
+                if constraint.style_name is not None
+                else (5 if updating else 7)
+                if constraint.text_override is not None
+                else (4 if updating else 6)
+                if constraint.projection_axis is not None
+                else None,
+                target_archive_version=6
+                if (
+                    constraint.projection_axis is not None
+                    or constraint.text_override is not None
+                    or constraint.style_name is not None
+                )
+                and source_archive_version < 6
+                else None,
             )
             return _SketchConstraintPreview(result, snapshot, sketches)
 
@@ -2544,6 +6752,12 @@ class MainWindow(QMainWindow):
             else:
                 result = preview.solve_result
             editor.dimensions.complete_preview(generation, sketch, constraint, result)
+            if (
+                isinstance(preview, _SketchConstraintPreview)
+                and result.status == "success"
+                and editor.dimensions.accepted_preview(sketch, constraint) is result
+            ):
+                editor.show_linked_dimension_previews(preview.linked_sketches)
 
         if not unit.submit(
             solve, operation="canvas-dimension-preview", session_id=session_id, on_complete=finish
@@ -2574,6 +6788,16 @@ class MainWindow(QMainWindow):
             return
         commands = tuple(loaded.document.commands)
         updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
+        linked = any(
+            sketch.sketch_id in (relation.first.sketch_id, relation.second.sketch_id)
+            for relation in services.kernel.cross_sketch_tangencies
+        )
+        accepted = editor.dimensions.accepted_preview(sketch, constraint) if linked else None
+        expected_sketches = (
+            (accepted.sketch, *editor.canvas.dimension_linked_sources)
+            if accepted is not None and accepted.status == "success" and accepted.sketch is not None
+            else None
+        )
 
         def submit() -> SketchConstraintSolveResult:
             if (
@@ -2589,6 +6813,33 @@ class MainWindow(QMainWindow):
                 return SketchConstraintSolveResult(
                     "failed", None, None, message="模型或尺寸已改变，操作已取消"
                 )
+            if linked:
+                if expected_sketches is None:
+                    return SketchConstraintSolveResult(
+                        "failed", None, None, message="请重新预览跨草图尺寸"
+                    )
+
+                def still_current() -> bool:
+                    return (
+                        session_id == self._session_id
+                        and loaded is self._loaded
+                        and editor.dimensions.candidate == constraint
+                        and tuple(loaded.document.commands) == commands
+                    )
+
+                mycad_app.commit_cross_sketch_dimension(
+                    services,
+                    loaded,
+                    sketch.sketch_id,
+                    constraint,
+                    session_identity=session_id,
+                    still_current=still_current,
+                    expected_sketches=expected_sketches,
+                )
+                target = next(
+                    item for item in services.kernel.sketches if item.sketch_id == sketch.sketch_id
+                )
+                return SketchConstraintSolveResult("success", target, None)
             result = (
                 services.kernel.preview_sketch_constraint_update(sketch, constraint)
                 if updating
@@ -2606,11 +6857,46 @@ class MainWindow(QMainWindow):
                     "failed", None, None, message="尺寸求解期间操作已取消或文档已切换"
                 )
             # An explicit placement/apply gesture authorizes this one replayable command.
-            loaded.bus.execute(
-                "sketch.constraint.update" if updating else "sketch.constraint.add",
-                result.command_params(sketch, constraint),
-                confirmed_by="local",
-            )
+            command_id = "sketch.constraint.update" if updating else "sketch.constraint.add"
+            if (
+                constraint.projection_axis is not None
+                or constraint.text_override is not None
+                or constraint.style_name is not None
+            ):
+                candidate = mycad_app.create_replay_candidate(
+                    services, loaded, session_identity=session_id
+                )
+                candidate.stage(
+                    ReplayChangeSet(
+                        (),
+                        (
+                            ReplayAppend(
+                                command_id,
+                                (6 if updating else 8)
+                                if constraint.style_name is not None
+                                else (5 if updating else 7)
+                                if constraint.text_override is not None
+                                else (4 if updating else 6),
+                                result.command_params(sketch, constraint, local_frame=True),
+                                "local",
+                            ),
+                        ),
+                        False,
+                        6 if loaded.document.archive_version < 6 else None,
+                    ),
+                    current_session_identity=session_id,
+                )
+                preview = candidate.preview(current_session_identity=session_id)
+                if preview.state != "succeeded":
+                    raise ValueError(str(preview.failure or "尺寸预览失败"))
+                candidate.commit(
+                    candidate.authorize_commit(current_session_identity=session_id),
+                    current_session_identity=session_id,
+                )
+            else:
+                loaded.bus.execute(
+                    command_id, result.command_params(sketch, constraint), confirmed_by="local"
+                )
             return result
 
         def finish(value: ExecutionResult) -> None:
@@ -2646,6 +6932,1907 @@ class MainWindow(QMainWindow):
                     "failed", None, None, message="几何工作线程忙碌，请重试"
                 ),
             )
+
+    def _on_cross_sketch_tangency(self, *, force_dialog: bool = False) -> None:
+        loaded, services = self._loaded, self._services
+        if loaded is None or services is None or loaded.document.document_type != "drawing2d":
+            self.status_command.setText("对象相切需要已打开的二维图纸。")
+            return
+        if self._cross_tangency_dialog is not None:
+            self._cross_tangency_dialog.raise_()
+            return
+        editor = self._sketch_dialog
+        canvas = editor.canvas if editor is not None else None
+        selected_segments = canvas.selected_tangent_segments() if canvas is not None else {}
+        if canvas is not None and (canvas.has_pending_geometry or canvas.has_active_edit_gesture):
+            self.status_command.setText("请先完成或取消当前绘图操作。")
+            return
+        if canvas is not None and not canvas.mixed_move_is_valid:
+            self.status_command.setText("混合草稿已过期，请先撤销或取消。")
+            return
+        if (
+            canvas is not None
+            and canvas.mixed_move is None
+            and canvas.source_context_revision is not None
+            and canvas.source_context_revision != loaded.document.revision
+            and any(
+                entity.entity_id in canvas.selected_entity_ids
+                for entity, _layer in canvas.background_entities
+            )
+        ):
+            canvas.selected_entity_ids.clear()
+            canvas.clear_selected_tangent_segments()
+            self._sync_drawing_layers()
+            canvas.message = "文档已变化；请重新选择对象。"
+            canvas.changed.emit()
+            canvas.update()
+            return
+        if canvas is not None and not force_dialog and len(canvas.selected_entity_ids) < 2:
+            canvas.begin_object_tangency_selection()
+            canvas.setFocus()
+            return
+        saved = (
+            canvas.mixed_move.current_saved
+            if canvas is not None and canvas.mixed_move
+            else services.kernel.sketches
+        )
+        draft = (
+            Sketch(
+                editor.draft_sketch_id,
+                editor.current_frame(),
+                tuple(canvas.entities),
+                tuple(canvas.constraints),
+                canvas.layer_table,
+            )
+            if editor is not None and canvas is not None and canvas.entities
+            else None
+        )
+        if (
+            not force_dialog
+            and draft is not None
+            and canvas is not None
+            and editor is not None
+            and len(canvas.selected_entity_ids) == 2
+        ):
+            selected = tuple(
+                entity
+                for entity in draft.entities
+                if entity.entity_id in canvas.selected_entity_ids
+            )
+            if len(selected) == 2 and all(
+                isinstance(entity, LineEntity | CircleEntity | ArcEntity)
+                or (
+                    isinstance(entity, PolylineEntity | RectangleEntity)
+                    and entity.entity_id in selected_segments
+                )
+                for entity in selected
+            ):
+                if canvas.mixed_move or canvas.pending_cross_tangencies:
+                    constraint = SketchConstraint(
+                        uuid4().hex,
+                        "tangent",
+                        tuple(
+                            SketchGeometryReference(
+                                entity.entity_id,
+                                "segment"
+                                if isinstance(entity, PolylineEntity | RectangleEntity)
+                                else "geometry",
+                                selected_segments.get(entity.entity_id),
+                            )
+                            for entity in selected
+                        ),
+                    )
+                    self._start_mixed_local_tangency(editor, draft, constraint)
+                    return
+                unit = self.execution_unit
+                if unit is None:
+                    self.status_command.setText("几何工作线程不可用。")
+                    return
+                constraint = SketchConstraint(
+                    uuid4().hex,
+                    "tangent",
+                    tuple(
+                        SketchGeometryReference(
+                            entity.entity_id,
+                            "segment"
+                            if isinstance(entity, PolylineEntity | RectangleEntity)
+                            else "geometry",
+                            selected_segments.get(entity.entity_id),
+                        )
+                        for entity in selected
+                    ),
+                )
+                session_id = self._session_id
+                revision = loaded.document.revision
+
+                def finish_local_tangency(result: ExecutionResult) -> None:
+                    if (
+                        self._loaded is not loaded
+                        or self._session_id != session_id
+                        or self._sketch_dialog is not editor
+                        or loaded.document.revision != revision
+                        or editor.current_frame() != draft.frame
+                        or canvas.layer_table != draft.layers
+                        or canvas.mixed_move
+                        or canvas.pending_cross_tangencies
+                    ):
+                        return
+                    solved = result.value
+                    if (
+                        result.error is not None
+                        or not isinstance(solved, SketchConstraintSolveResult)
+                        or solved.status != "success"
+                        or solved.sketch is None
+                    ):
+                        self.status_command.setText(
+                            result.error or getattr(solved, "message", None) or "无法建立相切。"
+                        )
+                        return
+                    if canvas.apply_constraint_solution(draft, solved.sketch):
+                        canvas.message = "相切约束已建立，可撤销。"
+                        canvas.changed.emit()
+                    else:
+                        self.status_command.setText("图形已改变，请重新选择对象。")
+
+                if not unit.submit(
+                    lambda: services.kernel.preview_sketch_constraint(draft, constraint),
+                    operation="canvas-tangency",
+                    session_id=session_id,
+                    on_complete=finish_local_tangency,
+                ):
+                    self.status_command.setText("几何工作线程忙碌，请重试。")
+                return
+        if (
+            not force_dialog
+            and canvas is not None
+            and editor is not None
+            and len(canvas.selected_entity_ids) == 2
+        ):
+            owners = [
+                sketch
+                for sketch in saved
+                if canvas.selected_entity_ids <= {entity.entity_id for entity in sketch.entities}
+            ]
+            if len(owners) == 1:
+                owner = owners[0]
+                selected = tuple(
+                    entity
+                    for entity in owner.entities
+                    if entity.entity_id in canvas.selected_entity_ids
+                )
+                if len(selected) == 2 and all(
+                    isinstance(entity, LineEntity | CircleEntity | ArcEntity)
+                    or (
+                        isinstance(entity, PolylineEntity | RectangleEntity)
+                        and entity.entity_id in selected_segments
+                    )
+                    for entity in selected
+                ):
+                    if canvas.mixed_move or canvas.pending_cross_tangencies:
+                        self.status_command.setText("对象存在关联编辑，请先完成或处理关联关系。")
+                        return
+                    unit = self.execution_unit
+                    if unit is None:
+                        self.status_command.setText("几何工作线程不可用。")
+                        return
+                    constraint = SketchConstraint(
+                        uuid4().hex,
+                        "tangent",
+                        tuple(
+                            SketchGeometryReference(
+                                entity.entity_id,
+                                "segment"
+                                if isinstance(entity, PolylineEntity | RectangleEntity)
+                                else "geometry",
+                                selected_segments.get(entity.entity_id),
+                            )
+                            for entity in selected
+                        ),
+                    )
+                    session_id = self._session_id
+                    commands = tuple(loaded.document.commands)
+                    linked = any(
+                        owner.sketch_id in (relation.first.sketch_id, relation.second.sketch_id)
+                        for relation in services.kernel.cross_sketch_tangencies
+                    )
+
+                    def submit_saved_tangency() -> SketchConstraintSolveResult:
+                        if linked:
+
+                            def still_current() -> bool:
+                                return (
+                                    self._loaded is loaded
+                                    and self._session_id == session_id
+                                    and tuple(loaded.document.commands) == commands
+                                )
+
+                            if not still_current():
+                                return SketchConstraintSolveResult(
+                                    "failed", None, None, message="图纸已改变，请重新选择对象。"
+                                )
+                            mycad_app.commit_cross_sketch_dimension(
+                                services,
+                                loaded,
+                                owner.sketch_id,
+                                constraint,
+                                session_identity=session_id,
+                                still_current=still_current,
+                            )
+                            updated = next(
+                                sketch
+                                for sketch in services.kernel.sketches
+                                if sketch.sketch_id == owner.sketch_id
+                            )
+                            return SketchConstraintSolveResult("success", updated, None)
+                        result = services.kernel.preview_sketch_constraint(owner, constraint)
+                        if result.status != "success":
+                            return result
+                        if (
+                            self._loaded is not loaded
+                            or self._session_id != session_id
+                            or tuple(loaded.document.commands) != commands
+                            or next(
+                                (
+                                    s
+                                    for s in services.kernel.sketches
+                                    if s.sketch_id == owner.sketch_id
+                                ),
+                                None,
+                            )
+                            != owner
+                        ):
+                            return SketchConstraintSolveResult(
+                                "failed", None, None, message="图纸已改变，请重新选择对象。"
+                            )
+                        loaded.bus.execute(
+                            "sketch.constraint.add",
+                            result.command_params(owner, constraint),
+                            confirmed_by="local",
+                        )
+                        return result
+
+                    def finish_saved_tangency(value: ExecutionResult) -> None:
+                        if self._loaded is not loaded or self._session_id != session_id:
+                            return
+                        result = value.value
+                        if (
+                            value.error is not None
+                            or not isinstance(result, SketchConstraintSolveResult)
+                            or result.status != "success"
+                        ):
+                            self.status_command.setText(
+                                value.error or getattr(result, "message", None) or "无法建立相切。"
+                            )
+                            return
+                        if self._sketch_dialog is editor:
+                            editor.set_context_sketches(services.kernel.sketches)
+                        if self.viewport is not None:
+                            self.viewport.refresh()
+                        self.status_command.setText("相切约束已写入历史，可撤销。")
+
+                    if not unit.submit(
+                        submit_saved_tangency,
+                        operation="saved-object-tangency",
+                        session_id=session_id,
+                        on_complete=finish_saved_tangency,
+                    ):
+                        self.status_command.setText("几何工作线程忙碌，请重试。")
+                    return
+        sketches = (*saved, *((draft,) if draft is not None else ()))
+        if not sketches:
+            self.status_command.setText("请先选择两个可建立相切关系的对象。")
+            return
+        try:
+            committed_relations = (
+                _staged_committed_tangencies(
+                    canvas.mixed_move.original_saved,
+                    services.kernel.cross_sketch_tangencies,
+                    tuple(
+                        (saved_step, transforms)
+                        for saved_step, _draft, _pairs, _arrays, transforms in canvas.mixed_move_timeline_with_transforms()
+                    ),
+                )
+                if canvas is not None and canvas.mixed_move is not None
+                else services.kernel.cross_sketch_tangencies
+            )
+            staged = (
+                mycad_app.draft_cross_relations(
+                    saved, draft, tuple(canvas.pending_cross_tangencies)
+                )
+                if draft is not None and canvas is not None
+                else ()
+            )
+        except (ValueError, ValidationError) as exc:
+            self.status_command.setText(f"暂存相切关系无效：{exc}")
+            return
+        dialog = CrossSketchTangencyDialog(
+            sketches,
+            (*committed_relations, *staged),
+            self,
+            draft_sketch_id=draft.sketch_id if draft else None,
+            selected_entity_ids=frozenset(canvas.selected_entity_ids) if canvas else frozenset(),
+            selected_segment_indices=selected_segments,
+        )
+        self._cross_tangency_dialog = dialog
+        self._cross_tangency_preview = None
+        session_id = self._session_id
+        dialog.preview_requested.connect(partial(self._preview_cross_tangency, dialog, session_id))
+        dialog.commit_requested.connect(partial(self._commit_cross_tangency, dialog, session_id))
+        dialog.remove_requested.connect(partial(self._remove_cross_tangency, dialog, session_id))
+
+        def select_on_canvas() -> None:
+            if self._cross_tangency_dialog is not dialog or self._sketch_dialog is not editor:
+                return
+            dialog.reject()
+            if editor is not None:
+                editor.canvas.begin_object_tangency_selection()
+                editor.canvas.setFocus()
+
+        dialog.canvas_selection_requested.connect(select_on_canvas)
+
+        def finished(_result: int) -> None:
+            if self._cross_tangency_dialog is dialog:
+                self._cross_tangency_dialog = None
+                self._cross_tangency_preview = None
+
+        dialog.finished.connect(finished)
+        dialog.open()
+        if not force_dialog and canvas is not None and len(canvas.selected_entity_ids) == 2:
+            first, second = dialog.first_combo.currentData(), dialog.second_combo.currentData()
+            if (
+                isinstance(first, CrossSketchRef)
+                and isinstance(second, CrossSketchRef)
+                and first.sketch_id != second.sketch_id
+                and {first.entity_id, second.entity_id} == canvas.selected_entity_ids
+                and isinstance(dialog.branch_combo.currentData(), str)
+            ):
+
+                def complete_automatic_preview(success: bool) -> None:
+                    dialog.preview_completed.disconnect(complete_automatic_preview)
+                    if success and self._cross_tangency_dialog is dialog:
+                        dialog.commit_button.click()
+
+                dialog.preview_completed.connect(complete_automatic_preview)
+                dialog.preview_button.click()
+
+    def _start_mixed_local_tangency(
+        self, editor: SketchEditorDialog, draft: Sketch, constraint: SketchConstraint
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None:
+            self.status_command.setText("图纸或几何工作线程不可用。")
+            return
+        canvas = editor.canvas
+        previous = canvas.mixed_move
+        revision, session_id = loaded.document.revision, self._session_id
+        if previous is not None and (
+            not canvas.mixed_move_is_valid or previous.source_revision != revision
+        ):
+            self.status_command.setText("关联编辑已过期，请撤销后重试。")
+            return
+        original_saved = previous.original_saved if previous else services.kernel.sketches
+        context = _MixedHandleContext(
+            previous,
+            original_saved,
+            previous.current_saved if previous else original_saved,
+            previous.original_draft if previous else draft,
+            draft,
+            canvas.background_entities,
+            tuple(canvas.pending_cross_tangencies),
+            canvas.mixed_move_timeline_with_tangencies(),
+            canvas.history_position,
+            tuple(canvas.pending_associative_arrays),
+            tuple(arrays for _s, _d, _p, arrays in canvas.mixed_move_timeline_with_arrays()),
+            tuple(
+                transforms
+                for _s, _d, _p, _a, transforms in canvas.mixed_move_timeline_with_transforms()
+            ),
+        )
+
+        def prepare() -> tuple[MixedMoveState, Sketch]:
+            relations = _staged_committed_tangencies(
+                context.original_saved,
+                services.kernel.cross_sketch_tangencies,
+                tuple(
+                    (saved_step, transforms)
+                    for (saved_step, _draft, _pairs), transforms in zip(
+                        context.history, context.transform_history, strict=True
+                    )
+                ),
+            )
+            saved, solved_draft = mycad_app.prepare_mixed_draft_local_tangency(
+                services,
+                context.current_saved,
+                draft,
+                context.pairs,
+                constraint,
+                existing_relations=relations,
+            )
+            projected: dict[str, SketchEntity] = {}
+            background_ids = {item.entity_id for item, _layer in context.background}
+            for sketch in saved:
+                for entity in sketch.entities:
+                    if entity.entity_id not in background_ids:
+                        continue
+                    if entity.entity_id in projected:
+                        raise ValueError("关联图元身份重复。")
+                    projected[entity.entity_id] = project_coplanar_entity(
+                        entity, sketch.frame, draft.frame
+                    )
+            background = tuple(
+                (projected.get(item.entity_id, item), layer) for item, layer in context.background
+            )
+            state = MixedMoveState(
+                previous.transaction_id if previous else uuid4().hex,
+                revision,
+                context.original_draft,
+                context.original_saved,
+                saved,
+                previous.base_background if previous else context.background,
+                background,
+                previous.original_cross_tangencies if previous else context.pairs,
+                previous.original_associative_arrays if previous else context.arrays,
+            )
+            candidate = mycad_app.stage_mixed_drawing_timeline(
+                services,
+                loaded,
+                context.original_draft,
+                context.original_saved,
+                tuple((s, d) for s, d, _p in context.history) + ((saved, solved_draft),),
+                session_identity=session_id,
+                cross_pairs_by_step=tuple(p for _s, _d, p in context.history) + (context.pairs,),
+                arrays_by_step=(*context.array_history, context.arrays),
+                initial_cross_pairs=state.original_cross_tangencies,
+                initial_associative_arrays=state.original_associative_arrays,
+                rectangle_transforms_by_step=(*context.transform_history, ()),
+            )
+            try:
+                result = candidate.preview(current_session_identity=session_id)
+                if result.state != "succeeded":
+                    raise ValueError(str(result.failure or "对象相切预览失败。"))
+            finally:
+                candidate.cancel()
+            return state, solved_draft
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or self._sketch_dialog is not editor
+                or loaded.document.revision != revision
+                or not self._draft_tangency_context_current(editor, context)
+            ):
+                return
+            value = result.value
+            if (
+                result.error is not None
+                or not isinstance(value, tuple)
+                or len(cast("tuple[object, ...]", value)) != 2
+            ):
+                self.status_command.setText(drawing_message(result.error or "对象相切求解失败。"))
+                return
+            state, solved_draft = cast("tuple[object, object]", value)
+            if not isinstance(state, MixedMoveState) or not isinstance(solved_draft, Sketch):
+                self.status_command.setText("对象相切求解结果无效。")
+                return
+            try:
+                canvas.apply_mixed_move(
+                    state, solved_draft.entities, constraints=solved_draft.constraints
+                )
+            except (KeyError, ValueError) as exc:
+                self.status_command.setText(f"对象相切未暂存：{exc}")
+                return
+            canvas.message = "对象相切已暂存，可撤销。"
+            canvas.changed.emit()
+            canvas.update()
+
+        if not unit.submit(
+            prepare, operation="mixed-local-tangency", session_id=session_id, on_complete=finish
+        ):
+            self.status_command.setText("几何工作线程忙碌，请重试。")
+
+    def _preview_cross_tangency(
+        self, dialog: CrossSketchTangencyDialog, session_id: int, relation: CrossSketchTangency
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            dialog.complete_preview(relation, "文档已切换。", success=False)
+            return
+        revision = loaded.document.revision
+        commands = tuple(loaded.document.commands)
+        self._cross_tangency_preview = None
+        editor = self._sketch_dialog
+        is_draft = editor is not None and editor.draft_sketch_id in (
+            relation.first.sketch_id,
+            relation.second.sketch_id,
+        )
+        context: _MixedHandleContext | None = None
+        if is_draft and editor is not None:
+            canvas = editor.canvas
+            previous = canvas.mixed_move
+            if previous is not None and (
+                not canvas.mixed_move_is_valid or previous.source_revision != revision
+            ):
+                dialog.complete_preview(relation, "混合草稿已过期，请重新开始。", success=False)
+                return
+            draft = Sketch(
+                editor.draft_sketch_id,
+                editor.current_frame(),
+                tuple(canvas.entities),
+                tuple(canvas.constraints),
+                canvas.layer_table,
+            )
+            original_saved = previous.original_saved if previous else services.kernel.sketches
+            context = _MixedHandleContext(
+                previous,
+                original_saved,
+                previous.current_saved if previous else original_saved,
+                previous.original_draft if previous else draft,
+                draft,
+                canvas.background_entities,
+                tuple(canvas.pending_cross_tangencies),
+                canvas.mixed_move_timeline_with_tangencies(),
+                canvas.history_position,
+                tuple(canvas.pending_associative_arrays),
+                tuple(
+                    arrays
+                    for _saved, _draft, _pairs, arrays in canvas.mixed_move_timeline_with_arrays()
+                ),
+                tuple(
+                    transforms
+                    for _saved, _draft, _pairs, _arrays, transforms in canvas.mixed_move_timeline_with_transforms()
+                ),
+            )
+        elif editor is not None and (
+            editor.canvas.mixed_move or editor.canvas.pending_cross_tangencies
+        ):
+            dialog.complete_preview(
+                relation, "请先完成关联草稿，再修改两个已保存草图。", success=False
+            )
+            return
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._cross_tangency_dialog is not dialog
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            if loaded.document.revision != revision or tuple(loaded.document.commands) != commands:
+                dialog.complete_preview(relation, "文档已改变，请重新预览。", success=False)
+                return
+            if isinstance(result.value, _DraftTangencyPreview):
+                value = result.value
+                if editor is None or not self._draft_tangency_context_current(
+                    editor, value.context
+                ):
+                    dialog.complete_preview(relation, "草稿已改变，请重新预览。", success=False)
+                    return
+                self._cross_tangency_preview = value
+                dialog.complete_preview(
+                    relation,
+                    tangent_preview_summary(
+                        relation,
+                        (*value.context.current_saved, value.context.draft),
+                        (*value.state.current_saved, value.solved_draft),
+                    )
+                    + "\n确认后先暂存，完成草图时统一提交。",
+                    success=True,
+                )
+                return
+            if result.error is not None or not isinstance(result.value, tuple):
+                dialog.complete_preview(relation, result.error or "相切预览失败。", success=False)
+                return
+            if len(cast("tuple[object, ...]", result.value)) != 2:
+                dialog.complete_preview(relation, "相切预览结果无效。", success=False)
+                return
+            original, solved = cast("tuple[tuple[Sketch, ...], tuple[Sketch, ...]]", result.value)
+            self._cross_tangency_preview = (relation, original, solved, revision)
+            dialog.complete_preview(
+                relation, tangent_preview_summary(relation, original, solved), success=True
+            )
+
+        action = (
+            (
+                lambda: self._build_draft_tangency_preview(
+                    services, loaded, context, relation, revision, session_id
+                )
+            )
+            if context is not None
+            else (lambda: mycad_app.prepare_cross_sketch_tangency(services, relation))
+        )
+        if not unit.submit(
+            action,
+            operation="cross-tangency-preview",
+            session_id=session_id,
+            on_complete=finish,
+        ):
+            dialog.complete_preview(relation, "几何工作线程忙碌，请重试。", success=False)
+
+    @staticmethod
+    def _draft_tangency_context_current(
+        editor: SketchEditorDialog, context: _MixedHandleContext
+    ) -> bool:
+        canvas = editor.canvas
+        return (
+            canvas.mixed_move == context.previous
+            and tuple(canvas.entities) == context.draft.entities
+            and tuple(canvas.constraints) == context.draft.constraints
+            and canvas.layer_table == context.draft.layers
+            and editor.current_frame() == context.draft.frame
+            and tuple(canvas.pending_cross_tangencies) == context.pairs
+            and tuple(canvas.pending_associative_arrays) == context.arrays
+            and canvas.history_position == context.history_position
+        )
+
+    def _build_draft_tangency_preview(
+        self,
+        services: AppServices,
+        loaded: LoadedDocument,
+        context: _MixedHandleContext,
+        relation: CrossSketchTangency,
+        revision: int,
+        session_id: int,
+    ) -> _DraftTangencyPreview:
+        saved, draft = mycad_app.prepare_mixed_draft_tangency(
+            services,
+            context.current_saved,
+            context.draft,
+            context.pairs,
+            relation,
+            existing_relations=_staged_committed_tangencies(
+                context.original_saved,
+                services.kernel.cross_sketch_tangencies,
+                tuple(
+                    (saved_step, transforms)
+                    for (saved_step, _draft, _pairs), transforms in zip(
+                        context.history, context.transform_history, strict=True
+                    )
+                ),
+            ),
+        )
+        source, target = (
+            (relation.second, relation.first)
+            if relation.first.sketch_id == draft.sketch_id
+            else (relation.first, relation.second)
+        )
+
+        def endpoint(ref: CrossSketchRef) -> str | SketchGeometryReference:
+            return (
+                SketchGeometryReference(ref.entity_id, "segment", ref.segment_index)
+                if ref.segment_index is not None
+                else ref.entity_id
+            )
+
+        pair: DraftTangentPair = (endpoint(source), endpoint(target))
+        projected: dict[str, SketchEntity] = {}
+        background_ids = {item.entity_id for item, _layer in context.background}
+        for sketch in saved:
+            for entity in sketch.entities:
+                if entity.entity_id not in background_ids:
+                    continue
+                if entity.entity_id in projected:
+                    raise ValueError("关联图元身份重复。")
+                projected[entity.entity_id] = project_coplanar_entity(
+                    entity, sketch.frame, draft.frame
+                )
+        background = tuple(
+            (projected.get(item.entity_id, item), layer) for item, layer in context.background
+        )
+        previous = context.previous
+        state = MixedMoveState(
+            previous.transaction_id if previous else uuid4().hex,
+            revision,
+            context.original_draft,
+            context.original_saved,
+            saved,
+            previous.base_background if previous else context.background,
+            background,
+            previous.original_cross_tangencies if previous else context.pairs,
+            previous.original_associative_arrays if previous else context.arrays,
+        )
+        steps = tuple((old_saved, old_draft) for old_saved, old_draft, _ in context.history) + (
+            (saved, draft),
+        )
+        pairs_by_step = tuple(pairs for _, _, pairs in context.history) + ((*context.pairs, pair),)
+        candidate = mycad_app.stage_mixed_drawing_timeline(
+            services,
+            loaded,
+            context.original_draft,
+            context.original_saved,
+            steps,
+            session_identity=session_id,
+            cross_pairs_by_step=pairs_by_step,
+            arrays_by_step=(*context.array_history, context.arrays),
+            initial_cross_pairs=state.original_cross_tangencies,
+            initial_associative_arrays=state.original_associative_arrays,
+            rectangle_transforms_by_step=(*context.transform_history, ()),
+        )
+        try:
+            result = candidate.preview(current_session_identity=session_id)
+            if result.state != "succeeded":
+                raise ValueError(str(result.failure or "混合相切预览失败。"))
+        finally:
+            candidate.cancel()
+        return _DraftTangencyPreview(relation, context, state, draft, pair, revision)
+
+    def _commit_cross_tangency(
+        self, dialog: CrossSketchTangencyDialog, session_id: int, relation: CrossSketchTangency
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        preview = self._cross_tangency_preview
+        if isinstance(preview, _DraftTangencyPreview):
+            editor = self._sketch_dialog
+            if (
+                loaded is None
+                or editor is None
+                or preview.relation != relation
+                or session_id != self._session_id
+                or loaded.document.revision != preview.revision
+                or not self._draft_tangency_context_current(editor, preview.context)
+            ):
+                dialog.submission_failed("草稿或文档已改变，请重新预览。")
+                return
+            try:
+                editor.canvas.apply_mixed_move(
+                    preview.state,
+                    preview.solved_draft.entities,
+                    constraints=preview.solved_draft.constraints,
+                )
+                editor.canvas.pending_cross_tangencies.append(preview.pair)
+                editor.canvas.message = "对象相切已暂存；完成绘图时提交，可撤销。"
+                editor.canvas.changed.emit()
+                editor.canvas.update()
+            except (KeyError, ValueError) as exc:
+                dialog.submission_failed(str(exc))
+                return
+            dialog.accept()
+            return
+        if (
+            loaded is None
+            or services is None
+            or unit is None
+            or preview is None
+            or preview[0] != relation
+        ):
+            dialog.submission_failed("请重新预览。")
+            return
+        _, original, solved, revision = preview
+        if session_id != self._session_id or loaded.document.revision != revision:
+            dialog.submission_failed("文档已改变，请重新预览。")
+            return
+
+        def current() -> bool:
+            return (
+                self._cross_tangency_dialog is dialog
+                and self._loaded is loaded
+                and self._session_id == session_id
+                and loaded.document.revision == revision
+            )
+
+        def commit() -> object:
+            if not current():
+                raise ValidationError("文档已改变，请重新预览。")
+            return mycad_app.commit_cross_sketch_tangency(
+                services,
+                loaded,
+                relation,
+                session_identity=session_id,
+                expected_original=original,
+                expected_solved=solved,
+                still_current=current,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._cross_tangency_dialog is not dialog
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            if result.error is not None:
+                dialog.submission_failed(result.error)
+                return
+            if self._sketch_dialog is not None:
+                self._sketch_dialog.set_context_sketches(services.kernel.sketches)
+            if self.viewport is not None:
+                self.viewport.refresh()
+            self.status_command.setText("对象相切已写入历史。")
+            dialog.accept()
+
+        if not unit.submit(
+            commit, operation="cross-tangency-commit", session_id=session_id, on_complete=finish
+        ):
+            dialog.submission_failed("几何工作线程忙碌，请重试。")
+
+    def _remove_selected_associative_array(self) -> None:
+        self._change_selected_associative_array(mode="remove")
+
+    def _edit_selected_associative_array(self) -> None:
+        self._change_selected_associative_array(mode="spacing")
+
+    def _resize_selected_associative_array(self) -> None:
+        self._change_selected_associative_array(mode="resize")
+
+    def _rotate_selected_associative_array(self) -> None:
+        self._change_selected_associative_array(mode="angle")
+
+    def _base_selected_associative_array(self) -> None:
+        self._change_selected_associative_array(mode="base")
+
+    def _offset_selected_associative_member(self) -> None:
+        self._change_selected_associative_array(mode="member_offset")
+
+    def _rotate_associative_member(self) -> None:
+        self._change_selected_associative_array(mode="member_rotation")
+
+    def _replace_associative_member(self) -> None:
+        editor = self._sketch_dialog
+        if editor is not None and len(editor.canvas.selected_entity_ids) > 1:
+            self._replace_associative_cell_members()
+            return
+        self._change_selected_associative_array(mode="member_replace")
+
+    def _replace_associative_cell_members(self) -> None:
+        loaded, services, unit, editor = (
+            self._loaded,
+            self._services,
+            self.execution_unit,
+            self._sketch_dialog,
+        )
+        if loaded is None or services is None or unit is None or editor is None:
+            return
+        canvas = editor.canvas
+        if (
+            canvas.has_active_edit_gesture
+            or canvas.has_pending_geometry
+            or canvas.mixed_move
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+        ):
+            self.status_command.setText("请先完成或撤销当前草稿操作。")
+            return
+        selected = frozenset(canvas.selected_entity_ids)
+        if any(entity.entity_id in selected for entity in canvas.entities):
+            self.status_command.setText("请选择已保存的阵列副本。")
+            return
+        matches: list[tuple[AssociativeRectArray, tuple[ArrayMember, ...]]] = []
+        for array in services.kernel.associative_arrays:
+            members = tuple(
+                member for member in array.members if member.target.entity_id in selected
+            )
+            if frozenset(member.target.entity_id for member in members) == selected:
+                positions = {(member.row, member.column) for member in members}
+                if len(positions) == 1 and len(members) == len(array.sources):
+                    matches.append((array, members))
+        if len(matches) != 1:
+            self.status_command.setText("请选择同一阵列单元的全部副本。")
+            return
+        array, members = matches[0]
+        sketches = services.kernel.sketches
+        if any(
+            sum(entity.entity_id == identity for sketch in sketches for entity in sketch.entities)
+            != 1
+            for identity in selected
+        ):
+            self.status_command.setText("所选图元身份不唯一。")
+            return
+        if any(
+            member.erased_index is not None or member.offset_mm != (0, 0) or member.rotation_deg
+            for member in members
+        ):
+            self.status_command.setText("请先重置该单元的位置及旋转覆盖。")
+            return
+        candidates = [
+            (sketch, entity)
+            for sketch in sketches
+            for entity in sketch.entities
+            if entity.entity_id not in selected
+            and sketch.layers.get(entity.layer_name).displayed
+            and not sketch.layers.get(entity.layer_name).locked
+            and canvas.entity_point_references(entity)
+        ]
+        maximum = min(
+            len(candidates), 10000 - len(array.members) - len(array.extra_outputs) + len(members)
+        )
+        if maximum < 1:
+            self.status_command.setText("没有可用的替换来源。")
+            return
+        count, accepted = QInputDialog.getInt(
+            self, "替换阵列单元", "替换来源图元数量", min(len(members), maximum), 1, maximum
+        )
+        if not accepted:
+            return
+        if not 1 <= count <= maximum:
+            self.status_command.setText("替换来源图元数量无效。")
+            return
+        replaced_members, erased_members = members[:count], members[count:]
+        chosen_sources: list[tuple[Sketch, SketchEntity]] = []
+        for index in range(count):
+            available = [
+                (sketch, entity)
+                for sketch, entity in candidates
+                if (sketch, entity) not in chosen_sources
+            ]
+            labels = [
+                f"{i + 1}: {entity.entity_id[:8]} {type(entity).__name__} [{entity.layer_name}]"
+                for i, (_sketch, entity) in enumerate(available)
+            ]
+            if not labels:
+                self.status_command.setText("没有足够的替换来源。")
+                return
+            chosen, accepted = QInputDialog.getItem(
+                self, "替换阵列单元", f"选择第 {index + 1} 个副本的替换来源", labels, 0, False
+            )
+            if not accepted or chosen not in labels:
+                return
+            chosen_sources.append(available[labels.index(chosen)])
+        first_sketch, first_entity = chosen_sources[0]
+        first_anchor = canvas.entity_point_references(first_entity)[0][1]
+        default = editor.current_frame().world_to_local(
+            first_sketch.frame.local_to_world(first_anchor)
+        )
+        value, accepted = QInputDialog.getText(
+            self, "替换阵列单元", "替换来源共同基点 U,V", text=f"{default[0]!r},{default[1]!r}"
+        )
+        if not accepted:
+            return
+        try:
+            point = tuple(float(part.strip()) for part in value.split(","))
+            if len(point) != 2 or not all(isfinite(part) for part in point):
+                raise ValueError
+            changes: dict[ArrayEntityRef, ArrayReplacement] = {}
+            for member, (replacement_sketch, replacement_entity) in zip(
+                replaced_members, chosen_sources[: len(replaced_members)], strict=True
+            ):
+                anchor = canvas.entity_point_references(replacement_entity)[0][1]
+                base = replacement_sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world((point[0], point[1]))
+                )
+                changes[member.target] = ArrayReplacement(
+                    ArrayEntityRef(replacement_sketch.sketch_id, replacement_entity.entity_id),
+                    (base[0] - anchor[0], base[1] - anchor[1]),
+                    anchor_source=members[0].source,
+                )
+            extras: list[ArrayExtraOutput] = []
+            for replacement_sketch, replacement_entity in chosen_sources[len(members) :]:
+                anchor = canvas.entity_point_references(replacement_entity)[0][1]
+                base = replacement_sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world((point[0], point[1]))
+                )
+                extras.append(
+                    ArrayExtraOutput(
+                        ArrayEntityRef(replacement_sketch.sketch_id, replacement_entity.entity_id),
+                        ArrayEntityRef(members[0].target.sketch_id, uuid4().hex),
+                        members[0].source,
+                        members[0].row,
+                        members[0].column,
+                        (base[0] - anchor[0], base[1] - anchor[1]),
+                    )
+                )
+        except (KeyError, IndexError, ValueError):
+            self.status_command.setText("替换基点或源图元无效。")
+            return
+        revision, session_id = loaded.document.revision, self._session_id
+        editor.setEnabled(False)
+
+        def commit() -> object:
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+                or array not in services.kernel.associative_arrays
+                or self._sketch_dialog is not editor
+                or frozenset(canvas.selected_entity_ids) != selected
+            ):
+                raise ValidationError("文档或阵列已变化，请重新选择。")
+            params: dict[str, object] = {
+                "array_id": array.array_id,
+                "members": [
+                    {"target": target.to_mapping(), "replacement": replacement.to_mapping()}
+                    for target, replacement in changes.items()
+                ],
+            }
+            if erased_members:
+                params["erase_members"] = [member.target.to_mapping() for member in erased_members]
+            if extras:
+                params["extra_outputs"] = [output.to_mapping() for output in extras]
+            return loaded.bus.execute(
+                "drawing.array.replace",
+                params,
+                "local",
+                version=6 if extras else 5 if erased_members else 4,
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            editor.setEnabled(True)
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or self._sketch_dialog is not editor
+            ):
+                return
+            if result.error is not None:
+                self.status_command.setText(f"阵列操作失败：{result.error}")
+                return
+            editor.set_context_sketches(services.kernel.sketches)
+            self._sync_drawing_layers()
+            self.status_command.setText("已替换阵列单元；可撤销。")
+
+        if not unit.submit(
+            commit, operation="array-cell-replace", session_id=session_id, on_complete=finish
+        ):
+            editor.setEnabled(True)
+            self.status_command.setText("几何工作线程忙碌，请重试。")
+
+    def _reset_associative_offsets(self) -> None:
+        self._change_selected_associative_array(mode="reset_offsets")
+
+    def _reset_associative_overrides(self) -> None:
+        self._change_selected_associative_array(mode="reset_overrides")
+
+    def _change_selected_associative_array(self, *, mode: str) -> None:
+        loaded, services, unit, editor = (
+            self._loaded,
+            self._services,
+            self.execution_unit,
+            self._sketch_dialog,
+        )
+        if loaded is None or services is None or unit is None or editor is None:
+            self.status_command.setText("请先打开独立二维草稿并选择阵列源或副本。")
+            return
+        canvas = editor.canvas
+        if (
+            canvas.has_active_edit_gesture
+            or canvas.has_pending_geometry
+            or canvas.mixed_move
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+        ):
+            self.status_command.setText("请先完成或撤销当前草稿操作。")
+            return
+        selected = canvas.selected_entity_ids
+        if not selected or (
+            len(selected) != 1 and mode not in {"member_offset", "member_rotation"}
+        ):
+            self.status_command.setText("请选择已保存的关联阵列源或副本。")
+            return
+        identity = next(iter(selected))
+        if any(entity.entity_id in selected for entity in canvas.entities):
+            self.status_command.setText("请选择身份唯一的已保存阵列源或副本。")
+            return
+        owners = sum(
+            entity.entity_id == identity
+            for sketch in services.kernel.sketches
+            for entity in sketch.entities
+        )
+        if mode in {"member_offset", "member_rotation"} and any(
+            sum(
+                entity.entity_id == chosen
+                for sketch in services.kernel.sketches
+                for entity in sketch.entities
+            )
+            != 1
+            for chosen in selected
+        ):
+            self.status_command.setText("所选阵列副本身份不唯一或已变化。")
+            return
+        arrays = [
+            array
+            for array in services.kernel.associative_arrays
+            if any(source.entity_id == identity for source in array.sources)
+            or any(member.target.entity_id == identity for member in array.members)
+            or any(output.target.entity_id == identity for output in array.extra_outputs)
+        ]
+        batch_owners: dict[ArrayEntityRef, AssociativeRectArray] = {}
+        if mode in {"member_offset", "member_rotation"}:
+            for candidate in services.kernel.associative_arrays:
+                for item in (*candidate.members, *candidate.extra_outputs):
+                    if item.target.entity_id in selected:
+                        if item.target in batch_owners:
+                            self.status_command.setText("阵列副本身份不唯一。")
+                            return
+                        batch_owners[item.target] = candidate
+        cross_array = len({owner.array_id for owner in batch_owners.values()}) > 1
+        if cross_array:
+            if len(batch_owners) != len(selected):
+                self.status_command.setText("请选择身份唯一的已保存阵列副本。")
+                return
+            arrays = list({owner.array_id: owner for owner in batch_owners.values()}.values())
+        if not cross_array and mode in {
+            "member_offset",
+            "member_rotation",
+            "member_replace",
+            "reset_offsets",
+            "reset_overrides",
+        }:
+            owning = [
+                candidate
+                for candidate in arrays
+                if (
+                    mode not in {"member_offset", "member_rotation"}
+                    and (
+                        any(member.target.entity_id == identity for member in candidate.members)
+                        or (
+                            mode in {"reset_offsets", "reset_overrides"}
+                            and any(
+                                output.target.entity_id == identity
+                                for output in candidate.extra_outputs
+                            )
+                        )
+                    )
+                )
+                or (
+                    mode in {"member_offset", "member_rotation"}
+                    and selected.issubset(
+                        {member.target.entity_id for member in candidate.members}
+                        | {output.target.entity_id for output in candidate.extra_outputs}
+                    )
+                )
+            ]
+            erased = [
+                candidate
+                for candidate in arrays
+                if any(member.erased_index is not None for member in candidate.members)
+            ]
+            if mode == "reset_overrides" and erased:
+                arrays = erased
+            elif owning:
+                arrays = owning
+            elif mode in {"member_offset", "member_rotation", "member_replace"}:
+                self.status_command.setText("请选择一个已保存的阵列副本。")
+                return
+        if len(arrays) > 1 and not cross_array:
+            self.status_command.setText("所选图元属于多个关联阵列；请选择唯一的阵列副本。")
+            return
+        if owners != 1 or (len(arrays) != 1 and not cross_array):
+            self.status_command.setText("所选对象不是唯一的已保存关联阵列源或副本。")
+            return
+        array = arrays[0]
+        revision, session_id = loaded.document.revision, self._session_id
+        row_spacing, column_spacing = array.row_spacing, array.column_spacing
+        rows, columns = array.rows, array.columns
+        angle = array.angle_deg
+        selected_snapshot = frozenset(canvas.selected_entity_ids)
+        draft_snapshot = (
+            tuple(canvas.entities),
+            tuple(canvas.constraints),
+            canvas.layer_table,
+            canvas.active_layer_name,
+            canvas.history_position,
+        )
+        base_point: ArrayBasePoint | None = None
+        reset_base_point = False
+        member_offset: tuple[float, float] | None = None
+        member_rotations: dict[ArrayEntityRef, tuple[float, tuple[float, float]]] = {}
+        member_replacement: ArrayReplacement | None = None
+        selected_member = next(
+            (member for member in array.members if member.target.entity_id == identity), None
+        )
+        selected_offsets = tuple(
+            item
+            for owner in arrays
+            for item in (*owner.members, *owner.extra_outputs)
+            if item.target.entity_id in selected
+        )
+        if mode == "member_offset":
+            if len(selected_offsets) != len(selected):
+                self.status_command.setText("请选择一个已保存的阵列副本。")
+                return
+            initial = selected_offsets[0].offset_mm
+            initial_text = (
+                f"{initial[0]!r},{initial[1]!r}"
+                if all(item.offset_mm == initial for item in selected_offsets)
+                else ""
+            )
+            value, accepted = QInputDialog.getText(
+                self,
+                "修改阵列成员偏移",
+                "工作平面偏移 ΔU,ΔV",
+                text=initial_text,
+            )
+            if not accepted:
+                return
+            try:
+                coordinates = tuple(float(part.strip()) for part in value.split(","))
+                if len(coordinates) != 2 or not all(isfinite(part) for part in coordinates):
+                    raise ValueError
+                member_offset = (coordinates[0], coordinates[1])
+            except ValueError:
+                self.status_command.setText("请输入有限的二维偏移，格式为 ΔU,ΔV。")
+                return
+            if all(member_offset == item.offset_mm for item in selected_offsets):
+                self.status_command.setText("阵列成员偏移未变化。")
+                return
+        if mode == "member_rotation":
+            if len(selected_offsets) != len(selected):
+                self.status_command.setText("请选择同一阵列中的已保存副本。")
+                return
+            initial_angle = selected_offsets[0].rotation_deg
+            angle_text = (
+                f"{initial_angle!r}"
+                if all(item.rotation_deg == initial_angle for item in selected_offsets)
+                else ""
+            )
+            value, accepted = QInputDialog.getText(
+                self, "旋转阵列成员", "旋转角度（度）", text=angle_text
+            )
+            if not accepted:
+                return
+            try:
+                rotation = float(value.strip())
+                if not isfinite(rotation):
+                    raise ValueError
+            except ValueError:
+                self.status_command.setText("请输入有限的旋转角度。")
+                return
+            centers: dict[ArrayEntityRef, tuple[Sketch, tuple[float, float]]] = {}
+            if rotation != 0:
+                try:
+                    display_centers: list[tuple[float, float]] = []
+                    for item in selected_offsets:
+                        anchor = array_member_rotation_anchor(
+                            batch_owners[item.target], item, services.kernel.sketches
+                        )
+                        target_sketch = next(
+                            (
+                                sketch
+                                for sketch in services.kernel.sketches
+                                if sketch.sketch_id == item.target.sketch_id
+                            ),
+                            None,
+                        )
+                        if target_sketch is None:
+                            raise ValueError("阵列目标草图已变化。")
+                        centers[item.target] = (target_sketch, anchor)
+                        current_center = (
+                            anchor[0] + item.rotation_center_offset_mm[0],
+                            anchor[1] + item.rotation_center_offset_mm[1],
+                        )
+                        display_centers.append(
+                            editor.current_frame().world_to_local(
+                                target_sketch.frame.local_to_world(current_center)
+                            )
+                        )
+                except ValueError as exc:
+                    self.status_command.setText(str(exc))
+                    return
+                display_center = display_centers[0]
+                center_text = (
+                    f"{display_center[0]!r},{display_center[1]!r}"
+                    if all(center == display_center for center in display_centers)
+                    else ""
+                )
+                value, accepted = QInputDialog.getText(
+                    self,
+                    "旋转阵列成员",
+                    "旋转中心坐标 U,V",
+                    text=center_text,
+                )
+                if not accepted:
+                    return
+                try:
+                    coordinates = tuple(float(part.strip()) for part in value.split(","))
+                    if len(coordinates) != 2 or not all(isfinite(part) for part in coordinates):
+                        raise ValueError
+                    world_center = editor.current_frame().local_to_world(
+                        (coordinates[0], coordinates[1])
+                    )
+                    for ref, (target_sketch, anchor) in centers.items():
+                        target_center = target_sketch.frame.world_to_local(world_center)
+                        member_rotations[ref] = (
+                            rotation,
+                            (target_center[0] - anchor[0], target_center[1] - anchor[1]),
+                        )
+                except ValueError:
+                    self.status_command.setText("请输入有限的旋转中心，格式为 U,V。")
+                    return
+            else:
+                member_rotations = {item.target: (0.0, (0.0, 0.0)) for item in selected_offsets}
+            if all(
+                member_rotations[item.target] == (item.rotation_deg, item.rotation_center_offset_mm)
+                for item in selected_offsets
+            ):
+                self.status_command.setText("阵列成员旋转未变化。")
+                return
+        if mode == "member_replace":
+            assert selected_member is not None
+            replacement_candidates = [
+                (sketch, entity)
+                for sketch in services.kernel.sketches
+                for entity in sketch.entities
+                if entity.entity_id != identity
+                and sketch.layers.get(entity.layer_name).displayed
+                and not sketch.layers.get(entity.layer_name).locked
+                and canvas.entity_point_references(entity)
+            ]
+            if not replacement_candidates:
+                self.status_command.setText("没有可用的替换来源。")
+                return
+            entity_labels = {
+                "PointEntity": "点",
+                "LineEntity": "直线",
+                "PolylineEntity": "多段线",
+                "CircleEntity": "圆",
+                "ArcEntity": "圆弧",
+                "RectangleEntity": "矩形",
+                "SplineEntity": "样条",
+            }
+            labels = [
+                f"{index + 1}: {entity.entity_id[:8]} {entity_labels.get(type(entity).__name__, '图元')} [{entity.layer_name}]"
+                for index, (_sketch, entity) in enumerate(replacement_candidates)
+            ]
+            chosen, accepted = QInputDialog.getItem(
+                self, "替换阵列成员", "替换来源", labels, 0, False
+            )
+            if not accepted or chosen not in labels:
+                return
+            replacement_sketch, replacement_entity = replacement_candidates[labels.index(chosen)]
+            anchor = canvas.entity_point_references(replacement_entity)[0][1]
+            default_point = editor.current_frame().world_to_local(
+                replacement_sketch.frame.local_to_world(anchor)
+            )
+            value, accepted = QInputDialog.getText(
+                self,
+                "替换阵列成员",
+                "替换来源基点坐标 U,V",
+                text=f"{default_point[0]!r},{default_point[1]!r}",
+            )
+            if not accepted:
+                return
+            try:
+                coordinates = tuple(float(part.strip()) for part in value.split(","))
+                if len(coordinates) != 2 or not all(isfinite(part) for part in coordinates):
+                    raise ValueError
+                local_point = replacement_sketch.frame.world_to_local(
+                    editor.current_frame().local_to_world((coordinates[0], coordinates[1]))
+                )
+                member_replacement = ArrayReplacement(
+                    ArrayEntityRef(replacement_sketch.sketch_id, replacement_entity.entity_id),
+                    (local_point[0] - anchor[0], local_point[1] - anchor[1]),
+                )
+            except ValueError:
+                self.status_command.setText("请输入有限的替换基点坐标，格式为 U,V。")
+                return
+            if member_replacement == selected_member.replacement:
+                self.status_command.setText("阵列成员替换未变化。")
+                return
+        if mode == "reset_offsets" and all(
+            item.offset_mm == (0, 0) for item in (*array.members, *array.extra_outputs)
+        ):
+            self.status_command.setText("阵列没有需要重置的位置偏移。")
+            return
+        if (
+            mode == "reset_overrides"
+            and not array.extra_outputs
+            and all(
+                member.offset_mm == (0, 0)
+                and member.rotation_deg == 0
+                and member.erased_index is None
+                and member.replacement is None
+                for member in array.members
+            )
+        ):
+            self.status_command.setText("阵列没有需要重置的成员覆盖。")
+            return
+        if mode == "base":
+            choice, accepted = QInputDialog.getItem(
+                self, "修改矩形阵列基点", "基点方式", ["坐标", "源关键点", "恢复默认"], 0, False
+            )
+            if not accepted:
+                return
+            if choice == "坐标":
+                value, accepted = QInputDialog.getText(self, "修改矩形阵列基点", "工作平面坐标 U,V")
+                if not accepted:
+                    return
+                try:
+                    coordinates = tuple(float(part.strip()) for part in value.split(","))
+                    if len(coordinates) != 2 or not all(isfinite(part) for part in coordinates):
+                        raise ValueError
+                    base_point = ArrayBasePoint(point_mm=(coordinates[0], coordinates[1]))
+                except ValueError:
+                    self.status_command.setText("请输入有限的二维坐标，格式为 U,V。")
+                    return
+            elif choice == "源关键点":
+                candidates: list[
+                    tuple[ArrayEntityRef, SketchGeometryReference, tuple[float, float]]
+                ] = []
+                for source in array.sources:
+                    for sketch in services.kernel.sketches:
+                        if sketch.sketch_id != source.sketch_id:
+                            continue
+                        for entity in sketch.entities:
+                            if entity.entity_id == source.entity_id:
+                                candidates.extend(
+                                    (
+                                        source,
+                                        reference,
+                                        array.frame.world_to_local(
+                                            sketch.frame.local_to_world(point)
+                                        ),
+                                    )
+                                    for reference, point in canvas.entity_point_references(entity)
+                                )
+                if not candidates:
+                    self.status_command.setText("阵列源没有可用关键点。")
+                    return
+                labels = [
+                    f"{index + 1}: {source.entity_id[:8]} {reference.kind}"
+                    f"{'' if reference.index is None else f' {reference.index}'} ({point[0]:.8g}, {point[1]:.8g})"
+                    for index, (source, reference, point) in enumerate(candidates)
+                ]
+                selected_key, accepted = QInputDialog.getItem(
+                    self, "修改矩形阵列基点", "源关键点", labels, 0, False
+                )
+                if not accepted or selected_key not in labels:
+                    return
+                source, reference, _point = candidates[labels.index(selected_key)]
+                base_point = ArrayBasePoint(source=source, reference=reference)
+            elif choice == "恢复默认":
+                reset_base_point = True
+            else:
+                return
+            if (reset_base_point and array.base_point is None) or base_point == array.base_point:
+                self.status_command.setText("阵列基点未变化。")
+                return
+        if mode == "angle":
+            value, accepted = QInputDialog.getText(
+                self, "修改矩形阵列", "方向角（度）", text=repr(angle)
+            )
+            if not accepted:
+                return
+            try:
+                angle = float(value.strip())
+                if not isfinite(angle):
+                    raise ValueError
+            except ValueError:
+                self.status_command.setText("请输入有限的阵列方向角。")
+                return
+            if angle == array.angle_deg:
+                self.status_command.setText("阵列方向未变化。")
+                return
+        if mode == "resize":
+            rows, accepted = QInputDialog.getInt(self, "修改矩形阵列", "行数", rows, 1, 1000)
+            if not accepted:
+                return
+            columns, accepted = QInputDialog.getInt(self, "修改矩形阵列", "列数", columns, 1, 1000)
+            if not accepted:
+                return
+            if not 2 <= rows * columns <= 1000 or (rows * columns - 1) * len(array.sources) > 10000:
+                self.status_command.setText("阵列位置须为 2 到 1000 个，副本不能超过 10000 个。")
+                return
+            if rows == array.rows and columns == array.columns:
+                self.status_command.setText("阵列数量未变化。")
+                return
+
+        def request_spacing(label: str, current: float) -> float | None:
+            value, accepted = QInputDialog.getText(self, "修改矩形阵列", label, text=repr(current))
+            if not accepted:
+                return None
+            try:
+                result = float(value.strip())
+                if not isfinite(result) or abs(result) <= 1e-9:
+                    raise ValueError
+            except ValueError:
+                self.status_command.setText("请输入有限且非零的阵列间距。")
+                return None
+            return result
+
+        if (mode == "spacing" and array.rows > 1) or (
+            mode == "resize" and array.rows == 1 and rows > 1
+        ):
+            value = request_spacing("行间距 ΔV", row_spacing)
+            if value is None:
+                return
+            row_spacing = value
+        if (mode == "spacing" and array.columns > 1) or (
+            mode == "resize" and array.columns == 1 and columns > 1
+        ):
+            value = request_spacing("列间距 ΔU", column_spacing)
+            if value is None:
+                return
+            column_spacing = value
+        if (
+            mode == "spacing"
+            and row_spacing == array.row_spacing
+            and column_spacing == array.column_spacing
+        ):
+            self.status_command.setText("阵列间距未变化。")
+            return
+
+        resized: AssociativeRectArray | None = None
+        if mode == "resize":
+            target_sketches = {member.target.sketch_id for member in array.members}
+            if len(target_sketches) != 1:
+                self.status_command.setText("暂不支持跨目标草图的阵列数量修改。")
+                return
+            target_sketch = next(iter(target_sketches))
+            existing = {
+                (member.source, member.row, member.column): member for member in array.members
+            }
+            members = tuple(
+                existing.get((source, row, column))
+                or ArrayMember(source, ArrayEntityRef(target_sketch, uuid4().hex), row, column)
+                for row in range(rows)
+                for column in range(columns)
+                if row or column
+                for source in array.sources
+            )
+            try:
+                resized = replace(
+                    array,
+                    rows=rows,
+                    columns=columns,
+                    row_spacing=row_spacing,
+                    column_spacing=column_spacing,
+                    members=members,
+                    extra_outputs=tuple(
+                        output
+                        for output in array.extra_outputs
+                        if output.row < rows and output.column < columns
+                    ),
+                )
+            except ValueError as exc:
+                self.status_command.setText(str(exc))
+                return
+
+        def remove() -> object:
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+                or any(owner not in services.kernel.associative_arrays for owner in arrays)
+                or (
+                    mode
+                    in {
+                        "base",
+                        "member_offset",
+                        "member_rotation",
+                        "member_replace",
+                        "reset_offsets",
+                        "reset_overrides",
+                    }
+                    and (
+                        self._sketch_dialog is not editor
+                        or frozenset(canvas.selected_entity_ids) != selected_snapshot
+                        or (
+                            tuple(canvas.entities),
+                            tuple(canvas.constraints),
+                            canvas.layer_table,
+                            canvas.active_layer_name,
+                            canvas.history_position,
+                        )
+                        != draft_snapshot
+                    )
+                )
+            ):
+                raise ValidationError("文档或阵列已变化，请重新选择。")
+            if resized is not None:
+                return loaded.bus.execute(
+                    "drawing.array.resize",
+                    {"array": resized.to_mapping()},
+                    confirmed_by="local",
+                    version=15
+                    if any(output.rotation_deg != 0 for output in resized.extra_outputs)
+                    else 14
+                    if any(output.offset_mm != (0, 0) for output in resized.extra_outputs)
+                    else 13
+                    if resized.extra_outputs != array.extra_outputs
+                    else 12
+                    if resized.extra_outputs
+                    else 11
+                    if any(
+                        member.replacement is not None
+                        and member.replacement.anchor_source is not None
+                        for member in resized.members
+                    )
+                    else 10
+                    if has_interleaved_array_dependencies(
+                        tuple(
+                            resized if item.array_id == resized.array_id else item
+                            for item in services.kernel.associative_arrays
+                        )
+                    )
+                    else 9
+                    if has_internal_replacements(resized)
+                    else 8
+                    if any(member.replacement is not None for member in resized.members)
+                    else 7
+                    if any(member.erased_neighbors is not None for member in resized.members)
+                    else 6
+                    if any(member.erased_index is not None for member in resized.members)
+                    else 5
+                    if any(member.rotation_deg != 0 for member in resized.members)
+                    else 4
+                    if any(member.offset_mm != (0, 0) for member in resized.members)
+                    else 3
+                    if resized.base_point is not None
+                    else 2
+                    if resized.angle_deg != 0
+                    else 1,
+                )
+            if mode == "spacing":
+                return loaded.bus.execute(
+                    "drawing.array.update",
+                    {
+                        "array_id": array.array_id,
+                        "row_spacing": row_spacing,
+                        "column_spacing": column_spacing,
+                    },
+                    confirmed_by="local",
+                    version=1,
+                )
+            if mode == "angle":
+                return loaded.bus.execute(
+                    "drawing.array.update",
+                    {
+                        "array_id": array.array_id,
+                        "row_spacing": row_spacing,
+                        "column_spacing": column_spacing,
+                        "angle_deg": angle,
+                    },
+                    confirmed_by="local",
+                    version=2,
+                )
+            if mode == "base":
+                params: dict[str, object] = {
+                    "array_id": array.array_id,
+                    "row_spacing": row_spacing,
+                    "column_spacing": column_spacing,
+                }
+                if reset_base_point:
+                    params["reset_base_point"] = True
+                elif base_point is not None:
+                    params["base_point"] = base_point.to_mapping()
+                return loaded.bus.execute(
+                    "drawing.array.update", params, confirmed_by="local", version=3
+                )
+            if cross_array and mode in {"member_offset", "member_rotation"}:
+                groups: list[dict[str, object]] = []
+                for owner in arrays:
+                    items = [
+                        item for item in selected_offsets if batch_owners[item.target] == owner
+                    ]
+                    members: list[dict[str, object]] = []
+                    for item in items:
+                        if mode == "member_offset":
+                            assert member_offset is not None
+                            members.append(
+                                {
+                                    "target": item.target.to_mapping(),
+                                    "offset_mm": list(member_offset),
+                                }
+                            )
+                        else:
+                            rotation, center = member_rotations[item.target]
+                            members.append(
+                                {
+                                    "target": item.target.to_mapping(),
+                                    "angle_deg": rotation,
+                                    "center_offset_mm": list(center),
+                                }
+                            )
+                    groups.append({"array_id": owner.array_id, "members": members})
+                return loaded.bus.execute(
+                    "drawing.array.batch_override",
+                    {
+                        "operation": "offset" if mode == "member_offset" else "rotate",
+                        "groups": groups,
+                    },
+                    confirmed_by="local",
+                    version=1,
+                )
+            if mode == "member_offset":
+                assert selected_offsets and member_offset is not None
+                return loaded.bus.execute(
+                    "drawing.array.offset",
+                    {
+                        "array_id": array.array_id,
+                        "members": [
+                            {
+                                "target": item.target.to_mapping(),
+                                "offset_mm": list(member_offset),
+                            }
+                            for item in selected_offsets
+                        ],
+                    },
+                    confirmed_by="local",
+                    version=2
+                    if any(isinstance(item, ArrayExtraOutput) for item in selected_offsets)
+                    else 1,
+                )
+            if mode == "member_rotation":
+                assert member_rotations
+                return loaded.bus.execute(
+                    "drawing.array.rotate",
+                    {
+                        "array_id": array.array_id,
+                        "members": [
+                            {
+                                "target": item.target.to_mapping(),
+                                "angle_deg": member_rotations[item.target][0],
+                                "center_offset_mm": list(member_rotations[item.target][1]),
+                            }
+                            for item in selected_offsets
+                        ],
+                    },
+                    confirmed_by="local",
+                    version=2
+                    if any(isinstance(item, ArrayExtraOutput) for item in selected_offsets)
+                    else 1,
+                )
+            if mode == "member_replace":
+                assert selected_member is not None and member_replacement is not None
+                replacement_array = replace(
+                    array,
+                    members=tuple(
+                        replace(member, replacement=member_replacement)
+                        if member.target == selected_member.target
+                        else member
+                        for member in array.members
+                    ),
+                )
+                candidate_arrays = tuple(
+                    replacement_array if item.array_id == array.array_id else item
+                    for item in services.kernel.associative_arrays
+                )
+                return loaded.bus.execute(
+                    "drawing.array.replace",
+                    {
+                        "array_id": array.array_id,
+                        "members": [
+                            {
+                                "target": selected_member.target.to_mapping(),
+                                "replacement": member_replacement.to_mapping(),
+                            }
+                        ],
+                    },
+                    confirmed_by="local",
+                    version=3
+                    if has_interleaved_array_dependencies(candidate_arrays)
+                    else 2
+                    if has_internal_replacements(array)
+                    or member_replacement.source in {member.target for member in array.members}
+                    else 1,
+                )
+            if mode == "reset_offsets":
+                return loaded.bus.execute(
+                    "drawing.array.offset",
+                    {"array_id": array.array_id, "reset_all": True},
+                    confirmed_by="local",
+                    version=2
+                    if any(output.offset_mm != (0, 0) for output in array.extra_outputs)
+                    else 1,
+                )
+            if mode == "reset_overrides":
+                return loaded.bus.execute(
+                    "drawing.array.reset",
+                    {"array_id": array.array_id},
+                    confirmed_by="local",
+                    version=4
+                    if array.extra_outputs
+                    else 3
+                    if any(member.replacement is not None for member in array.members)
+                    else 2
+                    if any(member.erased_index is not None for member in array.members)
+                    else 1,
+                )
+            return loaded.bus.execute(
+                "drawing.array.remove", {"array_id": array.array_id}, confirmed_by="local"
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if self._loaded is not loaded or self._session_id != session_id:
+                return
+            if result.error is not None:
+                self.status_command.setText(f"阵列操作失败：{result.error}")
+                return
+            if self._sketch_dialog is editor:
+                editor.set_context_sketches(services.kernel.sketches)
+                self._sync_drawing_layers()
+            self.status_command.setText(
+                {
+                    "spacing": "已修改矩形阵列间距；可撤销。",
+                    "resize": "已修改矩形阵列数量；可撤销。",
+                    "angle": "已修改矩形阵列方向；可撤销。",
+                    "base": "已修改矩形阵列基点；可撤销。",
+                    "member_offset": "已修改阵列成员位置偏移；可撤销。",
+                    "member_rotation": "已旋转阵列成员；可撤销。",
+                    "member_replace": "已替换阵列成员；可撤销。",
+                    "reset_offsets": "已重置阵列成员位置偏移；可撤销。",
+                    "reset_overrides": "已重置阵列成员覆盖；可撤销。",
+                    "remove": "已解除矩形阵列关联，副本保留；可撤销。",
+                }[mode]
+            )
+
+        if not unit.submit(
+            remove,
+            operation=f"array-{mode}",
+            session_id=session_id,
+            on_complete=finish,
+        ):
+            self.status_command.setText("几何工作线程忙碌，请重试。")
+
+    def _remove_cross_tangency(
+        self, dialog: CrossSketchTangencyDialog, session_id: int, identity: str
+    ) -> None:
+        loaded, services, unit = self._loaded, self._services, self.execution_unit
+        editor = self._sketch_dialog
+        if loaded is not None and services is not None and editor is not None:
+            canvas = editor.canvas
+            mixed = canvas.mixed_move
+            if mixed is not None and (
+                not canvas.mixed_move_is_valid or mixed.source_revision != loaded.document.revision
+            ):
+                dialog.submission_failed("混合草稿已过期，请重新开始。")
+                return
+            draft = Sketch(
+                editor.draft_sketch_id,
+                editor.current_frame(),
+                tuple(canvas.entities),
+                tuple(canvas.constraints),
+                canvas.layer_table,
+            )
+            saved = mixed.current_saved if mixed else services.kernel.sketches
+            try:
+                pairs = tuple(canvas.pending_cross_tangencies)
+                staged = mycad_app.draft_cross_relations(saved, draft, pairs)
+                for relation, pair in zip(staged, pairs, strict=True):
+                    if relation.relation_id == identity:
+                        if dialog.relations_by_id.get(
+                            identity
+                        ) != relation or not canvas.remove_pending_cross_tangency(pair):
+                            raise ValueError("暂存相切关系已变化，请重新打开。")
+                        dialog.accept()
+                        return
+            except (ValueError, ValidationError) as exc:
+                dialog.submission_failed(str(exc))
+                return
+        if self._sketch_dialog is not None and (
+            self._sketch_dialog.canvas.mixed_move
+            or self._sketch_dialog.canvas.pending_cross_tangencies
+        ):
+            dialog.submission_failed("请先完成或取消关联草稿。")
+            return
+        if loaded is None or services is None or unit is None or session_id != self._session_id:
+            dialog.submission_failed("文档已切换。")
+            return
+        revision = loaded.document.revision
+
+        def remove() -> object:
+            if (
+                self._cross_tangency_dialog is not dialog
+                or self._loaded is not loaded
+                or self._session_id != session_id
+                or loaded.document.revision != revision
+            ):
+                raise ValidationError("文档已改变，请重新打开相切关系。")
+            expected = dialog.relations_by_id.get(identity)
+            if expected is None or expected not in services.kernel.cross_sketch_tangencies:
+                raise ValidationError("相切关系已改变，请重新打开。")
+            return loaded.bus.execute(
+                "drawing.tangency.remove", {"relation_id": identity}, confirmed_by="local"
+            )
+
+        def finish(result: ExecutionResult) -> None:
+            if (
+                self._cross_tangency_dialog is not dialog
+                or self._loaded is not loaded
+                or self._session_id != session_id
+            ):
+                return
+            if result.error is not None:
+                dialog.submission_failed(result.error)
+                return
+            if self._sketch_dialog is not None:
+                self._sketch_dialog.set_context_sketches(services.kernel.sketches)
+            self.status_command.setText("对象相切关系已移除，可撤销。")
+            dialog.accept()
+
+        if not unit.submit(
+            remove, operation="cross-tangency-remove", session_id=session_id, on_complete=finish
+        ):
+            dialog.submission_failed("几何工作线程忙碌，请重试。")
 
     def _on_sketch_constraints(
         self, _checked: bool = False, *, dimensions_only: bool = False
@@ -2744,8 +8931,29 @@ class MainWindow(QMainWindow):
                 services,
                 commands,
                 "sketch.constraint.update" if updating else "sketch.constraint.add",
-                solved.command_params(sketch, constraint),
+                solved.command_params(
+                    sketch,
+                    constraint,
+                    local_frame=(
+                        constraint.text_override is not None or constraint.style_name is not None
+                    ),
+                ),
                 source_archive_version=source_archive_version,
+                source_document_type=loaded.document.document_type,
+                source_document_kind=loaded.document.document_kind,
+                source_drawing_fillet_baseline=loaded.document.drawing_fillet_baseline,
+                source_drawing_chamfer_angle_baseline=(
+                    loaded.document.drawing_chamfer_angle_baseline
+                ),
+                command_version=(6 if updating else 8)
+                if constraint.style_name is not None
+                else (5 if updating else 7)
+                if constraint.text_override is not None
+                else None,
+                target_archive_version=6
+                if (constraint.text_override is not None or constraint.style_name is not None)
+                and source_archive_version < 6
+                else None,
             )
             return _SketchConstraintPreview(solved, snapshot, sketches)
 
@@ -2840,6 +9048,36 @@ class MainWindow(QMainWindow):
             updating = any(
                 item.constraint_id == constraint.constraint_id for item in sketch.constraints
             )
+            if constraint.text_override is not None or constraint.style_name is not None:
+                assert self._services is not None
+                candidate = mycad_app.create_replay_candidate(
+                    self._services, loaded, session_identity=session_id
+                )
+                candidate.stage(
+                    ReplayChangeSet(
+                        (),
+                        (
+                            ReplayAppend(
+                                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                                (6 if updating else 8)
+                                if constraint.style_name is not None
+                                else (5 if updating else 7),
+                                result.command_params(sketch, constraint, local_frame=True),
+                                "local",
+                            ),
+                        ),
+                        False,
+                        6 if loaded.document.archive_version < 6 else None,
+                    ),
+                    current_session_identity=session_id,
+                )
+                preview = candidate.preview(current_session_identity=session_id)
+                if preview.state != "succeeded":
+                    raise ValueError(str(preview.failure or "尺寸预览失败"))
+                return candidate.commit(
+                    candidate.authorize_commit(current_session_identity=session_id),
+                    current_session_identity=session_id,
+                )
             return loaded.bus.execute(
                 "sketch.constraint.update" if updating else "sketch.constraint.add",
                 result.command_params(sketch, constraint),
@@ -2872,10 +9110,22 @@ class MainWindow(QMainWindow):
             return
         mixed = dialog.canvas.mixed_move
         mixed_valid = dialog.canvas.mixed_move_is_valid
-        timeline = (
-            dialog.canvas.mixed_move_timeline()
+        cross_timeline = (
+            dialog.canvas.mixed_move_timeline_with_transforms()
             if mixed is not None and result == QDialog.DialogCode.Accepted
             else ()
+        )
+        timeline = tuple(
+            (saved, draft) for saved, draft, _pending, _arrays, _transforms in cross_timeline
+        )
+        cross_pairs_by_step = tuple(
+            pending for _saved, _draft, pending, _arrays, _transforms in cross_timeline
+        )
+        arrays_by_step = tuple(
+            arrays for _saved, _draft, _pending, arrays, _transforms in cross_timeline
+        )
+        rectangle_transforms_by_step = tuple(
+            transforms for _saved, _draft, _pending, _arrays, transforms in cross_timeline
         )
         after_commit = self._after_sketch_commit
         self._after_sketch_commit = None
@@ -2884,7 +9134,8 @@ class MainWindow(QMainWindow):
         if self._sketch_dialog is dialog:
             self._sketch_dialog = None
         if self.document_session is not None and self.document_session.active is not None:
-            self.document_session.active.draft = None
+            active = self.document_session.active
+            active.draft = self._owned_session_draft(active)
         self._hide_sketch_workbench(dialog)
         sketch = dialog.result_sketch
         if result != QDialog.DialogCode.Accepted or sketch is None:
@@ -2896,8 +9147,22 @@ class MainWindow(QMainWindow):
         if loaded is None or unit is None or services is None or session_id != self._session_id:
             self.status_command.setText("草图所属文档已切换，草图未提交。")
             return
+        preparation = self._prepared_sketch_save
 
         def submit_sketch() -> object:
+            if (
+                preparation is not None
+                and preparation.draft is dialog
+                and loaded.document.revision != preparation.source_revision
+            ):
+                raise ValidationError("保存准备前文档已变化，拒绝提交草稿。")
+            try:
+                return commit_sketch()
+            finally:
+                if preparation is not None and preparation.draft is dialog:
+                    preparation.prepared_revision = loaded.document.revision
+
+        def commit_sketch() -> object:
             if mixed is not None:
                 if not mixed_valid:
                     raise ValueError("暂存变换已失效，请先撤销或取消。")
@@ -2912,6 +9177,11 @@ class MainWindow(QMainWindow):
                     mixed.original_saved,
                     timeline,
                     session_identity=session_id,
+                    cross_pairs_by_step=cross_pairs_by_step,
+                    arrays_by_step=arrays_by_step,
+                    initial_cross_pairs=mixed.original_cross_tangencies,
+                    initial_associative_arrays=mixed.original_associative_arrays,
+                    rectangle_transforms_by_step=rectangle_transforms_by_step,
                 )
                 preview = candidate.preview(current_session_identity=session_id)
                 if preview.state != "succeeded":
@@ -2921,7 +9191,12 @@ class MainWindow(QMainWindow):
                     current_session_identity=session_id,
                 )
             return mycad_app.commit_new_sketch(
-                services, loaded, sketch, session_identity=session_id
+                services,
+                loaded,
+                sketch,
+                session_identity=session_id,
+                cross_tangent_pairs=tuple(dialog.canvas.pending_cross_tangencies),
+                associative_arrays=dialog.result_associative_arrays,
             )
 
         def finish_submission(result_value: ExecutionResult) -> None:
@@ -2942,7 +9217,10 @@ class MainWindow(QMainWindow):
             if self.viewport is not None:
                 self.viewport.refresh()
             self.status_command.setText("草图已提交为一条命令；可撤销、重做和保存重放。")
-            if loaded.document.document_type == "drawing2d":
+            saving = self._prepared_sketch_save
+            if loaded.document.document_type == "drawing2d" and not (
+                saving is not None and saving.draft is dialog
+            ):
                 self._on_sketch_start()
                 if self._sketch_dialog is not None:
                     self._sketch_dialog.continue_workspace_from(dialog)
@@ -4688,9 +10966,16 @@ class MainWindow(QMainWindow):
     def _record_execution_error(self, result: object) -> None:
         if not isinstance(result, ExecutionResult) or result.error is None:
             return
-        self.status_command.setText(result.error)
+        drawing = (
+            self.active_workspace == "sketch"
+            and self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.select_committed_entities
+        )
+        self.status_command.setText(drawing_message(result.error) if drawing else result.error)
         if result.error_detail is not None:
-            self.information_tab.append_message(result.error_detail)
+            self.information_tab.append_message(
+                drawing_message(result.error_detail) if drawing else result.error_detail
+            )
 
     def _show_information_panel(self) -> None:
         self._show_console_page(self.information_tab)
@@ -4767,6 +11052,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if isinstance(app, QApplication):
             apply_theme(app, theme)
+        self.start_page.set_theme(theme)
         self._refresh_action_icons()
         if self.command_palette is not None:
             self.command_palette.set_icon_theme(theme)
@@ -4774,6 +11060,8 @@ class MainWindow(QMainWindow):
             self.right_panel.set_icon_theme(theme)
         if self.viewport is not None:
             self.viewport.set_theme(theme)
+        for canvas in self.findChildren(SketchCanvas):
+            canvas.set_drawing_theme(theme)
         refresh_button_icons(self, theme)
         if persist:
             settings = QSettings(ORG_NAME, APP_NAME)
@@ -4922,11 +11210,26 @@ class MainWindow(QMainWindow):
                 self._set_compact_ribbon_expanded(True)
 
     def _show_options(self) -> None:
-        QMessageBox.information(
+        settings = QSettings(ORG_NAME, APP_NAME)
+        dialog = CursorSettingsDialog(
+            drawing_cursor_style(settings),
             self,
-            "选项",
-            "窗口布局记忆保存在 QSettings（org=MyCAD, app=MyCAD）。",
+            markers_visible=drawing_constraint_markers_visible(settings),
         )
+        if dialog.exec() != int(QDialog.DialogCode.Accepted):
+            return
+        style = dialog.selected_style()
+        markers_visible = dialog.constraint_markers.isChecked()
+        settings.setValue(CURSOR_STYLE_KEY, style)
+        settings.setValue(CONSTRAINT_MARKERS_KEY, markers_visible)
+        if self._sketch_dialog is not None and self._sketch_dialog.canvas.select_committed_entities:
+            self._sketch_dialog.canvas.set_crosshair_style(style)
+            self._sketch_dialog.canvas.set_constraint_markers_visible(markers_visible)
+        if self.document_session is not None:
+            for document in self.document_session.documents:
+                if document.draft is not None and document.draft.canvas.select_committed_entities:
+                    document.draft.canvas.set_crosshair_style(style)
+                    document.draft.canvas.set_constraint_markers_visible(markers_visible)
 
     def _show_units(self) -> None:
         QMessageBox.information(self, "单位", "单位：mm（只读）。")
@@ -4974,6 +11277,10 @@ class MainWindow(QMainWindow):
         """当前仍打开的草图约束编辑器；未打开时返回 ``None``。"""
         return self._sketch_constraint_dialog
 
+    def active_cross_sketch_tangency_dialog(self) -> CrossSketchTangencyDialog | None:
+        """Return the active cross-sketch tangency editor."""
+        return self._cross_tangency_dialog
+
     def bind_document(self, loaded: LoadedDocument) -> None:
         """Bind the app-provided LoadedDocument and subscribe the status fields.
 
@@ -5000,6 +11307,8 @@ class MainWindow(QMainWindow):
             self.bound_hole_task.reject()
         if self.datum_task is not None:
             self.datum_task.reject()
+        if self._cross_tangency_dialog is not None:
+            self._cross_tangency_dialog.reject()
         if self._sketch_dialog is not None:
             self._sketch_dialog.reject()
         if self._active_modeling_command is not None:
@@ -5016,6 +11325,7 @@ class MainWindow(QMainWindow):
         # the previous document—its bus only holds subscribers weakly.
         self._signal_adapters.clear()
         self._loaded = loaded
+        self._sync_session_document_actions()
         self.act_measure.setEnabled(
             self._services is not None and loaded.document.document_kind == "part"
         )
@@ -5230,8 +11540,19 @@ class MainWindow(QMainWindow):
         session = self.document_session
         if session is None or session.active is not entry:
             return
+        preparation = self._prepared_sketch_save
+        if preparation is not None and preparation.entry is entry:
+            # The user explicitly discarded this document. A failed rebuild
+            # may already have consumed the handle; neither case retains it.
+            with suppress(ValidationError):
+                preparation.loaded.bus.release_save_checkpoint(preparation.checkpoint)
+            self._prepared_sketch_save = None
+            preparation.draft.reject()
+            entry.draft = None
         if self.part_sketch_task is not None:
             self.part_sketch_task.reject()
+        if self._cross_tangency_dialog is not None:
+            self._cross_tangency_dialog.reject()
         if self._sketch_dialog is not None:
             self._sketch_dialog.reject()
             self._sketch_dialog = None
@@ -5245,6 +11566,8 @@ class MainWindow(QMainWindow):
         if self.execution_unit is not None:
             self.execution_unit.set_session(self._session_id)
         self._loaded = None
+        self._sync_session_document_actions()
+        self._sync_workspace_actions()
         self.act_measure.setEnabled(False)
         self._bus = None
         self._document_path = None
@@ -5324,7 +11647,7 @@ class MainWindow(QMainWindow):
             selector.blockSignals(False)
         entry = session.active
         if entry is not None:
-            entry.draft = self._sketch_dialog
+            entry.draft = self._owned_session_draft(entry)
             self._show_document_path(entry.path)
             self.status_dirty.setText("已修改" if entry.needs_save else "未修改")
             internal = (
@@ -5401,12 +11724,14 @@ class MainWindow(QMainWindow):
             self.workspace_layout.save(environment, self._layout_state_for_persistence())
             self.workspace_layout.save_locked(environment, self.act_lock_toolbar.isChecked())
             if previous.loaded is self._loaded:
-                previous.draft = self._sketch_dialog
+                previous.draft = self._owned_session_draft(previous)
                 if self._sketch_dialog is not None:
                     self._drafting_toolbar_state = self._sketch_dialog.toolbar_layout_state()
                 previous.plan_draft = self.plan_draft
             if self.viewport is not None:
                 previous.view_state = self.viewport.capture_view()
+        if self.cli_tab is not None:
+            self.cli_tab.set_drawing_bar(None)
         self._sketch_dialog = None
         self.workspace_tabs.set_content("sketch", None)
         session.activate(identity)
@@ -5482,6 +11807,8 @@ class MainWindow(QMainWindow):
             self.workspace_layout.load_locked(self._layout_environment(entry.kind)) or False
         )
         self._set_workspace_environment(self._active_layout_environment(entry.kind))
+        if self.cli_tab is not None and self.cli_tab.drawing_bar is not None:
+            self._show_console_page(self.cli_tab)
         self._enforce_small_screen_policy()
         self._refresh_document_choice()
 
@@ -5511,6 +11838,8 @@ class MainWindow(QMainWindow):
         if name in STRUCTURE_REFRESH_SIGNALS:
             self._on_structure_signal(name, payload)
             self.drawing_workbench.refresh()
+        if name == "metadata_changed" and self._sketch_dialog is not None:
+            self._sketch_dialog.refresh_document_properties()
         self._refresh_document_choice()
 
     def attach_session_source(self, source_id: str, *, object_id: str = "") -> None:
@@ -5536,6 +11865,43 @@ class MainWindow(QMainWindow):
         unit = self.execution_unit
         if unit is None:
             return
+        session_id = self._session_id
+
+        def submit_reference() -> object:
+            archive = params.get("archive")
+            source_version = (
+                cast("Mapping[str, object]", archive).get("version")
+                if isinstance(archive, Mapping)
+                else None
+            )
+            if (
+                command in ("reference.attach", "reference.update")
+                and type(source_version) is int
+                and source_version in (7, 8)
+                and entry.loaded.document.archive_version < source_version
+            ):
+                candidate = mycad_app.create_replay_candidate(
+                    entry.services, entry.loaded, session_identity=session_id
+                )
+                candidate.stage(
+                    ReplayChangeSet(
+                        (),
+                        (ReplayAppend(command, 1, params, "local"),),
+                        False,
+                        target_archive_version=source_version,
+                    ),
+                    current_session_identity=session_id,
+                )
+                preview = candidate.preview(current_session_identity=session_id)
+                if preview.state != "succeeded":
+                    candidate.cancel()
+                    raise ValidationError(str(preview.failure or "来源关联预览失败。"))
+                if self._session_id != session_id:
+                    candidate.cancel()
+                    raise ValidationError("来源关联期间文档已切换。")
+                grant = candidate.authorize_commit(current_session_identity=session_id)
+                return candidate.commit(grant, current_session_identity=session_id)
+            return entry.loaded.bus.execute(command, params, "local")
 
         def finish(result: ExecutionResult) -> None:
             if result.error is not None:
@@ -5555,7 +11921,7 @@ class MainWindow(QMainWindow):
             self.status_command.setText("来源关联已写入当前文档；可撤销、保存和重放。")
 
         unit.submit(
-            lambda: entry.loaded.bus.execute(command, params, "local"),
+            submit_reference,
             operation=command,
             session_id=self._session_id,
             on_complete=finish,
@@ -6430,7 +12796,17 @@ class MainWindow(QMainWindow):
         if self.datum_task is not None:
             self.datum_task.setEnabled(not busy)
         if self._sketch_dialog is not None:
-            self._sketch_dialog.setEnabled(not busy)
+            preparation = self._prepared_sketch_save
+            retained = preparation is not None and preparation.draft is self._sketch_dialog
+            interactive_drag = (
+                busy
+                and self.execution_unit is not None
+                and self.execution_unit.operation in ("saved-handle-preview", "saved-handle-commit")
+                and self._sketch_dialog.canvas.saved_handle_drag_active
+            )
+            self._sketch_dialog.setEnabled(
+                (not busy or interactive_drag) and not retained and not self._mixed_history_pending
+            )
         if self.right_panel is not None:
             self.right_panel.set_measurement_busy(busy)
         if self.viewport is not None:
@@ -6491,7 +12867,11 @@ class MainWindow(QMainWindow):
         self._busy_action_states.clear()
         self._sync_workspace_actions()
         self.status_rebuild.setText("重建状态：就绪")
-        if self._sketch_dialog is not None and self._services is not None:
+        if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.isEnabled()
+            and self._services is not None
+        ):
             self._sync_drawing_layers()
         if self.execution_unit is None or not self.execution_unit.is_delivering_result:
             self._on_execution_delivery_finished()
@@ -6508,7 +12888,13 @@ class MainWindow(QMainWindow):
 
     def _finish_worker_action(self, result: ExecutionResult, label: str) -> None:
         if result.error is not None:
-            self.status_command.setText(f"{label}失败：{result.error}")
+            message = f"{label}失败：{result.error}"
+            if (
+                self._sketch_dialog is not None
+                and self._sketch_dialog.canvas.select_committed_entities
+            ):
+                message = drawing_message(message)
+            self.status_command.setText(message)
         elif self._sketch_dialog is not None and self._services is not None:
             self._sync_drawing_layers()
 
@@ -6552,12 +12938,89 @@ class MainWindow(QMainWindow):
             and not draft.canvas.has_active_edit_gesture
             and bool(self._loaded.document.commands)
             and self._loaded.document.commands[-1].id
-            in {"drawing.layers.set", "sketch.revise", "drawing.sketch.revise"}
+            in {
+                "drawing.layers.set",
+                "drawing.clipboard.prepare",
+                "drawing.dimension_styles.set",
+                "drawing.raster.add",
+                "drawing.raster.update",
+                "drawing.raster.remove",
+                "drawing.raster.batch",
+                "drawing.fillet_radius.set",
+                "drawing.chamfer_values.set",
+                "sketch.revise",
+                "drawing.sketch.revise",
+            }
         )
         boundary = (
             (len(self._loaded.document.commands), draft.canvas.history_position)
             if layer_undo and draft is not None and self._loaded is not None
             else None
+        )
+        if (
+            layer_undo
+            and draft is not None
+            and self._loaded is not None
+            and self._services is not None
+            and self._loaded.document.commands[-1].id == "drawing.dimension_styles.set"
+        ):
+            previous = next(
+                (
+                    DimensionStyleTable.from_mapping(
+                        command.params
+                        if command.id == "drawing.dimension_styles.set"
+                        else command.params["clipboard_styles"]
+                    )
+                    for command in reversed(self._loaded.document.commands[:-1])
+                    if command.id == "drawing.dimension_styles.set"
+                    or (
+                        command.id in {"drawing.clipboard.prepare", "sketch.create"}
+                        and "clipboard_styles" in command.params
+                    )
+                ),
+                DimensionStyleTable((DimensionStyle("标准"),), "标准"),
+            )
+            current = self._services.kernel.drawing_dimension_styles
+            for constraint in draft.canvas.constraints:
+                if constraint.style_name is None:
+                    continue
+                try:
+                    unchanged = current.get(constraint.style_name) == previous.get(
+                        constraint.style_name
+                    )
+                except KeyError:
+                    unchanged = False
+                if not unchanged:
+                    self.status_command.setText(
+                        "草稿尺寸使用图纸标注样式，请先完成草图再撤销样式。"
+                    )
+                    return
+        mixed_draft = (
+            draft.mixed_draft_history.get(boundary[0])
+            if boundary is not None and draft is not None
+            else None
+        )
+        if (
+            mixed_draft is not None
+            and self._loaded is not None
+            and (self._loaded.document.commands[-1].instance_id != mixed_draft[2])
+        ):
+            mixed_draft = None
+        if mixed_draft is not None and draft is not None:
+            if not draft.canvas.mixed_draft_history_matches(
+                mixed_draft[0], mixed_draft[1], redo=False
+            ):
+                self.status_command.setText("草稿历史已变化，无法安全撤销混合操作。")
+                return
+            self._mixed_history_pending = True
+            draft.setEnabled(False)
+        mixed_raster_undo = bool(
+            boundary is not None
+            and draft is not None
+            and draft.canvas.mixed_move is not None
+            and self._loaded is not None
+            and self._loaded.document.commands[-1].id
+            in {"drawing.raster.add", "drawing.raster.batch"}
         )
         if (
             not layer_undo
@@ -6579,27 +13042,91 @@ class MainWindow(QMainWindow):
         services = self._services
         if unit is not None and services is not None:
             bus = self._bus
+            undo_document = self._loaded
+            previous_revision = undo_document.document.revision if undo_document else None
+            radius_undo = bool(
+                undo_document
+                and undo_document.document.commands
+                and undo_document.document.commands[-1].id
+                in {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+            )
+            layers_undo = bool(
+                boundary is not None
+                and undo_document
+                and undo_document.document.commands
+                and undo_document.document.commands[-1].id == "drawing.layers.set"
+            )
 
             def undo() -> None:
                 bus.undo_operation()
                 services.kernel.viewport_data()
 
             def finished(result: ExecutionResult) -> None:
+                if mixed_draft is not None and draft is not None:
+                    self._mixed_history_pending = False
+                    draft.setEnabled(True)
+                    if result.error is None:
+                        draft.canvas.document_layer_table = services.kernel.drawing_layers
+                        draft.canvas.undo_last_operation()
+                if (
+                    result.error is None
+                    and mixed_raster_undo
+                    and previous_revision is not None
+                    and undo_document is not None
+                    and draft is not None
+                ):
+                    draft.canvas.rebind_restored_source(
+                        previous_revision, undo_document.document.revision
+                    )
+                if (
+                    result.error is None
+                    and layers_undo
+                    and previous_revision is not None
+                    and undo_document is self._loaded
+                    and undo_document is not None
+                    and draft is self._sketch_dialog
+                    and draft is not None
+                    and draft.canvas.mixed_move is not None
+                    and draft.canvas.mixed_move.source_revision == previous_revision
+                    and draft.canvas.rebase_mixed_layers(
+                        services.kernel.sketches, services.kernel.drawing_layers
+                    )
+                ):
+                    draft.canvas.acknowledge_fillet_setting_revision(
+                        previous_revision, undo_document.document.revision
+                    )
+                if (
+                    result.error is None
+                    and radius_undo
+                    and previous_revision is not None
+                    and undo_document is not None
+                    and undo_document is self._loaded
+                    and draft is not None
+                    and draft is self._sketch_dialog
+                ):
+                    draft.canvas.acknowledge_fillet_setting_revision(
+                        previous_revision, undo_document.document.revision
+                    )
                 if (
                     result.error is None
                     and boundary is not None
                     and draft is not None
                     and draft is self._sketch_dialog
                 ):
-                    draft.layer_history_redo.append(boundary)
+                    draft.layer_history_redo.append(
+                        (boundary[0], mixed_draft[0]) if mixed_draft is not None else boundary
+                    )
                 self._finish_worker_action(result, "撤销")
 
-            unit.submit(
+            submitted = unit.submit(
                 undo,
                 operation="undo",
                 session_id=self._session_id,
                 on_complete=finished,
             )
+            if not submitted and mixed_draft is not None and draft is not None:
+                self._mixed_history_pending = False
+                draft.setEnabled(True)
             return
         try:
             self._bus.undo_operation()
@@ -6646,6 +13173,19 @@ class MainWindow(QMainWindow):
             and not draft.canvas.has_pending_geometry
             and not draft.canvas.has_active_edit_gesture
         )
+        mixed_draft = (
+            draft.mixed_draft_history.get(len(self._loaded.document.commands) + 1)
+            if layer_redo and draft is not None and self._loaded is not None
+            else None
+        )
+        if mixed_draft is not None and draft is not None:
+            if not draft.canvas.mixed_draft_history_matches(
+                mixed_draft[0], mixed_draft[1], redo=True
+            ):
+                self.status_command.setText("草稿历史已变化，无法安全重做混合操作。")
+                return
+            self._mixed_history_pending = True
+            draft.setEnabled(False)
         if (
             not layer_redo
             and draft is not None
@@ -6666,12 +13206,68 @@ class MainWindow(QMainWindow):
         services = self._services
         if unit is not None and services is not None:
             bus = self._bus
+            redo_document = self._loaded
+            previous_revision = redo_document.document.revision if redo_document else None
+            previous_count = len(redo_document.document.commands) if redo_document else 0
 
             def redo() -> None:
                 bus.redo_operation()
                 services.kernel.viewport_data()
 
             def finished(result: ExecutionResult) -> None:
+                if mixed_draft is not None and draft is not None:
+                    self._mixed_history_pending = False
+                    draft.setEnabled(True)
+                    if result.error is None:
+                        draft.canvas.document_layer_table = services.kernel.drawing_layers
+                        draft.canvas.redo_last_operation()
+                if (
+                    result.error is None
+                    and layer_redo
+                    and previous_revision is not None
+                    and redo_document is not None
+                    and draft is not None
+                    and draft.canvas.mixed_move is not None
+                    and redo_document.document.commands
+                    and redo_document.document.commands[-1].id
+                    in {"drawing.raster.add", "drawing.raster.batch"}
+                ):
+                    draft.canvas.rebind_restored_source(
+                        previous_revision, redo_document.document.revision
+                    )
+                if (
+                    result.error is None
+                    and layer_redo
+                    and previous_revision is not None
+                    and redo_document is self._loaded
+                    and redo_document is not None
+                    and len(redo_document.document.commands) == previous_count + 1
+                    and redo_document.document.commands[-1].id == "drawing.layers.set"
+                    and draft is self._sketch_dialog
+                    and draft is not None
+                    and draft.canvas.mixed_move is not None
+                    and draft.canvas.mixed_move.source_revision == previous_revision
+                    and draft.canvas.rebase_mixed_layers(
+                        services.kernel.sketches, services.kernel.drawing_layers
+                    )
+                ):
+                    draft.canvas.acknowledge_fillet_setting_revision(
+                        previous_revision, redo_document.document.revision
+                    )
+                if (
+                    result.error is None
+                    and previous_revision is not None
+                    and redo_document is self._loaded
+                    and redo_document is not None
+                    and len(redo_document.document.commands) == previous_count + 1
+                    and redo_document.document.commands[-1].id
+                    in {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+                    and draft is not None
+                    and draft is self._sketch_dialog
+                ):
+                    draft.canvas.acknowledge_fillet_setting_revision(
+                        previous_revision, redo_document.document.revision
+                    )
                 if (
                     result.error is None
                     and layer_redo
@@ -6681,12 +13277,15 @@ class MainWindow(QMainWindow):
                     draft.layer_history_redo.pop()
                 self._finish_worker_action(result, "重做")
 
-            unit.submit(
+            submitted = unit.submit(
                 redo,
                 operation="redo",
                 session_id=self._session_id,
                 on_complete=finished,
             )
+            if not submitted and mixed_draft is not None and draft is not None:
+                self._mixed_history_pending = False
+                draft.setEnabled(True)
             return
         try:
             self._bus.redo_operation()
@@ -6951,6 +13550,30 @@ class MainWindow(QMainWindow):
             }
             report = imported.report
             sketch = imported.sketch
+            imported_styles: DimensionStyleTable | None = None
+            if imported.dimension_styles and loaded.document.document_type == "drawing2d":
+                try:
+                    table = services.kernel.drawing_dimension_styles
+                    styles_by_id = dict(imported.dimension_styles)
+                    constraints: list[SketchConstraint] = []
+                    for constraint in sketch.constraints:
+                        style = styles_by_id.get(constraint.constraint_id)
+                        if style is None:
+                            constraints.append(constraint)
+                            continue
+                        single = replace(
+                            sketch, constraints=(replace(constraint, style_name=style.name),)
+                        )
+                        table, renamed = reconcile_clipboard_styles(
+                            single, DimensionStyleTable((style,), style.name), table
+                        )
+                        constraints.append(renamed.constraints[0])
+                    sketch = replace(sketch, constraints=tuple(constraints))
+                    if table != services.kernel.drawing_dimension_styles:
+                        imported_styles = table
+                except ValueError as exc:
+                    self._show_error(f"无法导入 DXF 标注样式：{exc}")
+                    return
             if sketch.sketch_id in existing_sketch_ids:
                 sketch = Sketch(
                     uuid4().hex,
@@ -6970,6 +13593,7 @@ class MainWindow(QMainWindow):
             preview = (
                 f"{report}\n\n将把 {len(sketch.entities)} 个支持图元作为一张 XY 草图追加到当前文档。"
                 f"\n恢复关联尺寸 {len(sketch.constraints)} 个。"
+                f"\n恢复图纸样式关联 {sum(c.style_name is not None for c in sketch.constraints)} 个。"
                 "\n确认前不会修改命令历史或模型。"
             )
             choice = QMessageBox.question(
@@ -6985,7 +13609,11 @@ class MainWindow(QMainWindow):
 
             def submit_sketch() -> object:
                 return mycad_app.commit_new_sketch(
-                    services, loaded, sketch, session_identity=session_id
+                    services,
+                    loaded,
+                    sketch,
+                    session_identity=session_id,
+                    imported_styles=imported_styles,
                 )
 
             def finish_submit(submit_result: ExecutionResult) -> None:
@@ -7270,17 +13898,34 @@ class MainWindow(QMainWindow):
         )
 
     def _choose_session_save_path(self, entry: SessionDocument) -> Path | None:
+        if self.execution_unit is not None and (
+            self.execution_unit.is_busy or self.execution_unit.is_notifying_result
+        ):
+            raise ValidationError("请等待当前操作完成后再保存。")
         if self.document_session is not None and self.document_session.active is not entry:
             self.activate_session_document(entry.loaded.document.document_id)
         if self.document_session is not None and (
             self.document_session.active is not entry or self._loaded is not entry.loaded
         ):
-            return None
+            raise ValidationError("无法切换到待保存文档；请先完成或取消当前命令。")
         return self._choose_document_save_path()
+
+    def _owned_session_draft(self, entry: SessionDocument) -> SketchEditorDialog | None:
+        preparation = self._prepared_sketch_save
+        if (
+            preparation is not None
+            and preparation.entry is entry
+            and preparation.loaded is entry.loaded
+        ):
+            return preparation.draft
+        return self._sketch_dialog
 
     def _prepare_session_document(
         self, entry: SessionDocument, complete: Callable[[bool], None]
     ) -> None:
+        if self._prepared_sketch_save is not None:
+            complete(False)
+            return
         if self.execution_unit is not None and (
             self.execution_unit.is_busy or self.execution_unit.is_notifying_result
         ):
@@ -7305,6 +13950,15 @@ class MainWindow(QMainWindow):
         ):
             complete(True)
             return
+        revision = entry.loaded.document.revision
+        self._prepared_sketch_save = _PreparedSketchSave(
+            entry,
+            entry.loaded,
+            draft,
+            entry.loaded.bus.create_save_checkpoint(),
+            revision,
+            revision,
+        )
         self._after_sketch_commit = lambda: complete(True)
         self._after_sketch_failure = lambda: complete(False)
         draft.finish_sketch()
@@ -7315,6 +13969,88 @@ class MainWindow(QMainWindow):
         ):
             self._show_error(draft.status_label.text())
             complete(False)
+
+    def _settle_session_save(
+        self, entry: SessionDocument, saved: bool, complete: Callable[[str | None], None]
+    ) -> None:
+        preparation = self._prepared_sketch_save
+        if preparation is None or preparation.entry is not entry:
+            complete(None)
+            return
+        bus, draft = preparation.loaded.bus, preparation.draft
+
+        def retain_failed(error: str) -> None:
+            entry.draft = draft
+            draft.setEnabled(False)
+            draft.status_label.setText(f"保存恢复失败：{error}。原草稿已保留，暂时不能编辑。")
+            complete(error)
+
+        if saved:
+            bus.release_save_checkpoint(preparation.checkpoint)
+            self._prepared_sketch_save = None
+            if (
+                self._loaded is entry.loaded
+                and self.document_session is not None
+                and self.document_session.active is entry
+            ):
+                self._on_sketch_start()
+                if self._sketch_dialog is not None:
+                    self._sketch_dialog.continue_workspace_from(draft)
+            complete(None)
+            return
+        unit = self.execution_unit
+        if unit is None or unit.is_busy or unit.is_notifying_result:
+            retain_failed("恢复工作线程不可用；原草稿仍保留。")
+            return
+        # Keep the original editor detached from intermediate geometry signals.
+        if self._sketch_dialog is draft:
+            self._sketch_dialog = None
+            self._hide_sketch_workbench(draft)
+        session = self.document_session
+
+        def restore() -> None:
+            if (
+                session is None
+                or session.find(preparation.loaded.document.document_id) is not entry
+                or entry.loaded is not preparation.loaded
+            ):
+                raise ValidationError("文档会话已变化，拒绝恢复到旧状态。")
+            bus.restore_save_checkpoint(
+                preparation.checkpoint, expected_revision=preparation.prepared_revision
+            )
+
+        def restored(result: ExecutionResult) -> None:
+            if result.error is not None:
+                # Do not discard the retained draft or hide a failed recovery.
+                retain_failed(result.error)
+                return
+            self._prepared_sketch_save = None
+            draft.canvas.rebind_restored_source(
+                preparation.source_revision, preparation.loaded.document.revision
+            )
+            draft.result_sketch = None
+            draft.setResult(QDialog.DialogCode.Rejected)
+            draft.setEnabled(True)
+            entry.draft = draft
+            if (
+                self._loaded is preparation.loaded
+                and self.document_session is not None
+                and self.document_session.active is entry
+            ):
+                self._sketch_dialog = draft
+                self._show_sketch_workbench(draft)
+                self._sync_drawing_layers()
+                if self.viewport is not None:
+                    self.viewport.refresh()
+            complete(None)
+
+        if not unit.submit(
+            restore,
+            operation="save-recovery",
+            session_id=self._session_id,
+            on_complete=restored,
+        ):
+            retain_failed("无法启动保存恢复；原草稿仍保留。")
 
     def _ask_session_close_dialog(
         self, entries: tuple[SessionDocument, ...]

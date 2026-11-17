@@ -139,6 +139,37 @@ def test_start_page_open_action_requests_file_selection(qtbot: QtBot) -> None:
     assert spy.count() == 1
 
 
+def test_cancel_open_from_start_page_keeps_empty_session(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    from mycad.app import build_app
+    from mycad.ui.document_session import DocumentSession
+    from mycad.ui.main_window import MainWindow
+
+    session = DocumentSession()
+    window = MainWindow(services=build_app(discoverers=[]), document_session=session)
+    qtbot.addWidget(window)
+    window.show_start_page()
+    window.show()
+    picker_calls: list[bool] = []
+
+    def cancel_picker(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        picker_calls.append(True)
+        return "", ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(cancel_picker))
+    QTest.mouseClick(window.start_page.open_button, Qt.MouseButton.LeftButton)
+
+    assert picker_calls == [True]
+    assert window.execution_unit is not None and not window.execution_unit.is_busy
+    assert not session.documents
+    assert session.active is None
+    assert window.loaded_document() is None
+    assert window.start_page.isVisible()
+
+
 def test_start_page_creates_a_part_in_an_empty_session(qtbot: QtBot) -> None:
     from mycad.app import build_app
     from mycad.ui.document_session import DocumentSession

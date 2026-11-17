@@ -59,6 +59,7 @@ _CONSTRAINT_LABELS: tuple[tuple[str, str], ...] = (
     ("angle", "角度"),
     ("radius", "半径"),
     ("diameter", "直径"),
+    ("arc_length", "弧长"),
 )
 _REFERENCE_LABELS: tuple[tuple[str, str], ...] = (
     ("geometry", "整个图元"),
@@ -86,6 +87,7 @@ _DIMENSION_UNITS: dict[str, ConstraintUnit] = {
     "angle": "deg",
     "radius": "mm",
     "diameter": "mm",
+    "arc_length": "mm",
 }
 
 
@@ -421,8 +423,9 @@ class SketchConstraintDialog(QDialog):
             elif kind in {"length", "angle"}:
                 line_kind = "geometry" if isinstance(entity, LineEntity) else "segment"
                 allowed = tuple(item for item in allowed if item == line_kind)
-            elif kind in {"radius", "diameter"}:
-                allowed = tuple(item for item in allowed if item == "geometry")
+            elif kind in {"radius", "diameter", "arc_length"}:
+                curve_kind = "segment" if isinstance(entity, PolylineEntity) else "geometry"
+                allowed = tuple(item for item in allowed if item == curve_kind)
             previous = reference_combo.currentData()
             reference_combo.blockSignals(True)
             reference_combo.clear()

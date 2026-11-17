@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
+from mycad.core.drawing_detail import DetailRegion
 from mycad.core.drawing_projection import DrawingProjectionRequest, ProjectionResult, ViewBasis
+from mycad.core.drawing_section import SectionPlane
 
 ViewStatus = Literal["clean", "stale", "updating", "failed"]
 
@@ -35,6 +37,8 @@ class ProjectionUpdates:
         bases: Mapping[UUID, ViewBasis],
         *,
         sketch_ids: Mapping[UUID, str | None] | None = None,
+        sections: Mapping[UUID, tuple[SectionPlane, float]] | None = None,
+        details: Mapping[UUID, DetailRegion] | None = None,
     ) -> None:
         if session_id != self.session_id:
             self.session_id = session_id
@@ -50,12 +54,17 @@ class ProjectionUpdates:
             self._cancelled = {pair for pair in self._cancelled if pair[0] != identity}
         for identity, basis in bases.items():
             sketch_id = (sketch_ids or {}).get(identity)
+            section = (sections or {}).get(identity)
+            detail = (details or {}).get(identity)
             previous = self._desired.get(identity)
             if (
                 previous is not None
                 and previous.source_fingerprint == fingerprint
                 and previous.basis == basis
                 and previous.sketch_id == sketch_id
+                and previous.section == (section[0] if section else None)
+                and previous.hatch_spacing_mm == (section[1] if section else 2.5)
+                and previous.detail == detail
             ):
                 continue
             self._generation += 1
@@ -66,6 +75,9 @@ class ProjectionUpdates:
                 basis,
                 "sketch" if sketch_id is not None else "current_part",
                 sketch_id,
+                section[0] if section else None,
+                section[1] if section else 2.5,
+                detail,
             )
             self._failed.pop(identity, None)
             self._cancelled = {pair for pair in self._cancelled if pair[0] != identity}
@@ -173,6 +185,9 @@ class ProjectionUpdates:
                     request.basis,
                     request.source,
                     request.sketch_id,
+                    request.section,
+                    request.hatch_spacing_mm,
+                    request.detail,
                 )
         self._failed.clear()
         self._cancelled.clear()

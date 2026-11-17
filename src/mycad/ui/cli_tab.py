@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: 2026 MyCAD contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Todo-11 bottom-bar CLI tab: same-source command dispatch (F-AGT-05).
+"""Bottom console for the CLI and the active drawing's interactive commands.
 
-No second parser lives here — the tab feeds every submitted line to
+In non-drawing environments the tab feeds every submitted line to
 ``mycad.cli.session.execute_line`` (the pure surface over ``CliSession``)
-and appends the returned messages to the read-only output pane. Document
+and appends the returned messages to the read-only output pane. In a drawing,
+the existing 2D command handler supplies the input and its own history. Document
 ownership stays with the GUI: the tab holds its ``LoadedDocument``, seeds
 the dispatch with it, and every ``new``/``open`` replacement routed through
 ``on_replace_doc`` re-enters the todo-8 lifecycle packing on the window.
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from mycad.app import AppServices
 from mycad.cli.session import QUIT_SENTINEL, LoadedDocument, execute_line
+from mycad.ui.drawing2d_command_bar import Drawing2DCommandBar
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
 
 PROMPT = ">>> "
@@ -60,6 +62,9 @@ class CliTab(QWidget):
         self._execution_unit = execution_unit
         self._command_guard = command_guard
         self.current: LoadedDocument | None = None
+        self.drawing_bar: Drawing2DCommandBar | None = None
+        self._drawing_owner: QWidget | None = None
+        self._cli_history = ""
 
         self.output = QPlainTextEdit(self)
         self.output.setObjectName("cliOutput")
@@ -70,10 +75,43 @@ class CliTab(QWidget):
         if execution_unit is not None:
             execution_unit.busy_changed.connect(self._on_execution_busy_changed)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.addWidget(self.output)
-        layout.addWidget(self.input)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(2, 2, 2, 2)
+        self._layout.addWidget(self.output)
+        self._layout.addWidget(self.input)
+
+    def set_drawing_bar(self, bar: Drawing2DCommandBar | None) -> None:
+        """Show the active drawing's command input in the shared console."""
+        if bar is self.drawing_bar:
+            return
+        previous = self.drawing_bar
+        if previous is not None:
+            previous.history_line.disconnect(self.append_line)
+            previous.history_reset.disconnect(self._restore_drawing_history)
+            self._layout.removeWidget(previous)
+            previous.hide()
+            previous.setParent(self._drawing_owner)
+            self._drawing_owner = None
+        else:
+            self._cli_history = self.output.toPlainText()
+        self.drawing_bar = bar
+        if bar is None:
+            self.output.setPlainText(self._cli_history)
+            self.output.show()
+            self.input.show()
+            return
+        self._drawing_owner = bar.parentWidget()
+        self.input.hide()
+        self.output.hide()
+        self.output.setPlainText("\n".join(bar.history))
+        self._layout.addWidget(bar, 1)
+        bar.history_line.connect(self.append_line)
+        bar.history_reset.connect(self._restore_drawing_history)
+        bar.show()
+
+    def _restore_drawing_history(self) -> None:
+        if self.drawing_bar is not None:
+            self.output.setPlainText("\n".join(self.drawing_bar.history))
 
     # ------------------------------------------------------------------
     # Document binding (window lifecycle)

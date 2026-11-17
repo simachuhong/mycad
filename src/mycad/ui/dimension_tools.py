@@ -5,24 +5,31 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, cast, override
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QToolButton,
     QWidget,
 )
 
+from mycad.core.angular_dimension import AngularSector, angular_sector
+from mycad.core.cross_sketch_tangency import project_coplanar_vector
+from mycad.core.dimension_styles import DimensionStyle
+from mycad.core.polyline_curves import polyline_arc_segment
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
@@ -41,9 +48,12 @@ from mycad.core.sketch_constraints import (
     SketchGeometryReference,
 )
 from mycad.ui.cad_icons import set_button_icon
+from mycad.ui.dimension_presets import DimensionPresetDialog
 
 if TYPE_CHECKING:
-    from mycad.ui.sketch_editor import SketchEditorDialog
+    from mycad.ui.sketch_editor import DimensionLayout, SketchEditorDialog
+
+DEFAULT_NEW_DRAWING_DIMENSION_SCALE = 0.8
 
 COMMANDS = (
     ("smart", "智能标注", "DIM · 选择线、圆、弧或两个捕捉点，移动鼠标并点击放置"),
@@ -95,6 +105,12 @@ def _segment_references(entity: SketchEntity) -> tuple[SketchGeometryReference, 
         count = 4
     elif isinstance(entity, PolylineEntity):
         count = len(entity.points_mm) if entity.closed else len(entity.points_mm) - 1
+        if entity.bulges:
+            return tuple(
+                SketchGeometryReference(entity.entity_id, "segment", i)
+                for i in range(count)
+                if entity.bulges[i] == 0
+            )
     else:
         return ()
     return tuple(SketchGeometryReference(entity.entity_id, "segment", i) for i in range(count))
@@ -123,12 +139,21 @@ class DimensionTools(QObject):
 
     committed_requested = Signal(object, object)
     preview_requested = Signal(object, object, int)
+    status_changed = Signal(str)
+    command_reset = Signal()
+    operation_started = Signal()
 
     def __init__(self, editor: SketchEditorDialog) -> None:
         super().__init__(editor)
         self.editor = editor
         self.canvas = editor.canvas
         self.mode: str | None = None
+        self._command_linear_direction: Point2D | None = None
+        self._preset_format: tuple[int, float] | None = None
+        self._drawing_style: DimensionStyle | None = None
+        self._follow_drawing_style = False
+        self._previous_format: tuple[int, float] | None = None
+        self.drawing_style_manager: Callable[[], None] | None = None
         self._new_dimension_driving = True
         self._new_anchor_mode = "auto"
         self.references: list[SketchGeometryReference] = []
@@ -166,6 +191,14 @@ class DimensionTools(QObject):
             button.clicked.connect(lambda _checked=False, command=key: self.start(command))
             editor.dimension_toolbar.addWidget(button)
             self.buttons[key] = button
+        self.preset_button = QToolButton()
+        self.preset_button.setText("标注预设")
+        self.preset_button.setToolTip("保存并选择本机新建标注的精度和比例预设")
+        self.preset_button.setIconSize(QSize(24, 24))
+        self.preset_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        set_button_icon(self.preset_button, "settings")
+        self.preset_button.clicked.connect(self.open_format_presets)
+        editor.dimension_toolbar.addWidget(self.preset_button)
         editor.dimension_toolbar.addWidget(QLabel("标注层"))
         self.layer_combo = QComboBox()
         self.layer_combo.setMinimumWidth(105)
@@ -211,8 +244,18 @@ class DimensionTools(QObject):
         self.precision.setPrefix("小数 ")
         self.scale = QDoubleSpinBox()
         self.scale.setRange(0.1, 100)
-        self.scale.setValue(1)
+        self.scale.setValue(
+            DEFAULT_NEW_DRAWING_DIMENSION_SCALE if self.canvas.select_committed_entities else 1
+        )
         self.scale.setPrefix("比例 ")
+        self.text_override = QLineEdit()
+        self.text_override.setObjectName("dimensionTextOverride")
+        # Qt counts UTF-16 units; a Unicode character may occupy two units.
+        self.text_override.setMaxLength(512)
+        self.text_override.setPlaceholderText("标注文字")
+        self.text_override.setToolTip("留空显示默认尺寸；<> 代表实际数值，文字不会改变驱动值。")
+        self.text_override.setMaximumWidth(150)
+        self.text_override_label = QLabel("文字")
         self.apply_button = QPushButton("确认修改")
         self.cancel_button = QPushButton("取消 / Esc")
         for widget in (
@@ -222,6 +265,8 @@ class DimensionTools(QObject):
             self.value_editor,
             self.precision,
             self.scale,
+            self.text_override_label,
+            self.text_override,
             self.apply_button,
             self.cancel_button,
         ):
@@ -240,6 +285,7 @@ class DimensionTools(QObject):
         self.anchor_combo.currentIndexChanged.connect(self._anchor_changed)
         self.precision.valueChanged.connect(self._format_changed)
         self.scale.valueChanged.connect(self._format_changed)
+        self.text_override.textChanged.connect(self._text_override_changed)
         self.apply_button.clicked.connect(self.apply_edit)
         self.cancel_button.clicked.connect(self.cancel)
         self.canvas.installEventFilter(self)
@@ -260,25 +306,17 @@ class DimensionTools(QObject):
         target = str(self.layer_combo.currentData())
         self.editor.request_layer_update(self.editor.layer_table, target)
 
-    def _shift(self, sketch: Sketch) -> Point2D:
-        frame = self.editor.current_frame()
-        delta = tuple(a - b for a, b in zip(sketch.frame.origin_mm, frame.origin_mm, strict=True))
-        return (
-            sum(a * b for a, b in zip(delta, frame.u_axis, strict=True)),
-            sum(a * b for a, b in zip(delta, frame.v_axis, strict=True)),
-        )
-
     def _local(self, sketch: Sketch, point: Point2D) -> Point2D:
-        shift = self._shift(sketch)
-        return (point[0] - shift[0], point[1] - shift[1])
+        return sketch.frame.world_to_local(self.editor.current_frame().local_to_world(point))
 
     def _display(self, dimension: SketchConstraint) -> SketchConstraint:
         if self.original is None:
             return dimension
-        shift = self._shift(self.original)
 
         def moved(p: Point2D | None) -> Point2D | None:
-            return None if p is None else (p[0] + shift[0], p[1] + shift[1])
+            if p is None or self.original is None:
+                return None
+            return self.editor.current_frame().world_to_local(self.original.frame.local_to_world(p))
 
         return replace(
             dimension,
@@ -304,7 +342,12 @@ class DimensionTools(QObject):
                 self.cancel()
 
     def start(self, mode: str) -> None:
+        self.operation_started.emit()
         self.cancel()
+        self.text_override.clear()
+        if self._preset_format is not None:
+            self.precision.setValue(self._preset_format[0])
+            self.scale.setValue(self._preset_format[1])
         self.driving_check.setChecked(self._new_dimension_driving)
         self.anchor_combo.setCurrentIndex(self.anchor_combo.findData(self._new_anchor_mode))
         self._sync_anchor_control()
@@ -314,7 +357,7 @@ class DimensionTools(QObject):
         self.canvas.end_line_chain()
         self.editor.tool_combo.setCurrentText("选择元素")
         self.mode = mode
-        self.buttons[mode].setChecked(True)
+        self.buttons["smart" if mode == "linear" else mode].setChecked(True)
         self.command_bar.show()
         self.apply_button.hide()
         self.canvas.setFocus()
@@ -355,7 +398,11 @@ class DimensionTools(QObject):
         self.prompt.setText("拾取下一个测量点")
 
     def cancel(self, *_args: object) -> None:
+        if self.mode is not None or self._editing:
+            self.canvas.clear_dimension_snap_preview()
         self.mode = None
+        self._command_linear_direction = None
+        self.command_reset.emit()
         self.references = []
         self.original = None
         self.candidate = None
@@ -383,6 +430,124 @@ class DimensionTools(QObject):
     def _status(self, text: str) -> None:
         self.editor.status_label.setText(text)
         self.prompt.setText(text)
+        self.status_changed.emit(text)
+
+    def set_drawing_style_manager(self, manager: Callable[[], None]) -> None:
+        """Expose the document style manager instead of the local preset entry."""
+        self.drawing_style_manager = manager
+        self.preset_button.setText("标注样式")
+        self.preset_button.setToolTip("管理当前图纸标注样式，也可打开本机标注预设。")
+
+    def open_format_presets(self) -> None:
+        if self.mode is not None or self._editing:
+            self._status("请先完成或取消当前标注，再设置标注预设。")
+            return
+        if self.drawing_style_manager is not None:
+            self.drawing_style_manager()
+            return
+        self.open_local_format_presets()
+
+    def open_local_format_presets(self) -> None:
+        dialog = DimensionPresetDialog(
+            QSettings("MyCAD", "MyCAD"), self.precision.value(), self.scale.value(), self.editor
+        )
+        if dialog.exec() == int(QDialog.DialogCode.Accepted):
+            self._drawing_style = None
+            self._follow_drawing_style = False
+            self._previous_format = None
+            self.precision.setValue(dialog.precision.value())
+            self.scale.setValue(dialog.scale.value())
+            self._preset_format = (self.precision.value(), self.scale.value())
+            self._status("新建标注的格式预设已应用。")
+
+    def set_drawing_style(self, style: DimensionStyle | None) -> None:
+        """Choose the current drawing style for subsequently created dimensions."""
+        if not self._follow_drawing_style and style is not None:
+            self._previous_format = (self.precision.value(), self.scale.value())
+        self._drawing_style = style
+        self._follow_drawing_style = True
+        if style is not None:
+            self._preset_format = (style.precision, style.scale)
+            self.precision.setValue(style.precision)
+            self.scale.setValue(style.scale)
+        elif self._previous_format is not None:
+            self._preset_format = self._previous_format
+            self.precision.setValue(self._previous_format[0])
+            self.scale.setValue(self._previous_format[1])
+
+    @property
+    def drawing_style_active(self) -> bool:
+        return self._follow_drawing_style
+
+    @property
+    def command_editing_value(self) -> bool:
+        return self._editing and self._new_driving
+
+    def command_point(self, point: Point2D) -> bool:
+        """Apply a command-line point through the same path as a canvas pick."""
+        if self.mode is None or self._busy or self._editing:
+            return False
+        before = (
+            self.original,
+            tuple(self.references),
+            self.candidate,
+            self.mode,
+            self._editing,
+            self._busy,
+        )
+        self._click(point)
+        return before != (
+            self.original,
+            tuple(self.references),
+            self.candidate,
+            self.mode,
+            self._editing,
+            self._busy,
+        )
+
+    def command_value(self, value: float) -> bool:
+        if not self.command_editing_value or not math.isfinite(value):
+            return False
+        if not self.value_editor.minimum() <= value <= self.value_editor.maximum():
+            self._status("尺寸值超出允许范围。")
+            return False
+        self.value_editor.setValue(value)
+        self.apply_edit()
+        return self._busy or not self.command_editing_value
+
+    def command_accept_value(self) -> bool:
+        return self.command_value(self.value_editor.value())
+
+    def command_linear_axis(self, axis: str) -> bool:
+        if self.mode not in ("linear", "horizontal", "vertical") or axis not in (
+            "horizontal",
+            "vertical",
+        ):
+            return False
+        self.mode = axis
+        self._command_linear_direction = None
+        if self.candidate is not None:
+            location = self._display(self.candidate).position_mm
+            if location is not None:
+                self._build_candidate(location)
+        label = "水平尺寸" if axis == "horizontal" else "垂直尺寸"
+        self._status(
+            f"{label}：指定标注位置。" if self.candidate else f"{label}：选择对象或两个点。"
+        )
+        return True
+
+    def command_linear_rotation(self, angle: float) -> bool:
+        if self.mode not in ("linear", "horizontal", "vertical") or not math.isfinite(angle):
+            return False
+        radians = math.radians(angle % 360.0)
+        self._command_linear_direction = (math.cos(radians), math.sin(radians))
+        self.mode = "horizontal"
+        if self.candidate is not None:
+            location = self._display(self.candidate).position_mm
+            if location is not None:
+                self._build_candidate(location)
+        self._status("旋转线性尺寸：指定标注位置。")
+        return True
 
     def _entities(self) -> dict[str, SketchEntity]:
         return {e.entity_id: e for e in self.canvas.visible_snap_entities()}
@@ -412,6 +577,33 @@ class DimensionTools(QObject):
                             )
                 if self.references and self.mode != "angle":
                     continue
+                if isinstance(entity, PolylineEntity) and self.mode in (
+                    "smart",
+                    "radius",
+                    "diameter",
+                    "arc_length",
+                ):
+                    for index, bulge in enumerate(entity.bulges):
+                        if bulge == 0:
+                            continue
+                        arc = polyline_arc_segment(entity, index)
+                        angle = math.degrees(
+                            math.atan2(point[1] - arc.center_mm[1], point[0] - arc.center_mm[0])
+                        )
+                        offset = (
+                            (angle - arc.start_angle_deg) % 360
+                            if arc.sweep_angle_deg > 0
+                            else (arc.start_angle_deg - angle) % 360
+                        )
+                        distance = abs(math.dist(point, arc.center_mm) - arc.radius_mm)
+                        if offset <= abs(arc.sweep_angle_deg) + 1e-7 and distance <= tolerance:
+                            candidates.append(
+                                (
+                                    distance,
+                                    sketch,
+                                    (SketchGeometryReference(entity.entity_id, "segment", index),),
+                                )
+                            )
                 if isinstance(entity, CircleEntity | ArcEntity):
                     if self.mode not in ("smart", "radius", "diameter", "arc_length"):
                         continue
@@ -467,7 +659,14 @@ class DimensionTools(QObject):
             a, b = segment
             if constraint.axis == "aligned":
                 return math.dist(a, b)
-            delta = b[0] - a[0] if constraint.axis in ("horizontal", "ordinate_x") else b[1] - a[1]
+            delta = (
+                (b[0] - a[0]) * constraint.projection_axis[0]
+                + (b[1] - a[1]) * constraint.projection_axis[1]
+                if constraint.projection_axis is not None
+                else b[0] - a[0]
+                if constraint.axis in ("horizontal", "ordinate_x")
+                else b[1] - a[1]
+            )
             return delta if constraint.axis.startswith("ordinate_") else abs(delta)
         if constraint.kind == "angle":
             a = self.canvas.line_for_reference(first, entities)
@@ -481,15 +680,32 @@ class DimensionTools(QObject):
                 raise ValueError("平行直线不能放置角度尺寸")
             return math.degrees(math.atan2(cross, u[0] * v[0] + u[1] * v[1]))
         entity = entities[first.entity_id]
+        if (
+            isinstance(entity, PolylineEntity)
+            and first.kind == "segment"
+            and first.index is not None
+        ):
+            entity = polyline_arc_segment(entity, first.index)
         if not isinstance(entity, CircleEntity | ArcEntity):
             raise ValueError("请选择圆或圆弧")
         if constraint.kind == "arc_length" and isinstance(entity, ArcEntity):
             return entity.radius_mm * abs(math.radians(entity.sweep_angle_deg))
         return entity.radius_mm * (2 if constraint.kind == "diameter" else 1)
 
+    def _angle_sector(self, sketch: Sketch, constraint: SketchConstraint) -> AngularSector | None:
+        if constraint.kind != "angle" or constraint.position_mm is None:
+            return None
+        entities = {entity.entity_id: entity for entity in sketch.entities}
+        first = self.canvas.line_for_reference(constraint.references[0], entities)
+        second = self.canvas.line_for_reference(constraint.references[1], entities)
+        if first is None or second is None:
+            return None
+        return angular_sector(first, second, constraint.position_mm)
+
     def _build_candidate(self, point: Point2D) -> bool:
         if self.original is None or not self.references:
             return False
+        frame = self.editor.current_frame()
         refs = tuple(self.references)
         first_entity = next(e for e in self.original.entities if e.entity_id == refs[0].entity_id)
         kind = "distance"
@@ -498,7 +714,15 @@ class DimensionTools(QObject):
             if len(refs) != 2:
                 return False
             kind = "angle"
-        elif isinstance(first_entity, CircleEntity | ArcEntity) and refs[0].kind == "geometry":
+        elif (
+            isinstance(first_entity, CircleEntity | ArcEntity) and refs[0].kind == "geometry"
+        ) or (
+            isinstance(first_entity, PolylineEntity)
+            and refs[0].kind == "segment"
+            and refs[0].index is not None
+            and bool(first_entity.bulges)
+            and first_entity.bulges[refs[0].index] != 0
+        ):
             kind = (
                 ("diameter" if isinstance(first_entity, CircleEntity) else "radius")
                 if self.mode == "smart"
@@ -510,7 +734,7 @@ class DimensionTools(QObject):
             axis = self.mode
         elif self.mode in ("continue", "baseline") and self.last_dimension is not None:
             axis = self.last_dimension[1].axis
-        elif self.mode in ("smart", "ordinate"):
+        elif self.mode in ("smart", "linear", "ordinate"):
             entities = self._entities()
             a = self.canvas.point_for_reference(refs[0], entities)
             b = self.canvas.point_for_reference(refs[1], entities)
@@ -521,6 +745,22 @@ class DimensionTools(QObject):
                     axis = "vertical"
             if self.mode == "ordinate":
                 axis = "ordinate_y" if axis == "vertical" else "ordinate_x"
+        projection_axis: Point2D | None = None
+        if axis != "aligned":
+            if self._command_linear_direction is not None:
+                projection_axis = project_coplanar_vector(
+                    self._command_linear_direction, frame, self.original.frame
+                )
+            elif self.mode in ("continue", "baseline") and self.last_dimension is not None:
+                projection_axis = self.last_dimension[1].projection_axis
+            elif (
+                self.original.frame.u_axis != frame.u_axis
+                or self.original.frame.v_axis != frame.v_axis
+            ):
+                view_axis: Point2D = (
+                    (1.0, 0.0) if axis in ("horizontal", "ordinate_x") else (0.0, 1.0)
+                )
+                projection_axis = project_coplanar_vector(view_axis, frame, self.original.frame)
         try:
             candidate = SketchConstraint.from_mapping(
                 {
@@ -539,9 +779,16 @@ class DimensionTools(QObject):
                     "driving": False,
                     "unit": "deg" if kind == "angle" else "mm",
                     "axis": axis,
+                    **({"projection_axis": list(projection_axis)} if projection_axis else {}),
                     "position_mm": list(self._local(self.original, point)),
                     "precision": self.precision.value(),
                     "scale": self.scale.value(),
+                    **({"style_name": self._drawing_style.name} if self._drawing_style else {}),
+                    **(
+                        {"text_override": self.text_override.text()}
+                        if self.text_override.text()
+                        else {}
+                    ),
                 }
             )
             target = self.editor.layer_table.get(candidate.layer_name or "0")
@@ -554,9 +801,12 @@ class DimensionTools(QObject):
             self._sync_anchor_control()
             self.canvas.dimension_candidate = self._display(self.candidate)
             self.value_editor.blockSignals(True)
-            self.value_editor.setValue(measured)
+            sector = self._angle_sector(self.original, self.candidate)
+            self.value_editor.setValue(
+                math.degrees(sector.sweep) if sector is not None else measured
+            )
             self.value_editor.blockSignals(False)
-            self._status("移动鼠标，点击放置尺寸；Shift 切换方向，Esc 取消")
+            self._status("移动鼠标，点击放置尺寸；可在标注选项设置文字，Esc 取消")
         except ValueError as exc:
             self.candidate = None
             self.canvas.dimension_candidate = None
@@ -610,9 +860,15 @@ class DimensionTools(QObject):
     def _dimension_at(self, point: Point2D) -> tuple[Sketch, SketchConstraint, str] | None:
         screen = QPointF(self.canvas.local_to_screen(point))
         entities = self.canvas.dimension_entities()
+        label_rectangles = self.canvas.dimension_label_rectangles()
+        visible_ids = {dimension.constraint_id for dimension in self.canvas.visible_dimensions()}
+        candidates: list[tuple[Sketch, SketchConstraint, DimensionLayout | None]] = []
         for sketch in self._sketches():
             for dimension in reversed(sketch.constraints):
-                if dimension.kind not in DIMENSION_KINDS:
+                if (
+                    dimension.kind not in DIMENSION_KINDS
+                    or dimension.constraint_id not in visible_ids
+                ):
                     continue
                 layer = self.canvas.annotation_layer(dimension)
                 if not layer.displayed or layer.locked:
@@ -624,20 +880,27 @@ class DimensionTools(QObject):
                 shown = self._display(dimension)
                 self.original = previous
                 layout = self.canvas.dimension_layout(shown, entities)
-                if layout is None:
-                    continue
-                if (screen - layout.label).manhattanLength() <= 30:
-                    return (sketch, dimension, "text")
-                local_point = (screen.x(), screen.y())
-                draggable_lines = (
-                    layout.lines[2:]
-                    if dimension.kind in ("length", "distance")
-                    and not dimension.axis.startswith("ordinate_")
-                    else layout.lines
-                )
-                for a, b in draggable_lines:
-                    if _point_segment_distance(local_point, (a.x(), a.y()), (b.x(), b.y())) <= 5:
-                        return (sketch, dimension, "line")
+                candidates.append((sketch, dimension, layout))
+        for sketch, dimension, _layout in candidates:
+            label_rect = label_rectangles.get(dimension.constraint_id)
+            if label_rect is not None and label_rect.adjusted(-4, -4, 4, 4).contains(screen):
+                return (sketch, dimension, "text")
+        local_point = (screen.x(), screen.y())
+        for sketch, dimension, layout in candidates:
+            if layout is None:
+                continue
+            draggable_lines = (
+                layout.lines[2:]
+                if dimension.kind in ("length", "distance")
+                and not dimension.axis.startswith("ordinate_")
+                else layout.lines
+            )
+            for a, b in (
+                *draggable_lines,
+                *self.canvas.dimension_arrow_segments(layout, dimension.scale, dimension),
+            ):
+                if _point_segment_distance(local_point, (a.x(), a.y()), (b.x(), b.y())) <= 5:
+                    return (sketch, dimension, "line")
         return None
 
     def edit(self, sketch: Sketch, dimension: SketchConstraint) -> None:
@@ -645,6 +908,7 @@ class DimensionTools(QObject):
         if not layer.displayed or layer.locked:
             self._status("标注层不可编辑，请先显示、解冻或解锁")
             return
+        self.operation_started.emit()
         self.cancel()
         self.editor.tool_combo.setCurrentText("选择元素")
         self.original = sketch
@@ -662,11 +926,21 @@ class DimensionTools(QObject):
         self.command_bar.show()
         self.apply_button.show()
         self.value_editor.blockSignals(True)
-        self.value_editor.setValue(dimension.value or 0)
+        sector = self._angle_sector(sketch, dimension)
+        self.value_editor.setValue(
+            math.degrees(sector.sweep) if sector is not None else dimension.value or 0
+        )
         self.value_editor.blockSignals(False)
         self.driving_check.setChecked(dimension.driving)
+        self.precision.blockSignals(True)
+        self.scale.blockSignals(True)
         self.precision.setValue(dimension.precision)
         self.scale.setValue(dimension.scale)
+        self.precision.blockSignals(False)
+        self.scale.blockSignals(False)
+        self.text_override.blockSignals(True)
+        self.text_override.setText(dimension.text_override or "")
+        self.text_override.blockSignals(False)
         self.value_editor.setReadOnly(not dimension.driving)
         self.value_editor.setFocus()
         self.value_editor.selectAll()
@@ -726,17 +1000,54 @@ class DimensionTools(QObject):
         self._value_changed()
 
     def _format_changed(self, *_args: object) -> None:
+        if self._preset_format is not None and self.mode is not None and not self._editing:
+            self._preset_format = (self.precision.value(), self.scale.value())
+            if self._drawing_style is not None and (
+                self.precision.value() != self._drawing_style.precision
+                or self.scale.value() != self._drawing_style.scale
+            ):
+                self._drawing_style = None
+                self._follow_drawing_style = False
         if self.candidate is not None:
+            changed = (
+                self.candidate.precision != self.precision.value()
+                or self.candidate.scale != self.scale.value()
+            )
             self.candidate = replace(
-                self.candidate, precision=self.precision.value(), scale=self.scale.value()
+                self.candidate,
+                precision=self.precision.value(),
+                scale=self.scale.value(),
+                style_name=None if changed else self.candidate.style_name,
             )
             self.canvas.dimension_candidate = self._display(self.candidate)
             self.canvas.update()
             if self._editing and self.candidate.driving and self._input_valid:
                 self._queue_preview()
 
+    def _text_override_changed(self, text: str) -> None:
+        if len(text) > 256 or (text and not text.isprintable()):
+            self._input_valid = False
+            self.apply_button.setEnabled(False)
+            self._status("标注文字须为 256 字以内的可显示字符")
+            return
+        self._input_valid = True
+        if self.candidate is not None:
+            self.candidate = replace(self.candidate, text_override=text or None)
+            self.canvas.dimension_candidate = self._display(self.candidate)
+            self.canvas.update()
+            if self._editing and self.candidate.driving:
+                self._preview_result = None
+                self._queue_preview()
+            else:
+                self.apply_button.setEnabled(True)
+
     def _value_changed(self, *_args: object) -> None:
         if self.candidate is None or self.original is None:
+            return
+        if len(self.text_override.text()) > 256 or (
+            self.text_override.text() and not self.text_override.text().isprintable()
+        ):
+            self._input_valid = False
             return
         try:
             value = (
@@ -744,6 +1055,10 @@ class DimensionTools(QObject):
                 if self.driving_check.isChecked()
                 else self._measure(self.original, self.candidate)
             )
+            if self.driving_check.isChecked():
+                sector = self._angle_sector(self.original, self.candidate)
+                if sector is not None and value >= 0:
+                    value = sector.solver_degrees(value)
             revised = replace(self.candidate, driving=self.driving_check.isChecked(), value=value)
             if revised != self.candidate:
                 self._branch_confirmed = False
@@ -857,7 +1172,9 @@ class DimensionTools(QObject):
             return
         if previewed is not None and previewed.branch_changes and not self._branch_confirmed:
             self._branch_confirmed = True
+            linked_previews = self.canvas.dimension_linked_sources
             self.editor.show_dimension_preview(previewed)
+            self.editor.show_linked_dimension_previews(linked_previews)
             self._status(
                 "几何分支将改变："
                 + "；".join(c.message for c in previewed.branch_changes)
@@ -938,9 +1255,26 @@ class DimensionTools(QObject):
     @override
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if isinstance(event, QKeyEvent) and event.type() == QEvent.Type.KeyPress:
+            if (
+                watched is self.canvas
+                and event.key() == Qt.Key.Key_Escape
+                and self.canvas.saved_handle_drag_active
+            ):
+                return False
             if event.key() == Qt.Key.Key_Escape and (self.mode or self._editing or self._dragging):
                 self.cancel()
                 self.canvas.setFocus()
+                return True
+            if (
+                watched is self.canvas
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and (self.mode or self._editing)
+            ):
+                if self._editing:
+                    self.value_editor.interpretText()
+                    self.apply_edit()
+                else:
+                    self.cancel()
                 return True
             if watched is self.value_editor and event.key() in (
                 Qt.Key.Key_Return,
@@ -961,12 +1295,14 @@ class DimensionTools(QObject):
                     "aligned": "horizontal",
                 }[self.mode]
                 if self.candidate is not None and self.candidate.position_mm is not None:
-                    shift = self._shift(self.original) if self.original is not None else (0, 0)
-                    p = self.candidate.position_mm
-                    self._build_candidate((p[0] + shift[0], p[1] + shift[1]))
+                    position = self._display(self.candidate).position_mm
+                    if position is not None:
+                        self._build_candidate(position)
                 return True
         if watched is not self.canvas or not isinstance(event, QMouseEvent):
             return False
+        if event.type() == QEvent.Type.MouseMove:
+            self.canvas.track_crosshair_pointer(event.position().toPoint())
         point = self.canvas.screen_to_local(event.position())
         if (
             event.type() == QEvent.Type.MouseButtonDblClick
@@ -978,12 +1314,17 @@ class DimensionTools(QObject):
                 return True
         if event.type() == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.RightButton and (self.mode or self._editing):
-                self.cancel()
+                if self._editing:
+                    self.value_editor.interpretText()
+                    self.apply_edit()
+                else:
+                    self.cancel()
                 return True
             if event.button() == Qt.MouseButton.LeftButton:
                 if self._editing:
                     return True
                 if self.mode:
+                    self.canvas.clear_dimension_snap_preview()
                     self._click(point)
                     return True
                 if self.editor.tool_combo.currentText() == "选择元素":
@@ -1010,10 +1351,17 @@ class DimensionTools(QObject):
                 self.canvas.update()
                 return True
             if self.mode and not self._editing:
+                hit = self._pick(point) if self.candidate is None else None
+                point_reference = bool(
+                    hit is not None
+                    and len(hit[1]) == 1
+                    and hit[1][0].kind in ("start", "end", "center", "vertex")
+                    and hit[1][0] not in self.references
+                )
+                self.canvas.update_dimension_snap_preview(point, show_snap=point_reference)
                 if self.references:
                     self._build_candidate(point)
                 else:
-                    hit = self._pick(point)
                     if hit is None:
                         self.canvas.dimension_candidate = None
                         self.canvas.dimension_references = ()
@@ -1034,7 +1382,26 @@ class DimensionTools(QObject):
         ):
             self._dragging = None
             if not self._drag_moved:
+                identity = self.candidate.constraint_id if self.candidate is not None else None
                 self.cancel()
+                if identity is not None:
+                    modifiers = event.modifiers()
+                    subtractive = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+                    additive = bool(modifiers & Qt.KeyboardModifier.ControlModifier) or (
+                        self.canvas.active_transform == "erase" and self.canvas.transform_selecting
+                    )
+                    if not additive and not subtractive:
+                        self.canvas.selected_constraint_ids.clear()
+                        self.canvas.selected_entity_ids.clear()
+                        self.canvas.selected_raster_ids.clear()
+                    if subtractive or (
+                        additive and identity in self.canvas.selected_constraint_ids
+                    ):
+                        self.canvas.selected_constraint_ids.discard(identity)
+                    else:
+                        self.canvas.selected_constraint_ids.add(identity)
+                    self.canvas.changed.emit()
+                    self.canvas.update()
                 return True
             self._editing = True
             self.apply_edit()

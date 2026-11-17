@@ -64,6 +64,22 @@ def test_all_six_entities_are_exact_local_uv_geometry() -> None:
         assert resolve_reference(reference_for_curve(curve), result).curve_ids == (curve.curve_id,)
 
 
+def test_polyline_arc_projects_as_exact_arc_with_same_source_identity() -> None:
+    entity = PolylineEntity(str(uuid4()), ((0, 0), (2, 0), (2, 2)), bulges=(1, 0))
+    sketch = Sketch(str(uuid4()), WorkPlaneFrame.xy(), (entity,))
+    request = DrawingProjectionRequest(
+        uuid4(), "source", 1, source="sketch", sketch_id=sketch.sketch_id
+    )
+    result = project_sketch(sketch, request)
+    assert len(result.curves) == 2
+    assert result.curves[0].geometry == ArcCurve((1, 0), 1, 180, 180)
+    assert result.curves[1].geometry == LineCurve((2, 0), (2, 2))
+    assert all(
+        curve.source is not None and curve.source.entity_id == entity.entity_id
+        for curve in result.curves
+    )
+
+
 def test_hidden_frozen_and_construction_are_absent_but_locked_is_visible() -> None:
     layers = SketchLayerTable(
         (
@@ -93,7 +109,7 @@ def test_hidden_frozen_and_construction_are_absent_but_locked_is_visible() -> No
     )
     result = project_sketch(hidden, request)
     assert result.curves == ()
-    assert not result.diagnostics
+    assert result.diagnostics == ("草图没有可显示的非构造曲线，请检查图元与图层可见性",)
 
 
 def test_annotation_tracks_length_and_rotation_by_entity_identity() -> None:

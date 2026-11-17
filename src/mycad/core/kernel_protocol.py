@@ -33,6 +33,20 @@ class BoundFaceKernel(ContextualKernel, Protocol):
 
 
 @runtime_checkable
+class DrawingBaselineKernel(Protocol):
+    """Optional capability for initializing replayable drawing defaults."""
+
+    def set_drawing_fillet_baseline(self, radius: float) -> None: ...
+
+
+@runtime_checkable
+class ChamferBaselineKernel(Protocol):
+    """Optional capability for initializing the chamfer angle baseline."""
+
+    def set_drawing_chamfer_angle_baseline(self, angle: float) -> None: ...
+
+
+@runtime_checkable
 class Kernel(Protocol):
     """Minimal geometry-kernel surface the command layer depends on."""
 

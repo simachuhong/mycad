@@ -40,6 +40,25 @@ class MessageLabel(QLabel):
         self.transient_changed.emit(text)
 
 
+def drawing_message(text: str) -> str:
+    """Describe internal drawing relationships in user-facing object terms."""
+    return (
+        text.replace("跨草图相切", "对象相切")
+        .replace("跨草图图元", "关联对象")
+        .replace("跨草图尺寸", "关联尺寸")
+        .replace("跨草图候选", "关联候选")
+        .replace("跨草图", "对象关联")
+    )
+
+
+class DrawingMessageLabel(MessageLabel):
+    """Show internal drawing-relationship errors using object terminology."""
+
+    @override
+    def setText(self, text: str) -> None:  # noqa: N802
+        super().setText(drawing_message(text))
+
+
 class InformationPanel(QWidget):
     """Bounded plain-text history; cursor movement never enters this log."""
 

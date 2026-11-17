@@ -389,6 +389,8 @@ def test_fit_view_keeps_large_draft_inside_canvas(qtbot: QtBot) -> None:
 
 
 def test_changing_to_extend_preselects_under_stationary_pointer(qtbot: QtBot) -> None:
+    from PySide6.QtGui import QCursor
+
     draft = editor(qtbot)
     draft.resize(1000, 740)
     draft.show()
@@ -401,6 +403,8 @@ def test_changing_to_extend_preselects_under_stationary_pointer(qtbot: QtBot) ->
     for point in ((5.0, -10.0), (5.0, 10.0)):
         draft.canvas.add_coordinate_point(point)
     draft.canvas.end_line_chain()
-    QTest.mouseMove(draft.canvas, draft.canvas.local_to_screen((10.0, 0.0)))
+    position = draft.canvas.local_to_screen((10.0, 0.0))
+    QCursor.setPos(draft.canvas.mapToGlobal(position))
+    qtbot.waitUntil(lambda: draft.canvas.mapFromGlobal(QCursor.pos()) == position)
     draft.tool_combo.setCurrentText("延伸")
     assert draft.canvas.hovered_line_edit_target_id == arc_id

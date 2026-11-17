@@ -1,0 +1,415 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.dimension_styles.set",
+      "version": 8,
+      "params": {
+        "styles": [
+          {
+            "name": "角区1",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "none",
+            "center_size": 2.5,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "角区2",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "none",
+            "center_size": 2.5,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": true,
+            "suppress_dimension_second": false
+          },
+          {
+            "name": "角区3",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "none",
+            "center_size": 2.5,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": true
+          },
+          {
+            "name": "角区4",
+            "precision": 2,
+            "scale": 1.0,
+            "arrow_first": "open",
+            "arrow_second": "closed",
+            "arrow_size": 1.4,
+            "dimline_extension": 0.0,
+            "extline_extension": 0.0,
+            "extline_offset": 0.0,
+            "text_height": 2.5,
+            "center_mark": "none",
+            "center_size": 2.5,
+            "dimension_color": 256,
+            "extension_color": 256,
+            "text_color": 256,
+            "dimension_lineweight": -1,
+            "extension_lineweight": -1,
+            "dimension_linetype": "BYLAYER",
+            "extension_linetype_first": "BYLAYER",
+            "extension_linetype_second": "BYLAYER",
+            "suppress_extension_first": false,
+            "suppress_extension_second": false,
+            "suppress_dimension_first": false,
+            "suppress_dimension_second": false
+          }
+        ],
+        "current": "角区1"
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-16T16:09:01.003202+00:00",
+      "confirmed_by": "local",
+      "instance_id": "554bc14a331e4ccd9a2aa01efae477e8"
+    },
+    {
+      "id": "sketch.create",
+      "version": 32,
+      "params": {
+        "sketch_id": "aed5af0f5e5c4939bff4cdf8d944fd48",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "ba491277e13e4336ac3d88f4623ca1df",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -15.0,
+              55.0
+            ],
+            "end_mm": [
+              15.0,
+              55.0
+            ]
+          },
+          {
+            "entity_id": "dc97f9cc8b4246a1884e250fe7f1b09f",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              40.0
+            ],
+            "end_mm": [
+              0.0,
+              70.0
+            ]
+          },
+          {
+            "entity_id": "b87df3c69dff44b5985667abd8754cec",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              65.0,
+              55.0
+            ],
+            "end_mm": [
+              95.0,
+              55.0
+            ]
+          },
+          {
+            "entity_id": "329121c7119e4e70a09fb41e3c110f70",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              80.0,
+              40.0
+            ],
+            "end_mm": [
+              80.0,
+              70.0
+            ]
+          },
+          {
+            "entity_id": "72bfeb3735c7439ca21b1227c2326891",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -15.0,
+              0.0
+            ],
+            "end_mm": [
+              15.0,
+              0.0
+            ]
+          },
+          {
+            "entity_id": "875eaa9f6b6146eea76afd4a93ff84c6",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              -15.0
+            ],
+            "end_mm": [
+              0.0,
+              15.0
+            ]
+          },
+          {
+            "entity_id": "168fa4ae302a4e98adc1f7f879e6bed0",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              65.0,
+              0.0
+            ],
+            "end_mm": [
+              95.0,
+              0.0
+            ]
+          },
+          {
+            "entity_id": "a4272bc5df044d13bbd22709913b25b3",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              80.0,
+              -15.0
+            ],
+            "end_mm": [
+              80.0,
+              15.0
+            ]
+          }
+        ],
+        "constraints": [
+          {
+            "constraint_id": "e4151f5be46b484f917073b62f625db2",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "ba491277e13e4336ac3d88f4623ca1df",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "dc97f9cc8b4246a1884e250fe7f1b09f",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "deg",
+            "value": 90,
+            "position_mm": [
+              8.485281374238571,
+              63.48528137423857
+            ],
+            "style_name": "角区1"
+          },
+          {
+            "constraint_id": "16150023273b47d1963ca2efc72c8986",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "b87df3c69dff44b5985667abd8754cec",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "329121c7119e4e70a09fb41e3c110f70",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "deg",
+            "value": 90,
+            "position_mm": [
+              71.51471862576143,
+              63.48528137423857
+            ],
+            "style_name": "角区2"
+          },
+          {
+            "constraint_id": "9c55fd0686674628b4ed0a40612567f4",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "72bfeb3735c7439ca21b1227c2326891",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "875eaa9f6b6146eea76afd4a93ff84c6",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "deg",
+            "value": 90,
+            "position_mm": [
+              -8.485281374238571,
+              -8.48528137423857
+            ],
+            "style_name": "角区3"
+          },
+          {
+            "constraint_id": "3e30eabe8fdc499ca2aa83de6de11943",
+            "kind": "angle",
+            "references": [
+              {
+                "entity_id": "168fa4ae302a4e98adc1f7f879e6bed0",
+                "kind": "geometry"
+              },
+              {
+                "entity_id": "a4272bc5df044d13bbd22709913b25b3",
+                "kind": "geometry"
+              }
+            ],
+            "driving": false,
+            "source": "user",
+            "unit": "deg",
+            "value": 90,
+            "position_mm": [
+              88.48528137423857,
+              -8.485281374238571
+            ],
+            "style_name": "角区4"
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-16T16:09:01.005526+00:00",
+      "confirmed_by": "local",
+      "instance_id": "62c71f369790478695b5ae8fca6c759c"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "2bdf09e3d4184db4adde4ef02cbbf850",
+  "document_kind": "drawing",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

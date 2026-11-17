@@ -13,7 +13,13 @@ from typing import Protocol, cast
 
 from ezdxf.filemanagement import new as _new_dxf
 
-from mycad.core.drawing_paper import paper_texts, sheet_frame, validate_drawing_output
+from mycad.core.drawing_paper import (
+    detail_marker_curves,
+    paper_texts,
+    section_marker_lines,
+    sheet_frame,
+    validate_drawing_output,
+)
 from mycad.core.drawing_projection import (
     ArcCurve,
     CurveGeometry,
@@ -189,6 +195,9 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
         ("VISIBLE", 25, "CONTINUOUS"),
         ("HIDDEN", 18, "MYCAD_HIDDEN"),
         ("TANGENT", 18, "MYCAD_TANGENT"),
+        ("HATCH", 18, "CONTINUOUS"),
+        ("SECTION", 25, "CONTINUOUS"),
+        ("DETAIL", 18, "CONTINUOUS"),
         ("CENTER", 18, "MYCAD_CENTER"),
         ("DIM", 18, "CONTINUOUS"),
         ("FRAME", 30, "CONTINUOUS"),
@@ -205,7 +214,18 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
         )
     for name in sorted(
         ({a.layer for a in scene.resolved_annotations} | {note.layer for note in scene.notes})
-        - {"VISIBLE", "HIDDEN", "TANGENT", "CENTER", "DIM", "FRAME", "0"}
+        - {
+            "VISIBLE",
+            "HIDDEN",
+            "TANGENT",
+            "HATCH",
+            "SECTION",
+            "DETAIL",
+            "CENTER",
+            "DIM",
+            "FRAME",
+            "0",
+        }
     ):
         document.layers.new(name, dxfattribs={"color": 7, "true_color": 0x26313C, "lineweight": 18})
     document.styles.new("MyCAD", dxfattribs={"font": "NotoSansCJK-Regular.ttc"})
@@ -218,6 +238,8 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
     for view in scene.views:
         name = f"VIEW_{view.view_id.hex}"
         block = document.blocks.new(name)
+        for hatch in view.hatch:
+            _curve(block, hatch, "HATCH", scale=view.scale)
         for curve in view.curves:
             _curve(block, curve.geometry, curve.visibility.upper(), scale=view.scale)
         paper.add_blockref(
@@ -227,6 +249,10 @@ def export_drawing_dxf(scene: DrawingScene, target: Path) -> None:
         )
     for line in sheet_frame(scene):
         _curve(paper, line, "FRAME")
+    for line in section_marker_lines(scene):
+        _curve(paper, line, "SECTION")
+    for curve in detail_marker_curves(scene):
+        _curve(paper, curve, "DETAIL")
     for annotation in scene.resolved_annotations:
         for geometry in annotation.curves:
             _curve(paper, geometry, annotation.layer)

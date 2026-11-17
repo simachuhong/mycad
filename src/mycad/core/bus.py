@@ -38,7 +38,7 @@ from mycad.core.exceptions import (
     ValidationError,
 )
 from mycad.core.handlers import CommandHandler, HandlerContext, resolve_handler
-from mycad.core.kernel_protocol import Kernel
+from mycad.core.kernel_protocol import ChamferBaselineKernel, DrawingBaselineKernel, Kernel
 from mycad.core.plan import ConfirmationScope, Plan, PlanConfirmation
 from mycad.core.replay_proposal import (
     ReplayCandidateProposal,
@@ -64,6 +64,16 @@ class _Operation:
     after: _OperationState
 
 
+@dataclass(frozen=True)
+class _SaveState:
+    document: object
+    redo: list[ExecutedCommand]
+    undo_operations: list[_Operation]
+    redo_operations: list[_Operation]
+    revision: int
+    operation_revision: int
+
+
 class CommandBus:
     """Single-threaded command bus driving document history and geometry."""
 
@@ -84,6 +94,7 @@ class CommandBus:
         self._operation_undo: list[_Operation] = []
         self._operation_redo: list[_Operation] = []
         self._operation_revision = document.revision
+        self._save_checkpoints: dict[str, _SaveState] = {}
         self._recovery_failure: ReplayDuringRollbackError | None = None
         self._confirmation_secret = secrets.token_bytes(32)
         self._consumed_confirmation_nonces: set[str] = set()
@@ -117,6 +128,69 @@ class CommandBus:
             "Callable[..., ExecutedCommand]",
             getattr(document, "_replace_command_params"),  # noqa: B009
         )
+
+    def create_save_checkpoint(self) -> str:
+        """Retain document and runtime history behind a Bus-owned, one-use handle."""
+        self._ensure_healthy()
+        token = uuid4().hex
+        self._save_checkpoints[token] = _SaveState(
+            self._snapshot_state(),
+            copy.deepcopy(self._redo_stack),
+            copy.deepcopy(self._operation_undo),
+            copy.deepcopy(self._operation_redo),
+            self._document.revision,
+            self._operation_revision,
+        )
+        return token
+
+    def release_save_checkpoint(self, token: str) -> None:
+        """Accept the prepared edits after the file has been replaced."""
+        if self._save_checkpoints.pop(token, None) is None:
+            raise ValidationError("save checkpoint is invalid or already consumed")
+
+    def restore_save_checkpoint(self, token: str, *, expected_revision: int) -> None:
+        """Recover a failed save without overwriting edits made after preparation.
+
+        The caller serializes preparation and recovery and supplies the revision
+        observed at the end of its preparation, before delivering UI callbacks.
+        Recovery invalidates old proposal capabilities and advances revision;
+        restoring runtime history must not make stale grants valid again.
+        """
+        self._ensure_healthy()
+        state = self._save_checkpoints.get(token)
+        if state is None:
+            raise ValidationError("save checkpoint is invalid or already consumed")
+        if self._document.revision != expected_revision:
+            raise ValidationError("save recovery refused: document changed after preparation")
+        del self._save_checkpoints[token]
+        if (
+            self._snapshot_state() == state.document
+            and self._redo_stack == state.redo
+            and self._operation_undo == state.undo_operations
+            and self._operation_redo == state.redo_operations
+            and self._document.revision == state.revision
+        ):
+            return
+        self._document.events.begin_transaction()
+        try:
+            self._restore_state(state.document)
+            self._redo_stack = copy.deepcopy(state.redo)
+            self._rebuild()
+            self._restore_state(state.document)
+            self._operation_undo = copy.deepcopy(state.undo_operations)
+            self._operation_redo = copy.deepcopy(state.redo_operations)
+            self._advance_document_revision()
+            self._operation_revision = (
+                self._document.revision
+                if state.operation_revision == state.revision
+                else state.operation_revision
+            )
+            self._identity_upgrade_proposal = None
+            self._prepared_replay_proposals.clear()
+        except Exception as recovery:
+            self._document.events.discard_transaction()
+            self._poison(ValidationError("save failed"), recovery, "save checkpoint")
+        self._document.events.commit_transaction()
 
     def _operation_state(self) -> _OperationState:
         return _OperationState(
@@ -203,6 +277,36 @@ class CommandBus:
             self._operation_revision = self._document.revision
 
         self._restore_operation(operation.before, finish_undo)
+
+    def undo_operation_before_drawing_settings(self, identity: str, revision: int) -> None:
+        """Undo a runtime operation while retaining later 2D scalar settings and their audit data."""
+        self._ensure_healthy()
+        self._check_operation_revision()
+        if self._document.document_type != "drawing2d" or self._document.revision != revision:
+            raise InvalidHistoryError("document changed before drawing operation undo")
+        before = self._operation_state()
+        settings_ids = {"drawing.fillet_radius.set", "drawing.chamfer_values.set"}
+        for operation in reversed(self._operation_undo):
+            prior, after = operation.before.commands, operation.after.commands
+            if not after or after[-1].instance_id != identity:
+                continue
+            if before.commands[: len(after)] != after:
+                continue
+            tail = before.commands[len(after) :]
+            if (
+                not tail
+                or any(command.id not in settings_ids for command in tail)
+                or any(command.instance_id == identity for command in prior)
+            ):
+                break
+            restored = tuple(
+                replace(command, ordinal=index) for index, command in enumerate((*prior, *tail))
+            )
+            self._restore_operation(
+                _OperationState(restored, ()), lambda: self._record_operation(before)
+            )
+            return
+        raise InvalidHistoryError("drawing operation is no longer followed only by settings")
 
     def redo_operation(self) -> None:
         """Redo one runtime operation, preserving its original audit fields."""
@@ -303,18 +407,44 @@ class CommandBus:
 
         archive_version = self._document.archive_version
         identity_upgrade: IdentityUpgrade | None = None
-        if (changes.upgrade_to_v5 or changes.target_archive_version == 6) and archive_version < 5:
+        if (
+            changes.upgrade_to_v5 or changes.target_archive_version in (6, 7, 8)
+        ) and archive_version < 5:
             identity_upgrade = self.prepare_identity_upgrade()
             commands = [
                 replace(command, instance_id=identity)
                 for command, identity in zip(commands, identity_upgrade.active_ids, strict=True)
             ]
             archive_version = 5
-        if changes.target_archive_version == 6:
-            archive_version = 6
+        if changes.target_archive_version is not None:
+            archive_version = max(archive_version, changes.target_archive_version)
 
         for append in changes.appends:
             spec = self._registry.get(append.command_id, append.version)
+            if (
+                append.command_id.startswith("drawing.raster.")
+                or "raster_batch" in append.params
+                or "clipboard_styles" in append.params
+            ) and self._document.document_type != "drawing2d":
+                raise ValidationError("图纸图片只支持独立二维文档。")
+            if (
+                append.command_id
+                in {
+                    "drawing.fillet_radius.set",
+                    "drawing.chamfer_values.set",
+                    "drawing.dimension_styles.set",
+                }
+                and self._document.document_type != "drawing2d"
+            ):
+                raise ValidationError("二维图纸设置只支持独立二维文档。")
+            if (
+                append.command_id.startswith("drawing.array.")
+                or (
+                    append.command_id in ("sketch.create", "drawing.sketch.revise")
+                    and "associative_arrays" in append.params
+                )
+            ) and self._document.document_type != "drawing2d":
+                raise ValidationError("关联阵列目前只支持独立二维文档。")
             if spec.min_archive_version >= 5 and spec.min_archive_version > archive_version:
                 raise ValidationError("command requires an explicit compatible archive upgrade")
             if (
@@ -488,8 +618,8 @@ class CommandBus:
             self._document.archive_version,
             5 if identity_upgrade is not None else self._document.archive_version,
         )
-        if proposal.archive_version == 6:
-            expected_archive_version = 6
+        if proposal.archive_version in (6, 7, 8):
+            expected_archive_version = max(expected_archive_version, proposal.archive_version)
         for index, original in enumerate(source_commands):
             candidate = proposal.commands[index]
             if (
@@ -556,6 +686,8 @@ class CommandBus:
             file_id=self._document.file_id,
             migration_origin=self._document.migration_origin,
             reference_locations=self._document.reference_locations,
+            drawing_fillet_baseline=self._document.drawing_fillet_baseline,
+            drawing_chamfer_angle_baseline=self._document.drawing_chamfer_angle_baseline,
         )
         document_payload(archive_document)
         return identity_upgrade is not None
@@ -639,12 +771,15 @@ class CommandBus:
                         strict=True,
                     )
                 ]
-            if proposal.archive_version == 6 and self._document.archive_version < 6:
+            if (
+                proposal.archive_version in (6, 7, 8)
+                and self._document.archive_version < proposal.archive_version
+            ):
                 adopt_version = cast(
                     "Callable[[int], None]",
                     getattr(self._document, "_adopt_archive_version"),  # noqa: B009
                 )
-                adopt_version(6)
+                adopt_version(proposal.archive_version)
             if identity_upgrade:
                 operation_before = self._operation_state()
             if content_changed:
@@ -977,6 +1112,44 @@ class CommandBus:
 
         self._document.events.begin_transaction()
         try:
+            archive = params.get("archive")
+            upgraded = False
+            reference_version = (
+                cast("Mapping[str, object]", archive).get("version")
+                if isinstance(archive, Mapping)
+                else None
+            )
+            if (
+                command_id in ("reference.attach", "reference.update")
+                and type(reference_version) is int
+                and reference_version in (7, 8)
+                and self._document.archive_version < reference_version
+            ):
+                from mycad.core.document_references import DocumentReference
+
+                DocumentReference.from_mapping(params)
+                if self._document.archive_version < 5:
+                    identities = self.prepare_identity_upgrade()
+                    adopt_ids = cast(
+                        "Callable[[tuple[str, ...]], None]",
+                        getattr(self._document, "_adopt_command_identities"),  # noqa: B009
+                    )
+                    adopt_ids(identities.active_ids)
+                    self._redo_stack = [
+                        replace(command, instance_id=identity)
+                        for command, identity in zip(
+                            self._redo_stack, identities.redo_ids, strict=True
+                        )
+                    ]
+                adopt_version = cast(
+                    "Callable[[int], None]",
+                    getattr(self._document, "_adopt_archive_version"),  # noqa: B009
+                )
+                adopt_version(reference_version)
+                operation_before = self._operation_state()
+                handler_started = True
+                self._rebuild()
+                upgraded = True
             result = self._execute_one(
                 command_id,
                 params,
@@ -987,6 +1160,8 @@ class CommandBus:
             )
             self._redo_stack.clear()
             self._advance_document_revision()
+            if upgraded:
+                self._invalidate_operations()
             self._record_operation(operation_before)
             self._document.events.commit_transaction()
             return result
@@ -1019,7 +1194,38 @@ class CommandBus:
             version = 3
         if command_id == "sketch.constraint.update" and version is None:
             version = 1
+        if command_id == "drawing.sketch.revise" and version is None:
+            version = 3
+        if command_id == "drawing.tangency.add" and version is None:
+            version = 1
         spec = self._registry.get(command_id, version)
+        if (
+            record
+            and command_id.startswith("drawing.raster.")
+            or "raster_batch" in params
+            or "clipboard_styles" in params
+        ) and self._document.document_type != "drawing2d":
+            raise ValidationError("图纸图片只支持独立二维文档。")
+        if (
+            record
+            and command_id
+            in {
+                "drawing.fillet_radius.set",
+                "drawing.chamfer_values.set",
+                "drawing.dimension_styles.set",
+                "drawing.clipboard.prepare",
+            }
+            and self._document.document_type != "drawing2d"
+        ):
+            raise ValidationError("二维图纸设置只支持独立二维文档。")
+        if (
+            command_id.startswith("drawing.array.")
+            or (
+                command_id in ("sketch.create", "drawing.sketch.revise")
+                and "associative_arrays" in params
+            )
+        ) and self._document.document_type != "drawing2d":
+            raise ValidationError("关联阵列目前只支持独立二维文档。")
         if (
             spec.min_archive_version >= 5
             and spec.min_archive_version > self._document.archive_version
@@ -1052,7 +1258,7 @@ class CommandBus:
             raise ValidationError("bound face holes require explicit archive v5 identity upgrade")
         if is_bound_hole(command_id, normalized):
             validate_hole_binding(
-                normalized, ordinal=len(self._document.commands) if record else None
+                normalized, ordinal=self._document.command_count if record else None
             )
         if command_id in ("reference.attach", "reference.update"):
             from mycad.core.document_references import DocumentReference, validate_reference_tree
@@ -1083,7 +1289,7 @@ class CommandBus:
                 raise TopologyReferenceError(
                     exc.message,
                     command_id=command_id,
-                    ordinal=len(self._document.commands),
+                    ordinal=self._document.command_count,
                     reason=exc.reason,
                     parameter_path=exc.parameter_path,
                 ) from exc
@@ -1094,7 +1300,7 @@ class CommandBus:
                     id=command_id,
                     version=spec.version,
                     params=dict(normalized),
-                    ordinal=len(self._document.commands),
+                    ordinal=self._document.command_count,
                     timestamp_utc=datetime.now(UTC).isoformat(),
                     confirmed_by=confirmed_by,
                     instance_id=instance_id,
@@ -1105,7 +1311,7 @@ class CommandBus:
                 {
                     "command_id": command_id,
                     "command_version": spec.version,
-                    "ordinal": len(self._document.commands) - 1,
+                    "ordinal": self._document.command_count - 1,
                 },
             )
         return result
@@ -1162,9 +1368,22 @@ class CommandBus:
             self._restore_and_rebuild(document_snapshot, redo_snapshot, original, "redo")
             raise
 
+    def _reset_kernel(self) -> None:
+        self._kernel.reset()
+        if self._document.archive_version >= 7 and self._document.document_type == "drawing2d":
+            if not isinstance(self._kernel, DrawingBaselineKernel):
+                raise ValidationError("kernel does not support drawing baseline replay")
+            self._kernel.set_drawing_fillet_baseline(self._document.drawing_fillet_baseline)
+        if self._document.archive_version >= 8 and self._document.document_type == "drawing2d":
+            if not isinstance(self._kernel, ChamferBaselineKernel):
+                raise ValidationError("kernel does not support chamfer baseline replay")
+            self._kernel.set_drawing_chamfer_angle_baseline(
+                self._document.drawing_chamfer_angle_baseline
+            )
+
     def _rebuild(self) -> None:
         """Reset the kernel, replay the history (record=False), notify once."""
-        self._kernel.reset()
+        self._reset_kernel()
         for cmd in self._document.commands:
             try:
                 self._execute_one(
@@ -1198,7 +1417,7 @@ class CommandBus:
     def replay_for_candidate(self) -> ReplayFailure | None:
         """Replay a detached candidate and return its first structured failure."""
         self._ensure_healthy()
-        self._kernel.reset()
+        self._reset_kernel()
         last_successful_ordinal: int | None = None
         for command in self._document.commands:
             try:

@@ -42,6 +42,8 @@ from mycad.core.schema_v3 import ARCHIVE_VERSION_V3, validate_archive_v3
 from mycad.core.schema_v4 import ARCHIVE_VERSION_V4
 from mycad.core.schema_v5 import ARCHIVE_VERSION_V5
 from mycad.core.schema_v6 import ARCHIVE_VERSION_V6
+from mycad.core.schema_v7 import ARCHIVE_VERSION_V7
+from mycad.core.schema_v8 import ARCHIVE_VERSION_V8
 from mycad.core.selectors import EdgeSelector, FaceSelector
 
 if TYPE_CHECKING:
@@ -221,6 +223,8 @@ def document_payload(
         ARCHIVE_VERSION_V4,
         ARCHIVE_VERSION_V5,
         ARCHIVE_VERSION_V6,
+        ARCHIVE_VERSION_V7,
+        ARCHIVE_VERSION_V8,
     ):
         provenance = _capture_provenance(
             plugin_identities or {}, cast("list[dict[str, object]]", payload["commands"])
@@ -245,6 +249,12 @@ def document_payload(
                 document_kind=document.document_kind,
             )
             payload["document_type"] = document.document_type
+            if document.archive_version >= 7 and document.document_type == "drawing2d":
+                payload["drawing_defaults"] = {"fillet_radius": document.drawing_fillet_baseline}
+                if document.archive_version >= 8:
+                    cast("dict[str, object]", payload["drawing_defaults"])["chamfer_angle"] = (
+                        document.drawing_chamfer_angle_baseline
+                    )
             if document.migration_origin is not None:
                 payload["migration_origin"] = document.migration_origin
             payload["reference_locations"] = document.reference_locations
@@ -253,7 +263,7 @@ def document_payload(
         raise ArchiveVersionError(
             f"document archive version {document.archive_version} is not supported",
             found=str(document.archive_version),
-            supported=ARCHIVE_VERSION_V6,
+            supported=ARCHIVE_VERSION_V8,
         )
     return payload
 
@@ -381,6 +391,8 @@ def _build_document(
     file_id: str | None = None,
     migration_origin: Mapping[str, object] | None = None,
     reference_locations: Mapping[str, str] | None = None,
+    drawing_fillet_baseline: float = 1.0,
+    drawing_chamfer_angle_baseline: float = 45.0,
 ) -> Document:
     """Construct the Document aggregate from a validated archive dict."""
     commands = [
@@ -411,6 +423,8 @@ def _build_document(
         file_id=file_id,
         migration_origin=migration_origin,
         reference_locations=reference_locations,
+        drawing_fillet_baseline=drawing_fillet_baseline,
+        drawing_chamfer_angle_baseline=drawing_chamfer_angle_baseline,
     )
 
 
@@ -471,12 +485,14 @@ def load_document_payload(
             ARCHIVE_VERSION_V4,
             ARCHIVE_VERSION_V5,
             ARCHIVE_VERSION_V6,
+            ARCHIVE_VERSION_V7,
+            ARCHIVE_VERSION_V8,
         )
     ):
         raise ArchiveVersionError(
-            f"archive version {version!r} is not supported (supported: 1, 2, 3, 4, 5, 6)",
+            f"archive version {version!r} is not supported (supported: 1, 2, 3, 4, 5, 6, 7, 8)",
             found=str(version),
-            supported=ARCHIVE_VERSION_V6,
+            supported=ARCHIVE_VERSION_V8,
         )
     archive_version = cast("int", version)
     document_type: DocumentType = "part"
@@ -504,6 +520,7 @@ def load_document_payload(
                 "file_id",
                 "migration_origin",
                 "reference_locations",
+                "drawing_defaults",
             )
         }
         replay_data["version"] = ARCHIVE_VERSION
@@ -518,6 +535,20 @@ def load_document_payload(
         file_id=cast("str | None", root.get("file_id")),
         migration_origin=cast("Mapping[str, object] | None", root.get("migration_origin")),
         reference_locations=cast("Mapping[str, str] | None", root.get("reference_locations")),
+        drawing_fillet_baseline=float(
+            cast(
+                "int | float", cast("dict[str, object]", root["drawing_defaults"])["fillet_radius"]
+            )
+        )
+        if archive_version >= 7 and document_type == "drawing2d"
+        else 1.0,
+        drawing_chamfer_angle_baseline=float(
+            cast(
+                "int | float", cast("dict[str, object]", root["drawing_defaults"])["chamfer_angle"]
+            )
+        )
+        if archive_version >= 8 and document_type == "drawing2d"
+        else 45.0,
     )
     bus = CommandBus(document, registry, kernel, handlers)
     # Spec-mandated one-shot rebuild on open; the getattr bridge mirrors

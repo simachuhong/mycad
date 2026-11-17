@@ -10,7 +10,7 @@
 | 零件空闲 | ST10 有序；同步另行记录 | [有序零件布局参考](reference-solidedge-st10-ordered-user.png)；[同步空闲及有序录像取样](st10-video-reference/observations.md) | [当前零件空闲](current-part-idle.png) | 同上 |
 | 选面 | ST10 有序；同步另行采集 | [有序录像取样](st10-video-reference/observations.md)，同步操作待采集 | [当前选面入口](current-part-select-plane.png) | 同上 |
 | 草图绘制/尺寸 | ST10 有序；同步另行采集 | [有序录像取样](st10-video-reference/observations.md)，同步操作待采集 | [当前草图工具](current-part-sketch.png)；历史探针见下 | 同上 |
-| 工程图 | ST10 Draft，不套用零件模式 | ST10 待采集；另有 [ST9 工程图录像取样](st9-video-reference/observations.md) | [当前工程图入口](current-engineering-start.png) | ST10 语言、缩放及图纸模板待核对；ST9 仅供独立参考 |
+| 工程图 | ST10 Draft，不套用零件模式 | 已有 [ST10 Draft 录像选段](st10-draft-video-reference/observations.md)；另有 [ST9 工程图录像取样](st9-video-reference/observations.md) | [当前工程图入口](current-engineering-start.png) | ST10 样本为英文，维护包、显示缩放待核对；ST9 单列为独立参考 |
 | 二维绘图 | AutoCAD 2023 或 2025 | [2025 启动页](reference-autocad2025-start-user.png)；[2023 录像取样](autocad-video-reference/observations.md) | [当前二维绘图](current-2d-drawing.png) | 更新号、系统缩放、输入法待核对 |
 | 二维修改 | AutoCAD 2023 或 2025 | [2023 录像取样](autocad-video-reference/observations.md) | [当前二维修改](current-2d-modify.png) | 同上 |
 
@@ -103,6 +103,18 @@
 
 用户随后提供本地 AutoCAD 录像，高清画面标题明确显示 `Autodesk AutoCAD 2023`，与原视频标题及文件名中的 2025 不一致。已按 2023 参考登记[取样观察](autocad-video-reference/observations.md)，不能用于证明 2025 特有行为；既有用户提供的 2025 启动页截图仍单独保留。
 
+2026-11-07 扩充该录像的本地时间码取样至 01:00、01:30、01:50、02:30、02:50，并在观察记录中关联 MyCAD 对应命令、测试与缺口。02:30 的 `CIRCLE` TTR（两切点加半径）尚无 MyCAD 等价圆命令；自动切点捕捉不是等价实现。此为选段取样，未完整观看录像，AutoCAD 实机对照和用户验收仍待完成。
+
 ## 2026-11-05 工程图旧入口测试复核
 
 原失败来自测试仍要求旧二维草稿窗口：当前零件草图在模型视口使用 `PartSketchWorkbench`。测试已改为检查点击入口后进入模型环境并启动该工作台，退出后可返回工程图；`tests/ui/test_drawing_start.py` 在 Xvfb/xcb、软件 OpenGL 下 3 项通过。此结果只验证当前产品路由，未替代 U10 对独立工程图来源流程的验收，也未完成 ST10 实机对照。
+
+2026-11-07 ST10/ST9 模式核对：重核本地 ST10 录像在 00:10 的同步空闲、00:15 模式选项和 00:17 有序标题/树，新增裁剪帧；将当前登记的 ST10 后续草图、尺寸、孔及阵列样本逐项与 MyCAD 代码、自动测试和人工证据状态对应。ST9 V01–V09 仍单独作为同步模式参考，V10/V11 为 Draft；没有将它们标成 ST10 证据。详情见 [ST10/ST9 对照矩阵](st10-st9-crosscheck.md)。完整视频复核、同步操作实机对照和用户验收未完成。
+
+2026-11-07 独立二维动作补充盘点：依据当前工作区源码，记录工具栏、命令栏、参数页、尺寸及状态控件的入口、守卫、关联测试和已知边界，见[独立二维动作清单](u00-drawing2d-actions-2026-11-07.md)。该清单只覆盖独立二维；公共、插件、零件草图和工程图动作仍须分别核对，U00 保持未完成。
+
+2026-11-07 工程图动作补充盘点：将 ST9 V10/V11 Draft 的入口、视图布局、尺寸、来源变更和更新反馈按本地录像时间码映射到 MyCAD 工作台、自动测试及功能差异，见[工程图动作盘点](u00-drawing-actions-2026-11-07.md)。ST9 片段只作 Draft 参考；ST10 Draft 来源片段、同条件实机对照和用户验收待办保持开放，U00 未完成。
+
+2026-11-07 ST10 全片候选筛查：对 714.31 秒本地录屏以 10 秒为步长抽帧检查工作区标题/功能区，样本显示同步空闲、Sketch 与 Ordered Part，未见 Draft；此结果是取样筛查，完整逐段观看及 ST10 实机对照仍待完成。筛查边界见[ST10 观察记录](st10-video-reference/observations.md)。
+
+2026-11-07 后续：用户新增 Draft 视频目录。01 号录像标题明确显示 ST10 Draft，已有新建/图纸设置、模型选择、视图、标注和视图过期警告的时间码与 MyCAD 映射；同目录亦有 2019、2021、2024 画面，按实际版本分列。见 [ST10 Draft 观察及清单](st10-draft-video-reference/observations.md)。此前 714.31 秒筛查结论仅指旧的零件录屏；同条件实机对照与用户验收仍待完成，U00 未完成。

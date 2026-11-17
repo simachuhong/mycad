@@ -22,14 +22,33 @@ BUILTIN_IDS: list[str] = [
     "drawing.annotation.create",
     "drawing.annotation.delete",
     "drawing.annotation.update",
+    "drawing.array.add",
+    "drawing.array.batch_override",
+    "drawing.array.erase",
+    "drawing.array.move",
+    "drawing.array.offset",
+    "drawing.array.remove",
+    "drawing.array.replace",
+    "drawing.array.reset",
+    "drawing.array.resize",
+    "drawing.array.rotate",
+    "drawing.array.update",
+    "drawing.chamfer_values.set",
+    "drawing.fillet_radius.set",
     "drawing.layers.set",
     "drawing.note.create",
     "drawing.note.delete",
     "drawing.note.update",
+    "drawing.raster.add",
+    "drawing.raster.batch",
+    "drawing.raster.remove",
+    "drawing.raster.update",
     "drawing.sheet.create",
     "drawing.sheet.delete",
     "drawing.sheet.update",
     "drawing.sketch.revise",
+    "drawing.tangency.add",
+    "drawing.tangency.remove",
     "drawing.view.create",
     "drawing.view.delete",
     "drawing.view.update",
@@ -95,11 +114,13 @@ def test_new_document_returns_fresh_loaded_document() -> None:
     assert loaded.document.commands == ()
 
 
-def test_new_independent_drawing_has_explicit_v3_identity() -> None:
+def test_new_independent_drawing_has_explicit_v8_identity() -> None:
     services = build_app(discoverers=[])
     loaded = new_document(services, document_type="drawing2d")
     assert loaded.document.document_type == "drawing2d"
-    assert loaded.document.archive_version == 3
+    assert loaded.document.document_kind == "drawing"
+    assert loaded.document.archive_version == 8
+    assert loaded.document.drawing_fillet_baseline == 0
     assert loaded.document.commands == ()
     assert services.kernel.mass_properties().solid_count == 0
 

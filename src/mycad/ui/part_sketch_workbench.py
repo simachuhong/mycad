@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from mycad import app
 from mycad.core.exceptions import MycadError
 from mycad.core.part_sketch_session import PartSketchEditSession
+from mycad.core.polyline_curves import polyline_sampled_points
 from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet
 from mycad.core.sketch import (
     ArcEntity,
@@ -1455,9 +1456,7 @@ class PartSketchWorkbench(QDialog):
                 u2, v2 = entity.opposite_corner_mm
                 points = ((u1, v1), (u2, v1), (u2, v2), (u1, v2), (u1, v1))
             elif isinstance(entity, PolylineEntity):
-                points = (
-                    (*entity.points_mm, entity.points_mm[0]) if entity.closed else entity.points_mm
-                )
+                points = polyline_sampled_points(entity)
             elif isinstance(entity, SplineEntity):
                 points = entity.sampled_points()
             else:
@@ -2061,8 +2060,44 @@ class PartSketchWorkbench(QDialog):
     def _parameters(self, sketch: Sketch) -> tuple[int, dict[str, object]]:
         params = sketch.to_state_mapping()
         has_points = any(isinstance(entity, PointEntity) for entity in sketch.entities)
+        has_curves = any(
+            isinstance(entity, PolylineEntity) and entity.bulges for entity in sketch.entities
+        )
+        has_relations = any(
+            item.kind in ("parallel", "perpendicular", "concentric", "equal", "fixed")
+            or (
+                item.source == "user"
+                and item.kind in ("horizontal", "vertical", "coincident", "tangent")
+            )
+            for item in sketch.constraints
+        )
+        has_tangency = any(item.kind == "tangent" for item in sketch.constraints)
+        has_endpoints = any(
+            item.first_endpoint or item.second_endpoint for item in sketch.constraints
+        )
+        has_text = any(item.text_override is not None for item in sketch.constraints)
+        has_style = any(item.style_name is not None for item in sketch.constraints)
+        has_axis = any(item.projection_axis is not None for item in sketch.constraints)
         if self._support is None:
-            return (5 if has_points else 3), params
+            return (
+                32
+                if has_style
+                else 30
+                if has_text
+                else 28
+                if has_axis
+                else 13
+                if has_endpoints
+                else 9
+                if has_relations
+                else 8
+                if has_curves
+                else 6
+                if has_tangency
+                else 5
+                if has_points
+                else 3
+            ), params
         params.pop("frame")
         params["support"] = {
             "plane": self._support.to_mapping(),
@@ -2070,7 +2105,25 @@ class PartSketchWorkbench(QDialog):
             "rotation_deg": 0,
             "flip_normal": False,
         }
-        return (5 if has_points else 4), params
+        return (
+            32
+            if has_style
+            else 30
+            if has_text
+            else 28
+            if has_axis
+            else 13
+            if has_endpoints
+            else 9
+            if has_relations
+            else 8
+            if has_curves
+            else 6
+            if has_tangency
+            else 5
+            if has_points
+            else 4
+        ), params
 
     def preview(self) -> None:
         """Replay the draft in an isolated candidate without writing the document."""
@@ -2140,7 +2193,20 @@ class PartSketchWorkbench(QDialog):
                 commands.append(
                     ReplayAppend(
                         "sketch.revise",
-                        2
+                        8
+                        if any(c.style_name is not None for c in after.constraints)
+                        else 7
+                        if any(c.text_override is not None for c in after.constraints)
+                        else 5
+                        if any(c.projection_axis is not None for c in after.constraints)
+                        else 4
+                        if any(c.first_endpoint or c.second_endpoint for c in after.constraints)
+                        else 3
+                        if any(
+                            isinstance(entity, PolylineEntity) and entity.bulges
+                            for entity in after.entities
+                        )
+                        else 2
                         if any(isinstance(entity, PointEntity) for entity in after.entities)
                         else 1,
                         {
@@ -2161,7 +2227,13 @@ class PartSketchWorkbench(QDialog):
                 commands.append(
                     ReplayAppend(
                         "sketch.constraint.update" if updating else "sketch.constraint.add",
-                        2 if updating else 4,
+                        (6 if updating else 8)
+                        if constraint.style_name is not None
+                        else (5 if updating else 7)
+                        if constraint.text_override is not None
+                        else (4 if updating else 6)
+                        if constraint.projection_axis is not None
+                        else (2 if updating else 4),
                         solved.command_params(before, constraint, local_frame=True),
                         "local",
                     )

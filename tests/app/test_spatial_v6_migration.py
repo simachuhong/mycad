@@ -68,7 +68,7 @@ def test_v6_candidate_rejects_invalid_target_and_source_change() -> None:
     candidate = app.create_replay_candidate(services, loaded, session_identity=2)
     with pytest.raises(ValidationError):
         candidate.stage(
-            ReplayChangeSet((), (), False, target_archive_version=7), current_session_identity=2
+            ReplayChangeSet((), (), False, target_archive_version=9), current_session_identity=2
         )
     candidate.stage(
         ReplayChangeSet((), (), False, target_archive_version=6), current_session_identity=2

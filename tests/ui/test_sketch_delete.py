@@ -52,6 +52,31 @@ def test_delete_selected_geometry_and_dependencies_is_one_undo(qtbot: QtBot) -> 
     assert canvas.entities == [second]
 
 
+def test_main_window_ctrl_y_redoes_document_operation(qtbot: QtBot) -> None:
+    from mycad.app import build_app, new_document
+    from mycad.ui.main_window import MainWindow
+
+    services = build_app(discoverers=[])
+    loaded = new_document(services)
+    loaded.bus.execute("feature.box", {"size_x": 4, "size_y": 4, "size_z": 4})
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.bind_document(loaded)
+    window.show()
+    qtbot.waitExposed(window)
+    window.activateWindow()
+    window.setFocus()
+    qtbot.waitUntil(window.isActiveWindow, timeout=10000)
+    unit = window.execution_unit
+    assert unit is not None
+    assert window.act_undo.isEnabled()
+    QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    qtbot.waitUntil(lambda: not loaded.document.commands and not unit.is_busy, timeout=30000)
+    QTest.keyClick(window, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    qtbot.waitUntil(lambda: len(loaded.document.commands) == 1 and not unit.is_busy, timeout=30000)
+    assert loaded.document.commands[0].id == "feature.box"
+
+
 def test_delete_locked_selection_is_atomic_and_empty_selection_is_noop(qtbot: QtBot) -> None:
     editor = SketchEditorDialog()
     qtbot.addWidget(editor)
@@ -106,7 +131,8 @@ def test_delete_navigation_constraint_keeps_its_highlighted_geometry(qtbot: QtBo
     editor.navigator.selection_requested.emit(
         frozenset[str](), frozenset({dimension.constraint_id})
     )
-    assert canvas.selected_entity_ids == {line.entity_id}
+    assert not canvas.selected_entity_ids
+    assert canvas.selected_constraint_ids == {dimension.constraint_id}
     QTest.keyClick(canvas, Qt.Key.Key_Delete)
     assert canvas.entities == [line]
     assert not canvas.constraints

@@ -1,0 +1,633 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-12T08:43:33.888270+00:00",
+      "confirmed_by": "local",
+      "instance_id": "9c00445b41a74bc7a82365aa209d1d94"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-12T08:43:41.494541+00:00",
+      "confirmed_by": "local",
+      "instance_id": "90f064f0861d40fea6d7930233239747"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-12T08:43:50.091906+00:00",
+      "confirmed_by": "local",
+      "instance_id": "68c8ffdc59d64ffcaff2b2edf25809a0"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false,
+            "frozen": true
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-12T08:44:35.050775+00:00",
+      "confirmed_by": "local",
+      "instance_id": "340988b3c23b45669d7888eb5b1a0040"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-12T08:44:40.073165+00:00",
+      "confirmed_by": "local",
+      "instance_id": "03ab00b78a2041e6b244e6747815b2d2"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": true
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 5,
+      "timestamp_utc": "2026-11-12T08:44:58.785642+00:00",
+      "confirmed_by": "local",
+      "instance_id": "ce0a1fe162e748fda616d007ab2c58e5"
+    },
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "5125d696be1945339877b28a9f3154d1",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": true
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "a1f68118fe5f4bcd9e492c7b45bb509f",
+            "construction": false,
+            "layer_name": "1",
+            "kind": "line",
+            "start_mm": [
+              -51.1,
+              30.3
+            ],
+            "end_mm": [
+              -71.3,
+              -5.9
+            ]
+          },
+          {
+            "entity_id": "3d8b7c29f6a14458b415e84d8d7ef226",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "circle",
+            "center_mm": [
+              -30.9,
+              3.8999999999999986
+            ],
+            "radius_mm": 16.086018774078315
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 6,
+      "timestamp_utc": "2026-11-12T08:46:06.232606+00:00",
+      "confirmed_by": "local",
+      "instance_id": "91c873ff502f4d4893bbfedf615681f1"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 7,
+      "timestamp_utc": "2026-11-12T08:46:57.354711+00:00",
+      "confirmed_by": "local",
+      "instance_id": "0d3d51f5d9b54ec49187175766dc0d29"
+    },
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false,
+            "frozen": true
+          }
+        ],
+        "dimension_layer": "DIM",
+        "assignments": []
+      },
+      "ordinal": 8,
+      "timestamp_utc": "2026-11-12T08:46:58.019261+00:00",
+      "confirmed_by": "local",
+      "instance_id": "7eaf10ba448141d0a34d827c061038e5"
+    },
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "6beae4ae85534acf87318515fb8b7759",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "1",
+            "color_rgb": [
+              255,
+              0,
+              0
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.35,
+            "visible": true,
+            "locked": false,
+            "frozen": true
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "35785622a11646078c3207a11ec35737",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              -78.5,
+              23.7
+            ],
+            "end_mm": [
+              -57.7,
+              5.5
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 9,
+      "timestamp_utc": "2026-11-12T08:49:33.564730+00:00",
+      "confirmed_by": "local",
+      "instance_id": "ab692ee53bd24c67aa57d9b7cffcc639"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "ca5cd9b6697442d6bbb2d3e9e97ead34",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}
