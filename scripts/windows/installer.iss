@@ -1,5 +1,8 @@
 ﻿; SPDX-FileCopyrightText: 2026 MyCAD contributors
 ; SPDX-License-Identifier: Apache-2.0
+#if VER < EncodeVer(6,5,0)
+  #error Inno Setup compiler engine 6.5 or newer is required
+#endif
 #ifndef SourceDir
   #error SourceDir must be the absolute PyInstaller output directory
 #endif
