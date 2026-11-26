@@ -9,7 +9,7 @@
 构建机需安装 [Git for Windows](https://gitforwindows.org/)、
 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和
 [Inno Setup 6.5+](https://jrsoftware.org/inno-setup/downloads)。
-Inno Setup 应包含 `Languages\ChineseSimplified.isl`；脚本会检查。
+简体中文翻译文件随项目提供，不依赖编译器安装时是否勾选额外语言。
 构建需要网络下载 Python 和锁定依赖；安装包使用者不需要安装这些开发工具。
 
 将当前交付的完整仓库放到 Windows，例如 `D:\projects\MyCAD`，

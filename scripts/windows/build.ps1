@@ -31,9 +31,6 @@ $IsccPath = (Resolve-Path -LiteralPath $IsccPath).Path
 $CompilerVersion = (Get-Item -LiteralPath $IsccPath).VersionInfo.FileVersion
 # ISCC.exe's file resource is not the compiler-engine version. The .iss file
 # checks the authoritative VER preprocessor constant when compilation starts.
-if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $IsccPath) 'Languages/ChineseSimplified.isl'))) {
-    throw 'Install Inno Setup 6.5+ with its bundled Simplified Chinese translation.'
-}
 if ($IconPath) { $IconPath = (Resolve-Path -LiteralPath $IconPath).Path }
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $BuildRoot = Join-Path $RepoRoot ".mycad-dist/windows/$Stamp-r$Revision"
@@ -41,6 +38,7 @@ New-Item -ItemType Directory -Path $BuildRoot -Force | Out-Null
 $NativeLog = Join-Path $BuildRoot 'commands.log'
 Start-Transcript -LiteralPath (Join-Path $BuildRoot 'build.log') | Out-Null
 Write-Host "ISCC file resource (informational): $CompilerVersion; PowerShell: $($PSVersionTable.PSVersion)"
+Write-Host "Compiler path: $IsccPath"
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)

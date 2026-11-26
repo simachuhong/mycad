@@ -18,3 +18,11 @@ Verified archive SHA256:
 
 These supplement the license files collected from installed distributions.
 See the application's NOTICE for component attribution and native-library terms.
+
+The installer translation `../ChineseSimplified.isl` was obtained from the
+official Inno Setup translations page and retained with its maintainer credits:
+https://raw.githubusercontent.com/jrsoftware/issrc/refs/heads/main/Files/Languages/ChineseSimplified.isl
+
+Downloaded file SHA256:
+`e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d`.
+`Inno-Setup-LICENSE.txt` preserves the upstream Inno Setup license.
