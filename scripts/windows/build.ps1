@@ -16,9 +16,16 @@ $RepoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 Get-Command uv -ErrorAction Stop | Out-Null
 Get-Command git -ErrorAction Stop | Out-Null
 if (-not $IsccPath) {
-    $Candidate = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
-    if (Test-Path -LiteralPath $Candidate) { $IsccPath = $Candidate }
-    else { $IsccPath = (Get-Command ISCC.exe -ErrorAction Stop).Source }
+    # Newer Inno versions install in native Program Files; hosted runners can
+    # retain an older x86 compiler as well. Prefer the current native install.
+    foreach ($BasePath in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        $Candidate = Join-Path $BasePath 'Inno Setup 6/ISCC.exe'
+        if (Test-Path -LiteralPath $Candidate) {
+            $IsccPath = $Candidate
+            break
+        }
+    }
+    if (-not $IsccPath) { $IsccPath = (Get-Command ISCC.exe -ErrorAction Stop).Source }
 }
 $IsccPath = (Resolve-Path -LiteralPath $IsccPath).Path
 $CompilerVersion = (Get-Item -LiteralPath $IsccPath).VersionInfo.FileVersion
