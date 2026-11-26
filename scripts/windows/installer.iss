@@ -27,7 +27,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir={#OutputDir}
 OutputBaseFilename=MyCAD-{#AppVersion}-x64-Setup
-Compression=lzma2
+Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
 #ifdef IconPath

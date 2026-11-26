@@ -16,6 +16,9 @@ from PyInstaller.utils.hooks import (
 build_root = Path(os.environ['MYCAD_BUILD_ROOT'])
 root = Path(SPECPATH).resolve().parents[1]
 datas = collect_data_files('mycad')
+# build123d registers bundled fonts during import; ezdxf also reads package data.
+datas += collect_data_files('build123d')
+datas += collect_data_files('ezdxf')
 binaries = []
 hidden = collect_submodules('mycad')
 for package in ('OCP', 'planegcs', 'cadquery_ocp_proxy'):
