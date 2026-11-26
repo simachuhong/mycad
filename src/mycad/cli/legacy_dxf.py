@@ -50,15 +50,21 @@ def legacy_layout_snapshot(
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
     env["PYTHONIOENCODING"] = "utf-8"
+    command = (
+        [str(Path(sys.executable).with_name("MyCAD-cli.exe")), "--legacy-layout"]
+        if getattr(sys, "frozen", False)
+        else [sys.executable, "-m", "mycad.ui.legacy_frame_export"]
+    )
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "mycad.ui.legacy_frame_export"],
+            command,
             input=json.dumps(request, ensure_ascii=False),
             encoding="utf-8",
             capture_output=True,
             timeout=30,
             env=env,
             check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
     except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
         raise ValidationError(f"{subject}字体布局进程不可用或超时，DXF 未导出。") from exc

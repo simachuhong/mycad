@@ -1,0 +1,3 @@
+# Kept outside the application's runtime dependency lock.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10

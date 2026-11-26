@@ -1,0 +1,49 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [codex/windows-preview]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - name: Install current Inno Setup
+        shell: pwsh
+        run: |
+          choco upgrade innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+      - name: Build Windows x64 preview
+        shell: pwsh
+        run: ./scripts/windows/build.ps1 -Revision 1
+      - name: Exercise installed application and uninstall
+        shell: pwsh
+        run: ./scripts/windows/smoke.ps1
+      - name: Upload installer and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyCAD-Windows-x64-alpha1
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .mycad-dist/windows/*/MyCAD-*-x64-Setup.exe
+            .mycad-dist/windows/*/SHA256SUMS
+            .mycad-dist/windows/*/build-info.json
+            .mycad-dist/windows/*/build-environment.txt
+            .mycad-dist/windows/*/build.log
+            .mycad-dist/windows/*/commands.log
+            .mycad-dist/windows/*/FAILED.txt
+            .mycad-dist/windows/*/smoke/**
+            docs/windows-installer-testing.md

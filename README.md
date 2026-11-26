@@ -105,6 +105,10 @@ DXF/STEP 的目标 AutoCAD/Solid Edge 实机显示、字体、设备交互和平
 
 ## 快速开始：三条命令跑通法兰
 
+Windows 测试安装包的本机构建、安装/卸载日志和升级验收步骤见
+[Windows 安装包测试指南](docs/windows-installer-testing.md)。当前脚本与配置已准备，
+Windows 编译和实机验收仍待执行，尚无已发布安装包。
+
 ```bash
 uv sync
 uv run mycad run examples/flange_script.txt
