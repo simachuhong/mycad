@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.536" timestamp="2026-11-17T12:57:19.634561+08:00" hostname="MyLaptop"><testcase classname="tests.formats.test_dxf_text_exchange" name="test_native_shx_style_import_reports_unavailable_glyphs" time="0.028" /></testsuite></testsuites>

@@ -10,6 +10,11 @@ def dimension_text(constraint: SketchConstraint) -> str:
     if constraint.value is None:
         return ""
     number = f"{constraint.value:.{constraint.precision}f}"
+    return dimension_text_with_number(constraint, number)
+
+
+def dimension_text_with_number(constraint: SketchConstraint, number: str) -> str:
+    """Apply the dimension's prefix, suffix and override to an already formatted value."""
     if constraint.text_override is not None:
         return constraint.text_override.replace("<>", number)
     suffix = "°" if constraint.kind == "angle" else " mm"

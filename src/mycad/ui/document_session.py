@@ -61,6 +61,15 @@ class SessionDocument:
             self.draft.canvas.entities
             or self.draft.canvas.has_pending_geometry
             or self.draft.canvas.mixed_move is not None
+            or (self.draft.canvas.text_tools is not None and self.draft.canvas.text_tools.pending)
+            or (
+                self.draft.canvas.geometric_tolerance_tools is not None
+                and self.draft.canvas.geometric_tolerance_tools.pending
+            )
+            or (
+                self.draft.canvas.collection_session is not None
+                and self.draft.canvas.collection_session.has_staged_operations
+            )
         )
 
     @property

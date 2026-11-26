@@ -1,0 +1,24 @@
+...................F.                                                    [100%]
+=================================== FAILURES ===================================
+___________ test_native_shx_style_import_reports_unavailable_glyphs ____________
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-751/test_native_shx_style_import_r0')
+
+    def test_native_shx_style_import_reports_unavailable_glyphs(tmp_path: Path) -> None:
+        style = TextStyle("shx", "SHX", font_file="simplex.shx")
+        text = DrawingText(uuid4().hex, "ABC", (0, 0), style_id="shx")
+        path = tmp_path / "shx.dxf"
+        exported = write_sketches_dxf(
+            (), path, texts=(text,), text_styles=TextStyleTable((style,), "shx")
+        )
+        assert any("SHX" in warning for warning in exported.warnings)
+        imported = read_sketch_dxf(path)
+        assert imported.texts[0].text == "ABC"
+>       assert any("SHX" in warning for warning in imported.report.warnings)
+E       assert False
+E        +  where False = any(<generator object test_native_shx_style_import_reports_unavailable_glyphs.<locals>.<genexpr> at 0x7db6a61ea330>)
+
+tests/formats/test_dxf_text_exchange.py:339: AssertionError
+=========================== short test summary info ============================
+FAILED tests/formats/test_dxf_text_exchange.py::test_native_shx_style_import_reports_unavailable_glyphs
+1 failed, 20 passed, 18 deselected in 3.12s

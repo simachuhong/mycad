@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from copy import copy
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -157,6 +158,58 @@ def make_bus() -> tuple[CommandBus, Document, FakeKernel]:
     reg, handlers, fake = make_assembly()
     doc = Document(reg)
     return CommandBus(doc, reg, fake, handlers), doc, fake
+
+
+def test_versioned_datum_guard_receives_recorded_version_on_submit_and_history_edit() -> None:
+    class GuardKernel(FakeKernel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.guarded: list[tuple[str, int]] = []
+
+        def validate_datum_revision(self, command_id: str, params: Mapping[str, object]) -> None:
+            raise AssertionError("versioned guard should be used")
+
+        def validate_datum_revision_versioned(
+            self, command_id: str, params: Mapping[str, object], version: int
+        ) -> None:
+            self.guarded.append((command_id, version))
+
+    reg, _, _ = make_assembly()
+    reg.register(replace(reg.get("demo.a", 1), version=2))
+    kernel = GuardKernel()
+    doc = Document(reg)
+    versioned_handlers: dict[tuple[str, int], CommandHandler] = {
+        ("demo.a", 2): EchoHandler("demo.a")
+    }
+    bus = CommandBus(doc, reg, kernel, versioned_handlers)
+    bus.execute("demo.a", {}, "test", version=2)
+    assert kernel.guarded == [("demo.a", 2)]
+    kernel.guarded.clear()
+    bus.edit_and_replay(0, {}, "test", "verify version")
+    assert ("demo.a", 2) in kernel.guarded
+    kernel.guarded.clear()
+    assert bus.replay_for_candidate(guard_from_ordinal=0) is None
+    assert kernel.guarded == [("demo.a", 2)]
+
+
+def test_legacy_datum_guard_remains_compatible() -> None:
+    class LegacyGuardKernel(FakeKernel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.guarded: list[str] = []
+
+        def validate_datum_revision(self, command_id: str, params: Mapping[str, object]) -> None:
+            self.guarded.append(command_id)
+
+    reg, handlers, _ = make_assembly()
+    kernel = LegacyGuardKernel()
+    doc = Document(reg)
+    bus = CommandBus(doc, reg, kernel, handlers)
+    bus.execute("demo.a", {}, "test")
+    assert kernel.guarded == ["demo.a"]
+    kernel.guarded.clear()
+    bus.edit_and_replay(0, {}, "test", "verify legacy guard")
+    assert "demo.a" in kernel.guarded
 
 
 def redo_stack(bus: CommandBus) -> list[ExecutedCommand]:

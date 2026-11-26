@@ -179,6 +179,52 @@ def test_clipboard_unrepresentable_preview_preserves_draft(qtbot: QtBot) -> None
     assert not editor.canvas.clipboard_paste_active and editor.canvas.entities == [existing]
 
 
+@pytest.mark.parametrize("mixed", [False, True])
+def test_legacy_clipboard_pastes_ellipse_from_center(qtbot: QtBot, mixed: bool) -> None:
+    from PySide6.QtCore import QByteArray, QMimeData
+    from PySide6.QtGui import QImage
+
+    from mycad.core.drawing_raster import DrawingRaster
+    from mycad.core.sketch import EllipseEntity
+    from mycad.ui.drawing_clipboard import (
+        DRAWING_CLIPBOARD_MIME,
+        DRAWING_MIXED_CLIPBOARD_MIME,
+        encode_mixed_clipboard,
+        raster_from_clipboard_image,
+    )
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    ellipse = EllipseEntity(uuid4().hex, (2, 3), 4, 2)
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (ellipse,))
+    mime = QMimeData()
+    pasted: list[tuple[Sketch, tuple[DrawingRaster, ...]]] = []
+    if mixed:
+        image = QImage(2, 2, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.red)
+        raster = raster_from_clipboard_image(image, "0", None)
+        mime.setData(
+            DRAWING_MIXED_CLIPBOARD_MIME, QByteArray(encode_mixed_clipboard(sketch, (raster,)))
+        )
+        editor.canvas.commit_mixed_clipboard = lambda data, images, _styles, _fonts: pasted.append(
+            (data, images)
+        )
+    else:
+        mime.setData(DRAWING_CLIPBOARD_MIME, QByteArray(encode_drawing_clipboard(sketch)))
+    QApplication.clipboard().setMimeData(mime)
+    assert editor.canvas.begin_clipboard_paste()
+    editor.canvas.add_coordinate_point((10, 11), exact_point=True)
+    if mixed:
+        assert len(pasted) == 1
+        result = pasted[0][0].entities[0]
+        assert pasted[0][1][0].origin_mm == pytest.approx((8, 8))
+    else:
+        assert len(editor.canvas.entities) == 1
+        result = editor.canvas.entities[0]
+    assert isinstance(result, EllipseEntity) and result.center_mm == pytest.approx((10, 11))
+    assert result.entity_id != ellipse.entity_id
+
+
 def test_clipboard_rejects_invalid_geometry_reference() -> None:
     from mycad.core.sketch import PolylineEntity
 
@@ -659,7 +705,7 @@ def test_layer_import_failure_preserves_paste_for_retry(qtbot: QtBot) -> None:
     assert source.canvas.copy_to_clipboard()
     target.canvas.preserve_document_layers = True
 
-    def fail(_layers: SketchLayerTable, _styles: object) -> Callable[[bool], None]:
+    def fail(_layers: SketchLayerTable, _styles: object, _fonts: object) -> Callable[[bool], None]:
         raise ValueError("图层导入失败")
 
     target.canvas.import_clipboard_layers = fail

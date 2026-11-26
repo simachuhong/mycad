@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import math
 from bisect import bisect_left, bisect_right
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -35,7 +36,6 @@ from PySide6.QtGui import (
     QCursor,
     QEnterEvent,
     QFont,
-    QFontMetricsF,
     QHideEvent,
     QImage,
     QKeyEvent,
@@ -116,6 +116,8 @@ from mycad.core.cross_sketch_tangency import (
     draft_tangent_reference,
     map_transformed_rectangle_segments,
     project_coplanar_entity,
+    project_coplanar_rotation,
+    project_coplanar_vector,
     project_tangent_entity,
     rebind_retained_local_tangencies,
     tangent_endpoints_satisfied,
@@ -128,8 +130,18 @@ from mycad.core.cross_sketch_tangency import (
     validate_tangency_component,
 )
 from mycad.core.curve_corner import curve_corner
+from mycad.core.detached_dimension import DetachedDimension
 from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
+from mycad.core.dimension_tolerance import DimensionTolerance, effective_tolerance
 from mycad.core.document import METADATA_KEYS
+from mycad.core.drawing_blocks import BlockDefinition, BlockInstance
+from mycad.core.drawing_collection_clipboard import (
+    DRAWING_COLLECTION_CLIPBOARD_MIME,
+    DrawingCollectionClipboard,
+    clipboard_datum_labels,
+    decode_collection_clipboard,
+)
+from mycad.core.drawing_groups import DrawingObjectRef
 from mycad.core.drawing_quick_measure import (
     CurvePairMeasurement,
     LinePairMeasurement,
@@ -141,7 +153,10 @@ from mycad.core.drawing_quick_measure import (
 )
 from mycad.core.drawing_quick_regions import CircularBoundary, LinearRegion, SampledMeasuredRegion
 from mycad.core.drawing_raster import DrawingRaster
+from mycad.core.drawing_text import DrawingText, TextStyleTable
+from mycad.core.exceptions import ValidationError
 from mycad.core.fillet_curves import tangent_on_curves, trim_arc_at_contact
+from mycad.core.geometric_tolerance import DatumIdentifier, FeatureControlFrame
 from mycad.core.line_chamfer import (
     line_chamfer,
     polyline_chamfer,
@@ -162,9 +177,11 @@ from mycad.core.polyline_fillet import (
     polyline_polyline_fillet,
     polyline_segment_fillet,
 )
+from mycad.core.replay_proposal import ReplayAppend
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -194,7 +211,6 @@ from mycad.core.sketch_edit import (
     mirror_entities,
     move_entities,
     move_sketch_handle,
-    offset_entities,
     rectangular_array_displacement,
     rectangular_array_entities,
     rotate_entities,
@@ -221,24 +237,43 @@ from mycad.core.sketch_references import resolve_point_reference
 from mycad.ui.cad_icons import set_button_icon
 from mycad.ui.dimension_colors import indexed_color
 from mycad.ui.dimension_text import dimension_text
+from mycad.ui.dimension_tolerance_layout import DimensionToleranceLayout, layout_dimension_tolerance
 from mycad.ui.dimension_tools import DimensionTools
 from mycad.ui.drawing2d_command_bar import Drawing2DCommandBar, parse_coordinate
+from mycad.ui.drawing_block_tools import DrawingBlockView, DrawingBlockViewCache
 from mycad.ui.drawing_clipboard import (
     DRAWING_CLIPBOARD_MIME,
     DRAWING_MIXED_CLIPBOARD_MIME,
     DRAWING_RASTER_GROUP_MIME,
     DRAWING_RASTER_MIME,
-    decode_drawing_clipboard_data,
-    decode_mixed_clipboard_data,
+    decode_drawing_clipboard_full,
+    decode_mixed_clipboard_full,
     decode_raster_group,
     encode_drawing_clipboard,
     encode_mixed_clipboard,
     encode_raster_group,
     instantiate_drawing_clipboard,
     raster_from_clipboard_image,
+    reconcile_clipboard_fonts,
     reconcile_clipboard_styles,
 )
-from mycad.ui.drawing_offset import signed_offset_distance, through_offset_distance
+from mycad.ui.drawing_collection_session import (
+    DrawingCollectionAffinePreview,
+    DrawingCollectionCheckpoint,
+    DrawingCollectionMirrorPreview,
+    DrawingCollectionPastePreview,
+    DrawingCollectionSession,
+    DrawingCollectionTransformPreview,
+)
+from mycad.ui.drawing_offset import (
+    offset_with_backend,
+    signed_offset_distance,
+    spline_path_separation,
+    spline_path_side,
+    through_offset_distance,
+)
+from mycad.ui.drawing_text_tools import TEXT_CLIPBOARD_MIME, DrawingTextTools
+from mycad.ui.geometric_tolerance_tools import TOLERANCE_CLIPBOARD_MIME, GeometricToleranceTools
 from mycad.ui.layer_panel import DrawingLayerPanel
 from mycad.ui.quick_select import QuickSelectDialog
 from mycad.ui.sketch_dynamic_input import SketchDynamicInput
@@ -247,6 +282,7 @@ from mycad.ui.sketch_selection import entity_in_selection_box
 from mycad.ui.workspace_console import DrawingMessageLabel, MessageLabel, drawing_message
 
 _SNAP_RADIUS_PX = 12.0
+_MIN_VIEW_SCALE = 1e-300
 _DOCUMENT_METADATA_LABELS = {
     "part_no": "编号",
     "revision": "修订",
@@ -513,6 +549,7 @@ class SavedHandlePreview:
     draft_before: Sketch | None = None
     pairs_before: tuple[DraftTangentPair, ...] = ()
     history_before: int = 0
+    collection_checkpoint: object | None = None
 
 
 @dataclass
@@ -570,24 +607,112 @@ class _DraftState:
     pending_cross_tangencies: tuple[DraftTangentPair, ...] = ()
     last_polar_entity_id: str | None = None
     pending_associative_arrays: tuple[AssociativeRectArray, ...] = ()
+    collection_checkpoint: DrawingCollectionCheckpoint | None = None
+    collection_selections: (
+        tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str]] | None
+    ) = None
+    selected_block_ids: frozenset[str] = frozenset()
+    selected_geometry_refs: frozenset[DrawingObjectRef] = frozenset()
+    selected_dimension_refs: frozenset[DrawingObjectRef] = frozenset()
+
+
+@dataclass(frozen=True)
+class _PasteSessionOrigin:
+    session: DrawingCollectionSession
+    checkpoint: DrawingCollectionCheckpoint
+    undo: tuple[_DraftState, ...]
+    redo: tuple[_DraftState, ...]
+    mixed_move: MixedMoveState | None
+    attached_undo: tuple[_DraftState, ...]
+    attached_redo: tuple[_DraftState, ...]
+    entities: tuple[SketchEntity, ...]
+    constraints: tuple[SketchConstraint, ...]
 
 
 def _cross(first: Point2D, second: Point2D) -> float:
     return first[0] * second[1] - first[1] * second[0]
 
 
+def _large_segment_intersection(
+    start: Point2D, end: Point2D, other_start: Point2D, other_end: Point2D
+) -> Point2D | None:
+    with localcontext() as context:
+        context.prec = 340
+        a, b, c, d = (
+            tuple(Decimal(str(value)) for value in point)
+            for point in (start, end, other_start, other_end)
+        )
+        first = (b[0] - a[0], b[1] - a[1])
+        second = (d[0] - c[0], d[1] - c[1])
+        delta = (c[0] - a[0], c[1] - a[1])
+        divisor = first[0] * second[1] - first[1] * second[0]
+        if abs(divisor) <= Decimal("1e-12"):
+            return None
+        first_ratio = (delta[0] * second[1] - delta[1] * second[0]) / divisor
+        second_ratio = (delta[0] * first[1] - delta[1] * first[0]) / divisor
+        if not (0 <= first_ratio <= 1 and 0 <= second_ratio <= 1):
+            return None
+        return (float(a[0] + first_ratio * first[0]), float(a[1] + first_ratio * first[1]))
+
+
+def _large_segment_foot(anchor: Point2D, start: Point2D, end: Point2D) -> Point2D | None:
+    with localcontext() as context:
+        context.prec = 340
+        p, a, b = (tuple(Decimal(str(value)) for value in point) for point in (anchor, start, end))
+        vector = (b[0] - a[0], b[1] - a[1])
+        squared = vector[0] * vector[0] + vector[1] * vector[1]
+        if squared <= Decimal("1e-24"):
+            return None
+        ratio = ((p[0] - a[0]) * vector[0] + (p[1] - a[1]) * vector[1]) / squared
+        if not 0 <= ratio <= 1:
+            return None
+        return float(a[0] + ratio * vector[0]), float(a[1] + ratio * vector[1])
+
+
 def _distance(first: Point2D, second: Point2D) -> float:
     return math.hypot(first[0] - second[0], first[1] - second[1])
+
+
+def _radial_distance(point: Point2D, center: Point2D, radius: float) -> float:
+    if max(map(abs, (*point, *center, radius))) > 1e12:
+        with localcontext() as context:
+            context.prec = 340
+            dx = Decimal(str(point[0])) - Decimal(str(center[0]))
+            dy = Decimal(str(point[1])) - Decimal(str(center[1]))
+            return float(abs((dx * dx + dy * dy).sqrt() - Decimal(str(radius))))
+    return abs(_distance(point, center) - radius)
 
 
 def _distance_to_segment(point: Point2D, start: Point2D, end: Point2D) -> float:
     dx, dy = end[0] - start[0], end[1] - start[1]
     denominator = dx * dx + dy * dy
+    numerator = (point[0] - start[0]) * dx + (point[1] - start[1]) * dy
+    if not math.isfinite(denominator) or not math.isfinite(numerator):
+        with localcontext() as context:
+            context.prec = 340
+            p = tuple(Decimal(str(value)) for value in point)
+            a = tuple(Decimal(str(value)) for value in start)
+            b = tuple(Decimal(str(value)) for value in end)
+            vector = (b[0] - a[0], b[1] - a[1])
+            square = vector[0] * vector[0] + vector[1] * vector[1]
+            if square == 0:
+                return _distance(point, start)
+            ratio_d = min(
+                Decimal(1),
+                max(
+                    Decimal(0),
+                    ((p[0] - a[0]) * vector[0] + (p[1] - a[1]) * vector[1]) / square,
+                ),
+            )
+            return math.hypot(
+                float(p[0] - a[0] - ratio_d * vector[0]),
+                float(p[1] - a[1] - ratio_d * vector[1]),
+            )
     if denominator <= 1e-20:
         return _distance(point, start)
     ratio = min(
         1.0,
-        max(0.0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / denominator),
+        max(0.0, numerator / denominator),
     )
     return _distance(point, (start[0] + ratio * dx, start[1] + ratio * dy))
 
@@ -609,7 +734,7 @@ def _distance_to_arc(point: Point2D, arc: ArcEntity) -> float:
     dx, dy = point[0] - arc.center_mm[0], point[1] - arc.center_mm[1]
     angle = math.degrees(math.atan2(dy, dx))
     if _angle_on_arc(angle, arc.start_angle_deg, arc.sweep_angle_deg):
-        return abs(math.hypot(dx, dy) - arc.radius_mm)
+        return _radial_distance(point, arc.center_mm, arc.radius_mm)
     endpoints = (
         (
             arc.center_mm[0] + arc.radius_mm * math.cos(math.radians(value)),
@@ -701,6 +826,39 @@ def _segment_circle_intersections(
     center: Point2D,
     radius: float,
 ) -> tuple[Point2D, ...]:
+    if max(map(abs, (*start, *end, *center, radius))) > 1e75:
+        with localcontext() as context:
+            context.prec = 340
+            a_point, b_point, origin = (
+                tuple(Decimal(str(value)) for value in point) for point in (start, end, center)
+            )
+            radius_d = Decimal(str(radius))
+            vector = (b_point[0] - a_point[0], b_point[1] - a_point[1])
+            relative_d = (a_point[0] - origin[0], a_point[1] - origin[1])
+            a_d = vector[0] * vector[0] + vector[1] * vector[1]
+            if a_d <= Decimal("1e-12"):
+                return ()
+            b_d = 2 * (relative_d[0] * vector[0] + relative_d[1] * vector[1])
+            c_d = (
+                relative_d[0] * relative_d[0] + relative_d[1] * relative_d[1] - radius_d * radius_d
+            )
+            discriminant_d = b_d * b_d - 4 * a_d * c_d
+            if discriminant_d < -Decimal("1e-12"):
+                return ()
+            root_d = max(Decimal(0), discriminant_d).sqrt()
+            parameters_d = (
+                (-b_d / (2 * a_d),)
+                if root_d <= Decimal("1e-12")
+                else ((-b_d - root_d) / (2 * a_d), (-b_d + root_d) / (2 * a_d))
+            )
+            return tuple(
+                (
+                    float(a_point[0] + vector[0] * parameter),
+                    float(a_point[1] + vector[1] * parameter),
+                )
+                for parameter in parameters_d
+                if -Decimal("1e-12") <= parameter <= 1 + Decimal("1e-12")
+            )
     delta = (end[0] - start[0], end[1] - start[1])
     relative = (start[0] - center[0], start[1] - center[1])
     a = delta[0] * delta[0] + delta[1] * delta[1]
@@ -733,6 +891,42 @@ def _circle_circle_intersections(
     second_center: Point2D,
     second_radius: float,
 ) -> tuple[Point2D, ...]:
+    if max(map(abs, (*first_center, *second_center, first_radius, second_radius))) > 1e150:
+        with localcontext() as context:
+            context.prec = 340
+            first, second = (
+                tuple(Decimal(str(value)) for value in point)
+                for point in (first_center, second_center)
+            )
+            r1, r2 = Decimal(str(first_radius)), Decimal(str(second_radius))
+            delta_d = (second[0] - first[0], second[1] - first[1])
+            distance_d = (delta_d[0] * delta_d[0] + delta_d[1] * delta_d[1]).sqrt()
+            epsilon = Decimal("1e-12")
+            if (
+                distance_d <= epsilon
+                or distance_d > r1 + r2 + epsilon
+                or distance_d < abs(r1 - r2) - epsilon
+            ):
+                return ()
+            along_d = (r1 * r1 - r2 * r2 + distance_d * distance_d) / (2 * distance_d)
+            height_d = max(Decimal(0), r1 * r1 - along_d * along_d).sqrt()
+            base_d = (
+                first[0] + along_d * delta_d[0] / distance_d,
+                first[1] + along_d * delta_d[1] / distance_d,
+            )
+            if height_d <= epsilon:
+                return ((float(base_d[0]), float(base_d[1])),)
+            perpendicular_d = (
+                -delta_d[1] * height_d / distance_d,
+                delta_d[0] * height_d / distance_d,
+            )
+            return tuple(
+                (
+                    float(base_d[0] + sign * perpendicular_d[0]),
+                    float(base_d[1] + sign * perpendicular_d[1]),
+                )
+                for sign in (1, -1)
+            )
     delta = (second_center[0] - first_center[0], second_center[1] - first_center[1])
     distance = math.hypot(*delta)
     if (
@@ -948,8 +1142,77 @@ class _CursorDimensionEntry(QLineEdit):
             super().keyPressEvent(event)
 
 
+class _SelectionIds(set[str]):
+    """Invalidate source-aware picks whenever legacy selection changes."""
+
+    def __init__(self, values: Iterable[str], changed: Callable[[], None]) -> None:
+        super().__init__(values)
+        self._changed = changed
+
+    def _notify(self, before: set[str]) -> None:
+        if self != before:
+            self._changed()
+
+    def add(self, element: str) -> None:
+        before = set(self)
+        super().add(element)
+        self._notify(before)
+
+    def discard(self, element: object) -> None:
+        before = set(self)
+        super().discard(element)
+        self._notify(before)
+
+    def remove(self, element: str) -> None:
+        before = set(self)
+        super().remove(element)
+        self._notify(before)
+
+    def clear(self) -> None:
+        before = set(self)
+        super().clear()
+        self._notify(before)
+
+    def update(self, *others: Iterable[str]) -> None:
+        before = set(self)
+        super().update(*others)
+        self._notify(before)
+
+    def intersection_update(self, *others: Iterable[object]) -> None:
+        before = set(self)
+        super().intersection_update(*others)
+        self._notify(before)
+
+    def difference_update(self, *others: Iterable[object]) -> None:
+        before = set(self)
+        super().difference_update(*others)
+        self._notify(before)
+
+
 class SketchCanvas(QWidget):
     """Grid canvas with local coordinates, cursor preview, pan/zoom and snaps."""
+
+    @property
+    def selected_entity_ids(self) -> set[str]:
+        return self._selected_entity_ids
+
+    @selected_entity_ids.setter
+    def selected_entity_ids(self, values: Iterable[str]) -> None:
+        self.selected_geometry_refs.clear()
+        self._selected_entity_ids = _SelectionIds(
+            values, lambda: self.selected_geometry_refs.clear()
+        )
+
+    @property
+    def selected_constraint_ids(self) -> set[str]:
+        return self._selected_constraint_ids
+
+    @selected_constraint_ids.setter
+    def selected_constraint_ids(self, values: Iterable[str]) -> None:
+        self.selected_dimension_refs.clear()
+        self._selected_constraint_ids = _SelectionIds(
+            values, lambda: self.selected_dimension_refs.clear()
+        )
 
     changed = Signal()
     property_vertex_picked = Signal(str, int)
@@ -996,6 +1259,7 @@ class SketchCanvas(QWidget):
     mirror_keep_source_mode_changed = Signal(bool)
     object_tangency_selection_ready = Signal()
     object_tangency_options_requested = Signal()
+    collection_snapshot_changed = Signal(object)
 
     @property
     def message(self) -> str:
@@ -1012,13 +1276,77 @@ class SketchCanvas(QWidget):
         self.setMinimumSize(160, 60)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._capture_clipboard = False
+        self._captured_clipboard: QMimeData | None = None
         self.entities: list[SketchEntity] = []
+        self.offset_closed_path: (
+            Callable[[PolylineEntity, float, int], tuple[PolylineEntity, ...]] | None
+        ) = None
+        self.offset_spline: Callable[[SplineEntity, float], tuple[SplineEntity, ...]] | None = None
+        self.offset_ellipse: Callable[[EllipseEntity, float], tuple[SplineEntity, ...]] | None = (
+            None
+        )
+        self.offset_spline_path: (
+            Callable[[tuple[SplineEntity, ...], float], tuple[SplineEntity, ...]] | None
+        ) = None
         self.background_entities: tuple[tuple[SketchEntity, SketchLayer], ...] = ()
+        self._background_source_projection: tuple[tuple[SketchEntity, SketchLayer], ...] = ()
+        self._background_source_sketch_ids: tuple[str, ...] = ()
+        self.draft_sketch_id_provider: Callable[[], str] | None = None
+        self.selected_geometry_refs: set[DrawingObjectRef] = set()
+        self.selected_dimension_refs: set[DrawingObjectRef] = set()
+        self._block_definitions: tuple[BlockDefinition, ...] = ()
+        self._block_instances: tuple[BlockInstance, ...] = ()
+        self.selected_block_instance_ids: set[str] = set()
+        self._block_text_styles = TextStyleTable()
+        self._block_view_cache = DrawingBlockViewCache()
+        self._block_point_capture: Callable[[Point2D], None] | None = None
+        self._block_point_preview: Callable[[Point2D], DrawingCollectionClipboard] | None = None
+        self._block_point_cancel: Callable[[], None] | None = None
+        self.block_library_preview_payload: DrawingCollectionClipboard | None = None
         self.spatial_boundaries: tuple[SpatialBoundary, ...] = ()
         self._spatial_paths_cache: tuple[tuple[str, tuple[Point2D, ...]], ...] | None = None
         self._spatial_boundary_unsupported = False
         self._spatial_target_frame = WorkPlaneFrame.xy()
         self.mixed_move: MixedMoveState | None = None
+        self.collection_session: DrawingCollectionSession | None = None
+        self.ensure_group_operation: Callable[[str | None], bool] | None = None
+        self.offset_group_guard: Callable[[str | DrawingObjectRef], bool] | None = None
+        self.group_selection_provider: Callable[[], frozenset[DrawingObjectRef]] | None = None
+        self.collection_transform_preview_provider: (
+            Callable[[bool, Point2D], DrawingCollectionTransformPreview] | None
+        ) = None
+        self.collection_affine_preview_provider: (
+            Callable[[str, Point2D, float, bool], DrawingCollectionAffinePreview] | None
+        ) = None
+        self.collection_mirror_preview_provider: (
+            Callable[[bool, Point2D, Point2D], DrawingCollectionMirrorPreview] | None
+        ) = None
+        self._collection_transform_preview: (
+            DrawingCollectionTransformPreview
+            | DrawingCollectionAffinePreview
+            | DrawingCollectionMirrorPreview
+            | None
+        ) = None
+        self._collection_commit_preview: (
+            DrawingCollectionTransformPreview
+            | DrawingCollectionAffinePreview
+            | DrawingCollectionMirrorPreview
+            | None
+        ) = None
+        self.group_clipboard_guard: Callable[[], bool] | None = None
+        self.capture_collection_clipboard: Callable[[bool], tuple[bytes, bool]] | None = None
+        self.begin_collection_paste: Callable[[], bool] | None = None
+        self.collection_paste_preview_provider: (
+            Callable[[DrawingCollectionClipboard, Point2D], DrawingCollectionPastePreview] | None
+        ) = None
+        self.collection_paste_preview: DrawingCollectionPastePreview | None = None
+        self.commit_collection_paste: (
+            Callable[[DrawingCollectionClipboard, Point2D], bool] | None
+        ) = None
+        self.delete_collection_selection: Callable[[], bool] | None = None
+        self._collection_draft_id: str | None = None
+        self._syncing_collection_draft = False
         self._invalid_mixed_transactions: set[str] = set()
         self.select_committed_entities = select_committed_entities
         self.active_property_vertex: tuple[str, int] | None = None
@@ -1032,9 +1360,16 @@ class SketchCanvas(QWidget):
         self.active_layer_name = "0"
         self.document_layer_table: SketchLayerTable | None = None
         self.drawing_dimension_styles: DimensionStyleTable | None = None
+        self.text_tools: DrawingTextTools | None = None
+        self._dimension_text_styles_override: TextStyleTable | None = None
+        self._clipboard_dimension_canvas: SketchCanvas | None = None
+        self.geometric_tolerance_tools: GeometricToleranceTools | None = None
         self.preserve_document_layers = False
         self._undo_history: list[_DraftState] = []
         self._redo_history: list[_DraftState] = []
+        self._draft_confirmed_constraints: dict[
+            tuple[int, int], tuple[Sketch, Sketch, SketchConstraint, SketchConstraintSolveResult]
+        ] = {}
         self.history_position = 0
         self._next_history_position = 0
         self.constraints: list[SketchConstraint] = []
@@ -1044,8 +1379,13 @@ class SketchCanvas(QWidget):
         self.dimension_error_entity_ids: frozenset[str] = frozenset()
         self.dimension_error_constraint_ids: frozenset[str] = frozenset()
         self.dimension_candidate: SketchConstraint | None = None
+        self.dimension_candidate_reference_provider: (
+            Callable[[], DrawingObjectRef | None] | None
+        ) = None
         self.dimension_references: tuple[SketchGeometryReference, ...] = ()
         self.background_constraints: tuple[SketchConstraint, ...] = ()
+        self._background_constraint_sketch_ids: tuple[str, ...] = ()
+        self._background_constraint_bases: dict[int, tuple[Point2D, Point2D, float]] = {}
         self.background_dimension_basis: dict[str, tuple[Point2D, Point2D, float]] = {}
         self.background_entity_basis: dict[str, tuple[Point2D, Point2D, float]] = {}
         self._snap_candidates_cache: tuple[tuple[Point2D, str], ...] | None = None
@@ -1079,6 +1419,9 @@ class SketchCanvas(QWidget):
         self.polygon_sides = 6
         self.polygon_circumscribed = False
         self.arc_direction = "逆时针"
+        self.ellipse_arc_mode = False
+        self.ellipse_mode_prompt_active = False
+        self.ellipse_arc_direction = "逆时针"
         self.chamfer_first_distance = 0.0
         self.chamfer_second_distance = 0.0
         self.chamfer_distance_first = 0.0
@@ -1114,16 +1457,30 @@ class SketchCanvas(QWidget):
         self._corner_drag_shift = False
         self._corner_drag_revision: int | None = None
         self._clipboard_paste: Sketch | None = None
+        self._clipboard_collection: DrawingCollectionClipboard | None = None
+        self._paste_session_origin: _PasteSessionOrigin | None = None
         self._clipboard_styles: DimensionStyleTable | None = None
+        self._clipboard_text_styles: TextStyleTable | None = None
         self._clipboard_raster: DrawingRaster | None = None
         self._clipboard_rasters: tuple[DrawingRaster, ...] = ()
         self._clipboard_mixed_images: tuple[DrawingRaster, ...] = ()
         self._clipboard_mixed_revision: int | None = None
         self.drawing_rasters: tuple[DrawingRaster, ...] = ()
+        self._raster_projection_sources: dict[str, DrawingRaster] = {}
+        self._raster_projection_cache: dict[str, DrawingRaster | None] = {}
         self._raster_image_cache: dict[str, QImage] = {}
         self.commit_clipboard_raster: Callable[[DrawingRaster], None] | None = None
         self.commit_mixed_clipboard: (
-            Callable[[Sketch, tuple[DrawingRaster, ...], DimensionStyleTable | None], None] | None
+            Callable[
+                [
+                    Sketch,
+                    tuple[DrawingRaster, ...],
+                    DimensionStyleTable | None,
+                    TextStyleTable | None,
+                ],
+                None,
+            ]
+            | None
         ) = None
         self.commit_mixed_draft_transform: (
             Callable[[tuple[SketchEntity, ...], tuple[DrawingRaster, ...], str], str | None] | None
@@ -1137,7 +1494,11 @@ class SketchCanvas(QWidget):
         self._clipboard_anchor: Point2D = (0.0, 0.0)
         self._suppress_clipboard_context = False
         self.import_clipboard_layers: (
-            Callable[[SketchLayerTable, DimensionStyleTable | None], Callable[[bool], None]] | None
+            Callable[
+                [SketchLayerTable, DimensionStyleTable | None, TextStyleTable | None],
+                Callable[[bool], None],
+            ]
+            | None
         ) = None
         self.pending_cross_tangencies: list[DraftTangentPair] = []
         self._pending_tangency_removal_notices: dict[int, int] = {}
@@ -1198,6 +1559,7 @@ class SketchCanvas(QWidget):
         self._hovered_line_edit_entity_id: str | None = None
         self._break_at_point_target: str | None = None
         self._line_edit_boundary_ids: frozenset[str] | None = None
+        self._line_edit_boundary_refs: dict[DrawingObjectRef, SketchEntity] = {}
         self._line_edit_boundary_sources: tuple[SketchEntity, ...] = ()
         self._line_edit_spatial_sources: tuple[SpatialBoundary, ...] = ()
         self._line_edit_selection_spatial: tuple[SpatialBoundary, ...] = ()
@@ -1207,17 +1569,21 @@ class SketchCanvas(QWidget):
         self._line_edit_selection_revision: int | None = None
         self._line_edit_selection_history = 0
         self._line_edit_preview_original: SketchEntity | None = None
+        self._line_edit_preview_ref: DrawingObjectRef | None = None
         self._line_edit_preview_result: tuple[SketchEntity, ...] = ()
-        self.selected_entity_ids: set[str] = set()
+        self.selected_entity_ids = set()
         self.selected_segment_indices: dict[str, int] = {}
         self._selected_segment_sources: dict[str, SketchEntity] = {}
-        self.selected_constraint_ids: set[str] = set()
+        self.selected_constraint_ids = set()
         self._hovered_entity_id: str | None = None
         self._selection_anchor: QPointF | None = None
         self._selection_corner = QPointF()
         self._selection_waiting_click = False
         self._selection_original: frozenset[str] = frozenset()
+        self._selection_original_refs: frozenset[DrawingObjectRef] = frozenset()
         self._selection_original_constraints: frozenset[str] = frozenset()
+        self._selection_original_dimension_refs: frozenset[DrawingObjectRef] = frozenset()
+        self._selection_original_block_ids: frozenset[str] = frozenset()
         self._selection_modifiers = Qt.KeyboardModifier.NoModifier
         self._panning = False
         self._last_mouse = QPoint()
@@ -1264,6 +1630,7 @@ class SketchCanvas(QWidget):
         self._offset_distance: float | None = None
         self._offset_through = False
         self._offset_distance_anchor: Point2D | None = None
+        self._offset_direct_pick = False
         self.offset_erase_source = False
         self.offset_erase_pending = False
         self.offset_layer_current = False
@@ -1274,6 +1641,8 @@ class SketchCanvas(QWidget):
         self._offset_undo_positions: list[int] = []
         self._offset_pending_result_id: str | None = None
         self._offset_target: SketchEntity | None = None
+        self._offset_target_ref: DrawingObjectRef | None = None
+        self._offset_spline_group: tuple[SplineEntity, ...] = ()
         self._offset_signed_distance: float | None = None
         self._transform_operation: str | None = None
         self._transform_base: Point2D | None = None
@@ -1297,6 +1666,14 @@ class SketchCanvas(QWidget):
         self._transform_keep_source = True
         self._transform_angle_text = ""
         self._transform_preview: tuple[SketchEntity, ...] = ()
+        self.mixed_transform_preview_provider: (
+            Callable[
+                [str, Point2D, Point2D | float],
+                tuple[tuple[SketchEntity, ...], tuple[DrawingText, ...]],
+            ]
+            | None
+        ) = None
+        self.mixed_transform_preview_texts: tuple[DrawingText, ...] = ()
         self._transform_source_revision: int | None = None
         self._copy_placements: list[tuple[Point2D, int, int]] = []
         self._mixed_copy_placements: list[tuple[Point2D, str, int]] = []
@@ -1332,6 +1709,8 @@ class SketchCanvas(QWidget):
             None
         )
         self._trim_drag_saved_events: list[tuple[str, tuple[SketchEntity, ...]]] = []
+        self._trim_drag_draft_events: list[tuple[str, tuple[str, ...]]] = []
+        self.collection_trim_draft_events: tuple[tuple[str, tuple[str, ...]], ...] = ()
         self.source_revision_provider: Callable[[], int] | None = None
         self.associative_arrays_provider: Callable[[], tuple[AssociativeRectArray, ...]] | None = (
             None
@@ -1401,6 +1780,45 @@ class SketchCanvas(QWidget):
         y = self.height() / 2 + self._pan.y() - point[1] * self._scale
         return QPointF(max(-1e6, min(1e6, x)), max(-1e6, min(1e6, y)))
 
+    def _clip_visible_segment(self, start: Point2D, end: Point2D) -> tuple[QPoint, QPoint] | None:
+        """Clip in model space before converting endpoints to bounded Qt integers."""
+        left, top = self.screen_to_local(QPointF(-20, -20))
+        right, bottom = self.screen_to_local(QPointF(self.width() + 20, self.height() + 20))
+        if all(left <= point[0] <= right and bottom <= point[1] <= top for point in (start, end)):
+            return self.local_to_screen(start), self.local_to_screen(end)
+        with localcontext() as context:
+            # Preserve intersections near the viewport even for very large coordinates.
+            context.prec = 340
+            first = tuple(Decimal(str(value)) for value in start)
+            last = tuple(Decimal(str(value)) for value in end)
+            lower, upper = Decimal(0), Decimal(1)
+            for axis, minimum, maximum in ((0, left, right), (1, bottom, top)):
+                difference = last[axis] - first[axis]
+                minimum_d, maximum_d = Decimal(str(minimum)), Decimal(str(maximum))
+                if difference == 0:
+                    if not minimum_d <= first[axis] <= maximum_d:
+                        return None
+                    continue
+                enter = (minimum_d - first[axis]) / difference
+                leave = (maximum_d - first[axis]) / difference
+                lower = max(lower, min(enter, leave))
+                upper = min(upper, max(enter, leave))
+                if lower > upper:
+                    return None
+            clipped: list[Point2D] = []
+            for parameter in (lower, upper):
+                x = first[0] * (1 - parameter) + last[0] * parameter
+                y = first[1] * (1 - parameter) + last[1] * parameter
+                clipped.append((float(x), float(y)))
+        return self.local_to_screen(clipped[0]), self.local_to_screen(clipped[1])
+
+    def local_to_screen_precise(self, point: Point2D) -> QPointF:
+        """Convert drawing coordinates to subpixel canvas coordinates."""
+        return QPointF(
+            self.width() / 2 + self._pan.x() + point[0] * self._scale,
+            self.height() / 2 + self._pan.y() - point[1] * self._scale,
+        )
+
     def _clip_area_preview(self, points: tuple[Point2D, ...]) -> tuple[Point2D, ...]:
         """Clip a preview boundary in drawing space before converting to screen points."""
         left, top = self.screen_to_local(QPointF(-20, -20))
@@ -1455,9 +1873,13 @@ class SketchCanvas(QWidget):
 
     def pan_view_between(self, start: Point2D, end: Point2D) -> bool:
         """Pan the view by a displacement expressed in drawing coordinates."""
-        x = self._pan.x() + (end[0] - start[0]) * self._scale
-        y = self._pan.y() + (start[1] - end[1]) * self._scale
-        if not math.isfinite(x) or not math.isfinite(y) or max(abs(x), abs(y)) > 1e9:
+        dx = (end[0] - start[0]) * self._scale
+        dy = (start[1] - end[1]) * self._scale
+        x, y = self._pan.x() + dx, self._pan.y() + dy
+        if not all(math.isfinite(value) for value in (dx, dy, x, y)) or (
+            max(abs(x), abs(y)) > 1e9
+            and (max(abs(self._pan.x()), abs(self._pan.y())) <= 1e9 or max(abs(dx), abs(dy)) > 1e9)
+        ):
             return False
         previous = self._view_state()
         self._pan = QPointF(x, y)
@@ -1469,7 +1891,7 @@ class SketchCanvas(QWidget):
         """Zoom around the centre of the drawing canvas."""
         old_scale = self._scale
         previous = self._view_state()
-        self._scale = min(60.0, max(1e-6, old_scale * factor))
+        self._scale = min(60.0, max(_MIN_VIEW_SCALE, old_scale * factor))
         self._pan *= self._scale / old_scale
         self._remember_changed_view(previous)
         self.update()
@@ -1484,10 +1906,19 @@ class SketchCanvas(QWidget):
         center_x = first[0] / 2 + second[0] / 2
         center_y = first[1] / 2 + second[1] / 2
         x, y = -center_x * scale, center_y * scale
-        if scale < 1e-6 or not all(math.isfinite(value) for value in (scale, x, y)):
+        if scale < _MIN_VIEW_SCALE or not all(math.isfinite(value) for value in (scale, x, y)):
             return False
         if max(abs(x), abs(y)) > 1e9:
-            return False
+            center_screen = self.local_to_screen_precise((center_x, center_y))
+            margin = 2 * max(self.width(), self.height())
+            nearby = QRectF(self.rect()).adjusted(-margin, -margin, margin, margin)
+            if (
+                max(abs(self._pan.x()), abs(self._pan.y())) <= 1e9
+                or not math.isfinite(center_screen.x())
+                or not math.isfinite(center_screen.y())
+                or not nearby.contains(center_screen)
+            ):
+                return False
         previous = self._view_state()
         self._scale = scale
         self._pan = QPointF(x, y)
@@ -1540,37 +1971,88 @@ class SketchCanvas(QWidget):
         else:
             self._accept_point(self._points[0], exact_point=True)
 
-    def fit_view(self) -> None:
+    def fit_view(self, *, only_if_all_outside: bool = False) -> None:
         previous = self._view_state()
         points: list[Point2D] = []
-        for entity in (*self.entities, *(e for e, _layer in self.background_entities)):
-            layer = (
-                self._layer(entity)
-                if entity in self.entities
-                else next(
-                    layer
-                    for e, layer in self.background_entities
-                    if e.entity_id == entity.entity_id
-                )
-            )
-            if layer.frozen:
+        for entity, layer in (
+            *((item, self._layer(item)) for item in self.entities),
+            *self.background_entities,
+        ):
+            if not layer.displayed:
                 continue
             if isinstance(entity, CircleEntity | ArcEntity):
                 x, y = entity.center_mm
                 radius = entity.radius_mm
                 points.extend(((x - radius, y - radius), (x + radius, y + radius)))
+            elif isinstance(entity, EllipseEntity):
+                points.extend(entity.sampled_points())
             else:
                 points.extend(point for _reference, point in self._entity_handles(entity))
-        dimension_entities = self.dimension_entities()
-        for constraint in self.dimension_constraints():
-            if constraint.kind not in DIMENSION_KINDS or self.annotation_layer(constraint).frozen:
-                continue
-            layout = self.dimension_layout(constraint, dimension_entities)
-            if layout is not None:
-                points.append(self.screen_to_local(layout.label))
-                points.extend(
-                    self.screen_to_local(point) for line in layout.lines for point in line
+        block_view = self.drawing_block_view()
+        for item in block_view.geometry:
+            entity = item.entity
+            if isinstance(entity, CircleEntity | ArcEntity):
+                x, y = entity.center_mm
+                radius = entity.radius_mm
+                points.extend(((x - radius, y - radius), (x + radius, y + radius)))
+            elif isinstance(entity, EllipseEntity | SplineEntity):
+                points.extend(entity.sampled_points())
+            else:
+                points.extend(point for _reference, point in self._entity_handles(entity))
+        for raster in self.drawing_rasters:
+            try:
+                displayed = self.layer_table.get(raster.layer_name).displayed
+            except KeyError:
+                displayed = False
+            projected = self._project_drawing_raster(raster) if displayed else None
+            if projected is not None:
+                points.extend(self._raster_corners(projected))
+        if self.text_tools is not None:
+            for text in self.text_tools.texts:
+                if self.layer_table.get(text.layer_name).displayed:
+                    projected_text = self.text_tools.display_text(text)
+                    if projected_text is not None:
+                        points.extend(self.text_tools.model_corners(projected_text))
+            for item in block_view.texts:
+                points.extend(self.text_tools.model_corners(item.text))
+        # Measure annotations at a stable scale: tiny screen fonts and pixel
+        # rounding at the old zoom would otherwise distort their model bounds.
+        old_scale, old_pan = self._scale, self._pan
+        self._scale, self._pan = 100.0, QPointF()
+        try:
+            for constraint in self.dimension_constraints():
+                if (
+                    constraint.kind not in DIMENSION_KINDS
+                    or not self.annotation_layer(constraint).displayed
+                ):
+                    continue
+                layout = self.dimension_layout(
+                    constraint, self.dimension_entities_for_constraint(constraint)
                 )
+                if layout is not None:
+                    label = self.dimension_label_rect(constraint, layout.label)
+                    points.extend(
+                        (
+                            self.screen_to_local(label.topLeft()),
+                            self.screen_to_local(label.bottomRight()),
+                        )
+                    )
+                    points.extend(
+                        self.screen_to_local(point) for line in layout.lines for point in line
+                    )
+            if self.geometric_tolerance_tools is not None:
+                points.extend(self.geometric_tolerance_tools.visible_extent_points())
+        finally:
+            self._scale, self._pan = old_scale, old_pan
+        if (
+            only_if_all_outside
+            and points
+            and any(
+                QRectF(self.rect()).contains(self.local_to_screen_precise(point))
+                for point in points
+            )
+        ):
+            return
         if not points:
             self._scale = 5.0
             self._pan = QPointF()
@@ -1582,14 +2064,17 @@ class SketchCanvas(QWidget):
             self._scale = min(
                 60.0,
                 max(
-                    1e-6,
+                    _MIN_VIEW_SCALE,
                     min(
-                        max(1, self.width() - 80) / max(1.0, right - left),
-                        max(1, self.height() - 80) / max(1.0, top - bottom),
+                        (max(1, self.width() - 80) / 2) / max(0.5, right / 2 - left / 2),
+                        (max(1, self.height() - 80) / 2) / max(0.5, top / 2 - bottom / 2),
                     ),
                 ),
             )
-            self._pan = QPointF(-(left + right) * self._scale / 2, (bottom + top) * self._scale / 2)
+            self._pan = QPointF(
+                -(left / 2 + right / 2) * self._scale,
+                (bottom / 2 + top / 2) * self._scale,
+            )
         self._remember_changed_view(previous)
         self.update()
 
@@ -1655,11 +2140,19 @@ class SketchCanvas(QWidget):
             return None
         return candidates[0][1]
 
+    @property
+    def drawing_view_frame(self) -> WorkPlaneFrame:
+        """Current drawing canvas frame; local block editors use their own XY plane."""
+        return self._spatial_target_frame if self.select_committed_entities else WorkPlaneFrame.xy()
+
     def set_background_sketches(self, sketches: tuple[Sketch, ...], frame: WorkPlaneFrame) -> None:
         """Project coplanar sources into the active drawing plane."""
         previous_visible = self.visible_snap_entities()
         background: list[tuple[SketchEntity, SketchLayer]] = []
+        background_source_sketch_ids: list[str] = []
         constraints: list[SketchConstraint] = []
+        constraint_sketch_ids: list[str] = []
+        constraint_bases: dict[int, tuple[Point2D, Point2D, float]] = {}
         dimension_basis: dict[str, tuple[Point2D, Point2D, float]] = {}
         entity_basis: dict[str, tuple[Point2D, Point2D, float]] = {}
         spatial: list[SpatialBoundary] = []
@@ -1698,7 +2191,7 @@ class SketchCanvas(QWidget):
                             | RectangleEntity,
                         ):
                             spatial.append(SpatialBoundary(sketch.sketch_id, source, entity))
-                        elif isinstance(entity, SplineEntity):
+                        elif isinstance(entity, SplineEntity | EllipseEntity):
                             unsupported = True
                 continue
             shift = (
@@ -1725,6 +2218,8 @@ class SketchCanvas(QWidget):
                 else sketch.layers
             )
             background.extend((entity, table.get(entity.layer_name)) for entity in entities)
+            background_source_sketch_ids.extend(sketch.sketch_id for _entity in entities)
+            projected_basis: tuple[Point2D, Point2D, float] | None = None
             if not aligned:
                 u = (
                     sum(a * b for a, b in zip(source.u_axis, frame.u_axis, strict=True)),
@@ -1735,13 +2230,14 @@ class SketchCanvas(QWidget):
                     sum(a * b for a, b in zip(source.v_axis, frame.v_axis, strict=True)),
                 )
                 orientation = sum(a * b for a, b in zip(source.normal, frame.normal, strict=True))
+                projected_basis = (u, v, orientation)
                 entity_basis.update((e.entity_id, (u, v, orientation)) for e in sketch.entities)
                 dimension_basis.update(
                     (c.constraint_id, (u, v, orientation))
                     for c in sketch.constraints
                     if c.kind in DIMENSION_KINDS
                 )
-            constraints.extend(
+            projected_constraints = tuple(
                 replace(
                     c,
                     position_mm=None
@@ -1758,16 +2254,56 @@ class SketchCanvas(QWidget):
                 for c in sketch.constraints
                 if aligned or c.kind in DIMENSION_KINDS
             )
-        if self.spatial_boundaries != tuple(spatial) or self._spatial_target_frame != frame:
+            constraints.extend(projected_constraints)
+            constraint_sketch_ids.extend(sketch.sketch_id for _item in projected_constraints)
+            if projected_basis is not None:
+                constraint_bases.update(
+                    (id(item), projected_basis) for item in projected_constraints
+                )
+        frame_changed = self._spatial_target_frame != frame
+        if self.spatial_boundaries != tuple(spatial) or frame_changed:
             self._clear_line_edit_preview()
             self._spatial_paths_cache = None
         self.spatial_boundaries = tuple(spatial)
         self._spatial_boundary_unsupported = unsupported
         self._spatial_target_frame = frame
+        if frame_changed:
+            self._raster_projection_cache.clear()
+            self._prune_invisible_block_selection()
+            if self.text_tools is not None:
+                self.text_tools.selected_ids.intersection_update(
+                    item.text_id
+                    for item in self.text_tools.texts
+                    if self.text_tools.display_text(item) is not None
+                )
+            if self.geometric_tolerance_tools is not None:
+                tools = self.geometric_tolerance_tools
+                hidden_references = {
+                    item.dimension_id
+                    for item in tools.reference_dimensions
+                    if tools.display_reference(item) is None
+                }
+                hidden_references.update(
+                    item.frame_id for item in tools.frames if tools.display_frame(item) is None
+                )
+                hidden_references.update(
+                    item.datum_id for item in tools.datums if tools.display_datum(item) is None
+                )
+                if hidden_references.intersection(tools.selected_ids):
+                    tools.restore_collection_selection(tools.selected_ids - hidden_references)
+            self.selected_raster_ids.intersection_update(
+                item.image_id
+                for item in self.drawing_rasters
+                if self._project_drawing_raster(item) is not None
+            )
         self.background_constraints = tuple(constraints)
+        self._background_constraint_sketch_ids = tuple(constraint_sketch_ids)
+        self._background_constraint_bases = constraint_bases
         self.background_dimension_basis = dimension_basis
         self.background_entity_basis = entity_basis
         projected = tuple(background)
+        self._background_source_projection = projected
+        self._background_source_sketch_ids = tuple(background_source_sketch_ids)
         mixed = self.mixed_move
         if mixed is not None:
             if (
@@ -1797,6 +2333,42 @@ class SketchCanvas(QWidget):
             *(entity for entity, layer in self.background_entities if layer.displayed),
         )
 
+    def set_drawing_blocks(
+        self,
+        definitions: tuple[BlockDefinition, ...],
+        instances: tuple[BlockInstance, ...],
+        styles: TextStyleTable,
+    ) -> None:
+        """Install committed or staged records without adding editable geometry."""
+        self._block_definitions = definitions
+        self._block_instances = instances
+        self.selected_block_instance_ids.intersection_update(item.instance_id for item in instances)
+        self._block_text_styles = styles
+        self._snap_candidates_cache = None
+        self.update()
+
+    def drawing_block_view(self) -> DrawingBlockView:
+        return self._block_view_cache.build(
+            self._block_definitions,
+            self._block_instances,
+            self.layer_table,
+            self._block_text_styles,
+            self._spatial_target_frame,
+        )
+
+    def _prune_invisible_block_selection(self) -> None:
+        if not self.selected_block_instance_ids:
+            return
+        try:
+            block_view = self.drawing_block_view()
+        except KeyError:
+            # A document switch can replace layers before its block records.
+            self.selected_block_instance_ids.clear()
+            return
+        self.selected_block_instance_ids.intersection_update(
+            item.instance_id for item in (*block_view.geometry, *block_view.texts)
+        )
+
     def set_layer_table(
         self, layers: SketchLayerTable, active_layer_name: str, *, record_history: bool = False
     ) -> None:
@@ -1806,8 +2378,8 @@ class SketchCanvas(QWidget):
         self._fillet_candidate_pending = False
         self._fillet_pending_cross_candidate = ()
         layers.get(active_layer_name)
-        if record_history and layers != self.layer_table:
-            self._record_undo()
+        if record_history and layers != self.layer_table and not self._record_undo():
+            return
         self.layer_table = layers
         self.active_layer_name = active_layer_name
         visible_layers = {layer.name.casefold() for layer in layers.layers if layer.displayed}
@@ -1816,6 +2388,8 @@ class SketchCanvas(QWidget):
             for image in self.drawing_rasters
             if image.layer_name.casefold() in visible_layers
         )
+        if previous_layers != layers:
+            self._prune_invisible_block_selection()
         self._snap_candidates_cache = None
         if previous_layers != layers:
             self.visible_snap_entities_changed.emit()
@@ -1831,6 +2405,94 @@ class SketchCanvas(QWidget):
             entities.update((e.entity_id, e) for e, _layer in self._array_spacing_drag.preview)
         return entities
 
+    def dimension_entities_for_constraint(
+        self, constraint: SketchConstraint
+    ) -> dict[str, SketchEntity]:
+        """Resolve geometry within the constraint's own projected sketch when known."""
+        reference = self.dimension_reference(constraint)
+        if reference is not None:
+            if self.dimension_preview is not None and (
+                self.dimension_preview.sketch_id == reference.sketch_id
+            ):
+                return {item.entity_id: item for item in self.dimension_preview.entities}
+            if (
+                self.draft_sketch_id_provider is not None
+                and reference.sketch_id == self.draft_sketch_id_provider()
+            ):
+                return {item.entity_id: item for item in self.entities}
+            if self.background_entities == self._background_source_projection and len(
+                self.background_entities
+            ) == len(self._background_source_sketch_ids):
+                return {
+                    entity.entity_id: entity
+                    for (entity, _layer), sketch_id in zip(
+                        self.background_entities, self._background_source_sketch_ids, strict=True
+                    )
+                    if sketch_id == reference.sketch_id
+                }
+        if any(item is constraint for item in self.constraints):
+            return {item.entity_id: item for item in self.entities}
+        if (
+            self.background_entities == self._background_source_projection
+            and len(self.background_entities) == len(self._background_source_sketch_ids)
+            and len(self.background_constraints) == len(self._background_constraint_sketch_ids)
+        ):
+            for index, item in enumerate(self.background_constraints):
+                if item is constraint:
+                    owner = self._background_constraint_sketch_ids[index]
+                    return {
+                        entity.entity_id: entity
+                        for (entity, _layer), sketch_id in zip(
+                            self.background_entities,
+                            self._background_source_sketch_ids,
+                            strict=True,
+                        )
+                        if sketch_id == owner
+                    }
+        return self.dimension_entities()
+
+    def dimension_reference(self, constraint: SketchConstraint) -> DrawingObjectRef | None:
+        """Return a displayed dimension's source sketch identity when known."""
+        if constraint.kind not in DIMENSION_KINDS:
+            return None
+        if constraint is self.dimension_candidate and self.dimension_candidate_reference_provider:
+            return self.dimension_candidate_reference_provider()
+        if self.dimension_preview is not None and any(
+            item is constraint for item in self.dimension_preview.constraints
+        ):
+            return DrawingObjectRef(
+                "dimension", constraint.constraint_id, self.dimension_preview.sketch_id
+            )
+        if any(item is constraint for item in self.constraints):
+            if self.draft_sketch_id_provider is None:
+                return None
+            return DrawingObjectRef(
+                "dimension", constraint.constraint_id, self.draft_sketch_id_provider()
+            )
+        if self.background_entities == self._background_source_projection and len(
+            self.background_constraints
+        ) == len(self._background_constraint_sketch_ids):
+            for index, item in enumerate(self.background_constraints):
+                if item is constraint:
+                    return DrawingObjectRef(
+                        "dimension",
+                        constraint.constraint_id,
+                        self._background_constraint_sketch_ids[index],
+                    )
+        return None
+
+    def constraint_source_sketch_id(self, constraint: SketchConstraint) -> str | None:
+        """Resolve the source sketch of a displayed local constraint."""
+        if any(item is constraint for item in self.constraints):
+            return self.draft_sketch_id_provider() if self.draft_sketch_id_provider else None
+        if self.background_entities == self._background_source_projection and len(
+            self.background_constraints
+        ) == len(self._background_constraint_sketch_ids):
+            for index, item in enumerate(self.background_constraints):
+                if item is constraint:
+                    return self._background_constraint_sketch_ids[index]
+        return None
+
     def dimension_constraints(self) -> tuple[SketchConstraint, ...]:
         retained = (
             {
@@ -1841,22 +2503,50 @@ class SketchCanvas(QWidget):
             if self.mixed_move is not None and self.mixed_move_is_valid
             else None
         )
-        constraints = {
-            c.constraint_id: c
+        constraints = [
+            c
             for c in self.background_constraints
             if retained is None or c.constraint_id in retained
-        }
-        constraints.update((c.constraint_id, c) for c in self.constraints)
+        ]
+        constraints.extend(self.constraints)
         if self.dimension_preview is not None:
-            constraints.update((c.constraint_id, c) for c in self.dimension_preview.constraints)
+            preview_ids = {c.constraint_id for c in self.dimension_preview.constraints}
+            preview_sketch_id = self.dimension_preview.sketch_id
+            constraints = [
+                c
+                for c in constraints
+                if not (
+                    c.constraint_id in preview_ids
+                    and self.constraint_source_sketch_id(c) == preview_sketch_id
+                )
+            ]
+            constraints.extend(self.dimension_preview.constraints)
         if self._array_spacing_drag is not None:
-            constraints.update(
-                (c.constraint_id, c) for c in self._array_spacing_drag.preview_constraints
+            preview_ids = {c.constraint_id for c in self._array_spacing_drag.preview_constraints}
+            constraints = [c for c in constraints if c.constraint_id not in preview_ids]
+            constraints.extend(self._array_spacing_drag.preview_constraints)
+        return tuple(constraints)
+
+    def dimensions_without_candidate(self) -> tuple[SketchConstraint, ...]:
+        """Exclude only the sketch-local dimension replaced by a live candidate."""
+        candidate = self.dimension_candidate
+        constraints = self.dimension_constraints()
+        if candidate is None:
+            return constraints
+        candidate_ref = self.dimension_reference(candidate)
+        if candidate_ref is not None:
+            return tuple(
+                item for item in constraints if self.dimension_reference(item) != candidate_ref
             )
-        return tuple(constraints.values())
+        matching = [item for item in constraints if item.constraint_id == candidate.constraint_id]
+        return (
+            tuple(item for item in constraints if item not in matching)
+            if len(matching) == 1
+            else constraints
+        )
 
     def annotation_layer(self, constraint: SketchConstraint) -> SketchLayer:
-        entities = self.dimension_entities()
+        entities = self.dimension_entities_for_constraint(constraint)
         first = entities.get(constraint.references[0].entity_id)
         name = constraint.layer_name or (first.layer_name if first is not None else "0")
         if self.document_layer_table is not None:
@@ -1961,16 +2651,38 @@ class SketchCanvas(QWidget):
         *,
         allow_endpoint_intersections: bool = False,
     ) -> tuple[SketchEntity, ...]:
+        # Background entities may carry legacy IDs also used by the draft. Give
+        # those boundaries transient identities for this geometric calculation;
+        # they are removed from the result and never enter document history.
+        draft_ids = {entity.entity_id for entity in original}
+        backgrounds = self.background_entities
+        counts = Counter(entity.entity_id for entity, _layer in backgrounds)
+        if self.select_committed_entities and any(
+            entity.entity_id in draft_ids or counts[entity.entity_id] > 1
+            for entity, _layer in backgrounds
+        ):
+            used = draft_ids | {entity.entity_id for entity, _layer in backgrounds}
+            remapped: list[tuple[SketchEntity, SketchLayer]] = []
+            for entity, layer in backgrounds:
+                if entity.entity_id in draft_ids or counts[entity.entity_id] > 1:
+                    identity = uuid4().hex
+                    while identity in used:
+                        identity = uuid4().hex
+                    used.add(identity)
+                    entity = replace(entity, entity_id=identity)
+                remapped.append((entity, layer))
+            backgrounds = tuple(remapped)
         result = self._edit_visible_geometry(
             original,
             mode,
             point,
             target_id,
             allow_endpoint_intersections=allow_endpoint_intersections,
+            background_override=backgrounds,
         )
         boundary_ids = {
             entity.entity_id
-            for entity, layer in self.background_entities
+            for entity, layer in backgrounds
             if self.select_committed_entities and layer.displayed
         }
         draft_result = tuple(entity for entity in result if entity.entity_id not in boundary_ids)
@@ -2003,14 +2715,41 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
 
-    def set_line_edit_boundaries(self, identities: frozenset[str] | None) -> None:
+    def set_line_edit_boundaries(
+        self,
+        identities: frozenset[str] | None,
+        *,
+        references: frozenset[DrawingObjectRef] = frozenset(),
+    ) -> None:
         """Restrict line-edit boundaries, or use all visible entities when None."""
-        if identities is not None:
+        sources: dict[DrawingObjectRef, SketchEntity] = {}
+        for reference in references:
+            source = self._offset_reference_entity(reference)
+            if source is None or not source[1].displayed:
+                raise ValueError("边界对象不存在或来源已变化。")
+            sources[reference] = source[0]
+        if references and (
+            identities is None
+            or not {reference.object_id for reference in references} <= identities
+        ):
+            raise ValueError("边界选择缺少对象身份。")
+        if references and any(
+            source.entity.entity_id in {reference.object_id for reference in references}
+            for source in self.spatial_boundaries
+        ):
+            raise ValueError("平面与异面边界身份冲突；请重新选择。")
+        untyped = (
+            identities - {reference.object_id for reference in references}
+            if identities is not None
+            else None
+        )
+        if untyped is not None:
             available = [entity.entity_id for entity in self.selectable_entities()]
             available.extend(source.entity.entity_id for source in self.spatial_boundaries)
-            if any(available.count(identity) != 1 for identity in identities):
+            if any(available.count(identity) != 1 for identity in untyped):
                 raise ValueError("边界对象不存在或身份不唯一。")
-        self._line_edit_boundary_ids = identities
+        self._line_edit_boundary_ids = untyped
+        self._line_edit_boundary_refs = sources
         self._line_edit_boundary_invalidated = False
         self._line_edit_boundary_revision = (
             self.source_revision_provider()
@@ -2020,12 +2759,12 @@ class SketchCanvas(QWidget):
         self._line_edit_boundary_sources = tuple(
             entity
             for entity in self.selectable_entities()
-            if identities is not None and entity.entity_id in identities
+            if untyped is not None and entity.entity_id in untyped
         )
         self._line_edit_spatial_sources = tuple(
             source
             for source in self.spatial_boundaries
-            if identities is not None and source.entity.entity_id in identities
+            if untyped is not None and source.entity.entity_id in untyped
         )
         self._clear_line_edit_preview()
         self.update()
@@ -2041,8 +2780,14 @@ class SketchCanvas(QWidget):
         ):
             return
         available = self.selectable_entities()
-        if all(source in available for source in self._line_edit_boundary_sources) and all(
-            source in self.spatial_boundaries for source in self._line_edit_spatial_sources
+        if (
+            all(source in available for source in self._line_edit_boundary_sources)
+            and all(source in self.spatial_boundaries for source in self._line_edit_spatial_sources)
+            and all(
+                (boundary_source := self._offset_reference_entity(reference)) is not None
+                and boundary_source[0] == source
+                for reference, source in self._line_edit_boundary_refs.items()
+            )
         ):
             self._line_edit_boundary_revision = current
 
@@ -2095,7 +2840,8 @@ class SketchCanvas(QWidget):
             return
         identities = frozenset(self.selected_entity_ids)
         try:
-            self.set_line_edit_boundaries(identities or None)
+            references = frozenset(self.selected_geometry_refs)
+            self.set_line_edit_boundaries(identities or None, references=references)
         except ValueError as exc:
             self.selected_entity_ids.clear()
             self.message = str(exc)
@@ -2116,22 +2862,62 @@ class SketchCanvas(QWidget):
         target_id: str,
         *,
         allow_endpoint_intersections: bool = False,
+        background_override: tuple[tuple[SketchEntity, SketchLayer], ...] | None = None,
     ) -> tuple[SketchEntity, ...]:
         if mode in {"修剪", "延伸"} and self._line_edit_boundary_invalidated:
             raise ValueError("边界来源已变化；请重新选择边界。")
         visible = tuple(entity for entity in original if self._layer(entity).displayed)
+        backgrounds = (
+            self.background_entities if background_override is None else background_override
+        )
         boundaries = tuple(
             entity
-            for entity, layer in self.background_entities
+            for entity, layer in backgrounds
             if self.select_committed_entities and layer.displayed
         )
         identities = [entity.entity_id for entity in original]
         if self.select_committed_entities:
-            identities.extend(entity.entity_id for entity, _layer in self.background_entities)
+            identities.extend(entity.entity_id for entity, _layer in backgrounds)
         if len(identities) != len(set(identities)):
             raise ValueError("图元身份不唯一；无法安全确定边界，草稿未修改。")
         combined = (*visible, *boundaries)
         boundary_ids = self._line_edit_boundary_ids if mode in {"修剪", "延伸"} else None
+        if boundary_ids is not None and self._line_edit_boundary_refs:
+            resolved_ids = set(boundary_ids)
+            draft_id = self._collection_draft_id or (
+                self.draft_sketch_id_provider()
+                if self.draft_sketch_id_provider is not None
+                else None
+            )
+            for reference, expected in self._line_edit_boundary_refs.items():
+                source = self._offset_reference_entity(reference)
+                if source is None or source[0] != expected or not source[1].displayed:
+                    raise ValueError("边界对象已变化；请重新选择。")
+                if reference.sketch_id == draft_id:
+                    matches = [
+                        index for index, entity in enumerate(self.entities) if entity is source[0]
+                    ]
+                    candidates = original
+                else:
+                    matches = [
+                        index
+                        for index, ((entity, _layer), owner) in enumerate(
+                            zip(
+                                self.background_entities,
+                                self._background_source_sketch_ids,
+                                strict=True,
+                            )
+                        )
+                        if entity is source[0] and owner == reference.sketch_id
+                    ]
+                    candidates = tuple(entity for entity, _layer in backgrounds)
+                if len(matches) != 1 or matches[0] >= len(candidates):
+                    raise ValueError("边界来源已变化；请重新选择。")
+                candidate = candidates[matches[0]]
+                if replace(candidate, entity_id=expected.entity_id) != expected:
+                    raise ValueError("边界对象已变化；请重新选择。")
+                resolved_ids.add(candidate.entity_id)
+            boundary_ids = frozenset(resolved_ids)
         scoped = (
             combined
             if boundary_ids is None
@@ -2255,6 +3041,18 @@ class SketchCanvas(QWidget):
         return layer.displayed and not layer.locked
 
     def set_tool(self, tool: str) -> bool:
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.pending
+            and tool != "选择元素"
+        ):
+            self.message = "请先完成或取消形位公差放置。"
+            self.changed.emit()
+            return False
+        if self.text_tools is not None and self.text_tools.pending and tool != "选择元素":
+            self.message = "请先完成或取消文字编辑。"
+            self.changed.emit()
+            return False
         if self._array_spacing_drag is not None and self._array_spacing_drag.committing:
             self.message = "阵列修改正在提交；完成后可撤销。"
             self.changed.emit()
@@ -2265,6 +3063,12 @@ class SketchCanvas(QWidget):
             self.update()
             return False
         preselected = tuple(self.selected_entity_ids) if tool == "单点打断" else ()
+        if (
+            len(preselected) == 1
+            and self.ensure_group_operation is not None
+            and not self.ensure_group_operation(preselected[0])
+        ):
+            return False
         self._object_tangency_selection_revision = None
         self._break_at_point_target = preselected[0] if len(preselected) == 1 else None
         self._last_placement_raw = None
@@ -2278,8 +3082,12 @@ class SketchCanvas(QWidget):
             self.selected_entity_ids.clear()
             self.selected_constraint_ids.clear()
             self.selected_raster_ids.clear()
+            self.selected_block_instance_ids.clear()
             self.clear_selected_tangent_segments()
         self.tool = tool
+        self.ellipse_arc_mode = False
+        self.ellipse_mode_prompt_active = tool == "椭圆"
+        self.ellipse_arc_direction = "逆时针"
         self.arc_mode_prompt_active = tool == "圆弧"
         if tool == "圆弧":
             self.arc_creation_mode = "three_point" if self.select_committed_entities else "center"
@@ -2327,6 +3135,8 @@ class SketchCanvas(QWidget):
                 else "圆弧：指定圆心、起点和终点。"
             )
             if tool == "圆弧"
+            else "椭圆：指定中心和两个半轴；命令栏 A 创建椭圆弧。"
+            if tool == "椭圆"
             else f"{tool}：单击画布按提示放置点。"
         )
         if self.select_committed_entities and tool in {"修剪", "延伸"}:
@@ -2347,17 +3157,31 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         return True
 
+    def restore_isolated_entities(self, entities: tuple[SketchEntity, ...]) -> None:
+        """Restore an isolated editor projection without creating canvas history."""
+        self.entities = list(entities)
+        self.selected_entity_ids.clear()
+        self._snap_candidates_cache = None
+        self._snap_kind = ""
+        self._hovered_entity_id = None
+        self._hovered_line_edit_entity_id = None
+        self._clear_line_edit_preview()
+        self.update()
+
     def replace_draft_entities(
         self,
         entities: tuple[SketchEntity, ...],
         *,
         select_new: bool = False,
         new_relations: tuple[SketchConstraint, ...] = (),
+        new_cross_tangencies: tuple[DraftTangentPair, ...] = (),
+        member_mapping: dict[str, tuple[str, ...]] | None = None,
         preserve_unchanged_polyline_references: bool = False,
         new_layer_table: SketchLayerTable | None = None,
         remove_dependent_constraints: bool = False,
         remove_constraint_ids: frozenset[str] = frozenset(),
         allow_satisfied_tangency: bool = False,
+        defer_notifications: bool = False,
     ) -> bool:
         """Replace draft geometry and keep selection identities valid."""
         removed_ids = {entity.entity_id for entity in self.entities} - {
@@ -2405,7 +3229,19 @@ class SketchCanvas(QWidget):
             )
             and len({entity.entity_id for entity in entities}) == len(entities)
         )
-        self._record_undo()
+        session = self.collection_session if not defer_notifications else None
+        try:
+            before = self._draft_state() if session is not None else None
+        except ValidationError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
+        undo_before, redo_before = list(self._undo_history), list(self._redo_history)
+        next_before = self._next_history_position
+        notices_before = dict(self._pending_tangency_removal_notices)
+        actions_before = list(self._line_edit_undo_actions)
+        if not self._record_undo(notify=not defer_notifications and session is None):
+            return False
         if removed_constraints:
             self.constraints = [
                 constraint
@@ -2438,7 +3274,43 @@ class SketchCanvas(QWidget):
         if select_new:
             self.selected_entity_ids.update(available_ids - previous_ids)
         self._snap_candidates_cache = None
-        self.changed.emit()
+        if session is not None and before is not None:
+            try:
+                if self._collection_draft_id is None:
+                    raise ValidationError("暂存草稿不存在。")
+                if new_cross_tangencies or member_mapping:
+                    unmapped = session.stage(
+                        session.prepare_draft_with_cross_tangencies(
+                            self._collection_draft_id,
+                            tuple(self.entities),
+                            tuple(self.constraints),
+                            new_cross_tangencies,
+                            member_mapping,
+                        )
+                    )
+                else:
+                    unmapped = self._stage_collection_draft_state(
+                        session,
+                        self._collection_draft_id,
+                        tuple(self.entities),
+                        tuple(self.constraints),
+                    )
+                if unmapped:
+                    self.message = self._unmapped_group_notice(unmapped)
+            except (ValidationError, ValueError, StopIteration) as exc:
+                self._undo_history, self._redo_history = undo_before, redo_before
+                self._next_history_position = next_before
+                self._pending_tangency_removal_notices = notices_before
+                self._line_edit_undo_actions = actions_before
+                self._restore_draft_state(before)
+                self.message = f"草稿暂存失败：{exc}；草稿未修改。"
+                self.changed.emit()
+                self.update()
+                return False
+            self.collection_snapshot_changed.emit(session.snapshot)
+            self.history_recorded.emit()
+        if not defer_notifications:
+            self.changed.emit()
         self.update()
         return True
 
@@ -2450,6 +3322,7 @@ class SketchCanvas(QWidget):
         remove_constraint_ids: frozenset[str] = frozenset(),
         preserve_pending_tangencies: bool = False,
         allow_satisfied_tangency: bool = False,
+        pending_arrays: tuple[AssociativeRectArray, ...] | None = None,
     ) -> bool:
         """Restore draft and local history if a linked document update cannot finish."""
         state = self._draft_state()
@@ -2467,6 +3340,8 @@ class SketchCanvas(QWidget):
             )
             if applied and preserve_pending_tangencies:
                 applied = tuple(self.pending_cross_tangencies) == state.pending_cross_tangencies
+            if applied and pending_arrays is not None:
+                self.pending_associative_arrays = list(pending_arrays)
         finally:
             if not applied:
                 self._undo_history, self._redo_history = undo, redo
@@ -2530,7 +3405,8 @@ class SketchCanvas(QWidget):
         )
         if not erase and constraints is None:
             self._reject_user_constraint_reference_edits(entities)
-        self._record_undo()
+        if not self._record_undo():
+            return
         if pending_pairs is not None:
             removed = max(0, len(self.pending_cross_tangencies) - len(pending_pairs))
             if removed:
@@ -2561,21 +3437,7 @@ class SketchCanvas(QWidget):
         )
         self.mixed_move = state
         self.background_entities = state.overlay_background
-        if self._transform_operation == "offset" and self._offset_pending_result_id is not None:
-            result = next(
-                (
-                    entity
-                    for entity in entities
-                    if entity.entity_id == self._offset_pending_result_id
-                ),
-                None,
-            )
-            self._offset_pending_result_id = None
-            if result is not None:
-                self._offset_undo_positions.append(self.history_position)
-                if self._offset_multiple:
-                    self._offset_target = result
-                    self.selected_entity_ids = {result.entity_id}
+        self.finish_collection_offset(success=True)
         self._prune_pending_cross_tangencies(
             original_entities=original,
             original_sources=tuple(
@@ -2709,8 +3571,71 @@ class SketchCanvas(QWidget):
     def selected_raster_id(self, value: str | None) -> None:
         self.selected_raster_ids = {value} if value is not None else set()
 
+    def effective_group_selection(self) -> frozenset[DrawingObjectRef]:
+        """Read direct-seed expansion without changing the user's selection."""
+        return (
+            self.group_selection_provider()
+            if self.group_selection_provider is not None
+            else frozenset()
+        )
+
     def delete_selected(self) -> bool:
         """Erase draft selection and its dependent relations as one undo step."""
+        if self.text_tools is not None and self.text_tools.pending:
+            self.message = "请先完成或取消当前文字操作，再删除所选对象。"
+            self.changed.emit()
+            return False
+        if self.geometric_tolerance_tools is not None and self.geometric_tolerance_tools.pending:
+            self.message = "请先完成或取消当前标注操作，再删除所选对象。"
+            self.changed.emit()
+            return False
+        if self.ensure_group_operation is not None and not self.ensure_group_operation(None):
+            return False
+        if self.collection_session is not None:
+            selected = self.effective_group_selection()
+            try:
+                groups = self.collection_session.snapshot.groups
+            except ValidationError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return False
+            unresolved_ids = (
+                self.selected_entity_ids | self.selected_constraint_ids | self.selected_raster_ids
+            )
+            if self.text_tools is not None:
+                unresolved_ids |= self.text_tools.selected_ids
+            if self.geometric_tolerance_tools is not None:
+                unresolved_ids |= self.geometric_tolerance_tools.selected_ids
+            if (
+                self.selected_block_instance_ids
+                or (
+                    (self.selected_entity_ids or self.selected_constraint_ids)
+                    and self.delete_collection_selection is not None
+                )
+                or any(
+                    (
+                        not selected.isdisjoint(group.members)
+                        or not selected
+                        and any(member.object_id in unresolved_ids for member in group.members)
+                    )
+                    for group in groups
+                )
+            ):
+                if self.delete_collection_selection is not None:
+                    return self.delete_collection_selection()
+                self.message = "当前画布无法整体删除组。"
+                self.changed.emit()
+                return False
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.selected_id is not None
+        ):
+            return self.geometric_tolerance_tools.delete_selected()
+        if self.text_tools is not None and self.text_tools.selected_ids:
+            if self.selected_entity_ids or self.selected_raster_ids or self.selected_constraint_ids:
+                self.committed_delete_requested.emit(tuple(self.selected_entity_ids))
+                return True
+            return self.text_tools.delete()
         if self.has_pending_geometry or self.has_active_edit_gesture:
             self.message = "请先完成当前操作，或按 Esc 取消预览，再删除所选对象。"
             self.changed.emit()
@@ -2920,6 +3845,16 @@ class SketchCanvas(QWidget):
             return False
         if not entity_ids and not constraints:
             return False
+        if self.collection_session is not None:
+            if self.pending_associative_arrays and entity_ids:
+                self.message = "请先完成或取消草稿，再删除关联阵列对象及约束。"
+                self.changed.emit()
+                return False
+            return self.replace_draft_entities(
+                tuple(item for item in self.entities if item.entity_id not in entity_ids),
+                remove_dependent_constraints=True,
+                remove_constraint_ids=frozenset(item.constraint_id for item in constraints),
+            )
         updated_draft: Sketch | None = None
         updated_pending: tuple[AssociativeRectArray, ...] | None = None
         if entity_ids and self.pending_associative_arrays:
@@ -2960,8 +3895,9 @@ class SketchCanvas(QWidget):
                 self.message = f"删除失败：{exc}"
                 self.changed.emit()
                 return False
+        if not self._record_undo():
+            return False
         self.deleting.emit()
-        self._record_undo()
         self.entities = (
             list(updated_draft.entities)
             if updated_draft is not None
@@ -3252,6 +4188,10 @@ class SketchCanvas(QWidget):
         return self._scale
 
     @property
+    def orthogonal_enabled(self) -> bool:
+        return self._orthogonal_enabled
+
+    @property
     def is_panning(self) -> bool:
         return self._panning
 
@@ -3272,16 +4212,23 @@ class SketchCanvas(QWidget):
         )
 
     @property
+    def draft_handle_drag_active(self) -> bool:
+        """Whether draft geometry is showing an uncommitted grip preview."""
+        return self._drag_reference is not None
+
+    @property
     def has_active_edit_gesture(self) -> bool:
         """Whether a pointer edit is displaying an unconfirmed draft preview."""
         return (
-            self.tool == "对象相切选择"
+            self._block_point_capture is not None
+            or self.tool == "对象相切选择"
             or self._transform_operation is not None
             or self._line_edit_selecting_boundaries
             or self._circle_fillet_first is not None
             or self._chamfer_first is not None
             or bool(self._corner_drag_points)
             or self._clipboard_paste is not None
+            or self._clipboard_collection is not None
             or self._clipboard_raster is not None
             or bool(self._clipboard_rasters)
             or self.chamfer_polyline_pending
@@ -3299,12 +4246,10 @@ class SketchCanvas(QWidget):
         )
 
     def _cancel_active_edit_gesture(self) -> bool:
+        cancelled_block_point = self._block_point_capture is not None
+        self._cancel_block_point()
         cancelled_paste = self.clipboard_paste_active
-        self._clipboard_paste = None
-        self._clipboard_raster = None
-        self._clipboard_rasters = ()
-        self._clipboard_mixed_images = ()
-        self._clipboard_mixed_revision = None
+        self._clear_clipboard_paste()
         cancelled_corner_drag = bool(self._corner_drag_points)
         self._corner_drag_points.clear()
         cancelled_selection = self._cancel_selection_box()
@@ -3331,7 +4276,82 @@ class SketchCanvas(QWidget):
             or cancelled_erase
             or cancelled_corner_drag
             or cancelled_paste
+            or cancelled_block_point
         )
+
+    def _clear_clipboard_paste(self) -> None:
+        """Discard every pending paste payload and its candidate preview."""
+        origin = self._paste_session_origin
+        self._paste_session_origin = None
+        if origin is not None and self.collection_session is origin.session:
+            try:
+                unchanged = (
+                    origin.session.checkpoint() == origin.checkpoint
+                    and tuple(self._undo_history) == origin.attached_undo
+                    and tuple(self._redo_history) == origin.attached_redo
+                    and tuple(self.entities) == origin.entities
+                    and tuple(self.constraints) == origin.constraints
+                )
+            except ValidationError:
+                unchanged = False
+            if unchanged:
+                origin.session.cancel()
+                with suppress(RuntimeError, TypeError):
+                    self.changed.disconnect(self._sync_collection_draft)
+                self.collection_session = None
+                self._collection_draft_id = None
+                self._undo_history = list(origin.undo)
+                self._redo_history = list(origin.redo)
+                self.mixed_move = origin.mixed_move
+        self._clipboard_paste = None
+        self._clipboard_collection = None
+        self.collection_paste_preview = None
+        self._clipboard_raster = None
+        self._clipboard_rasters = ()
+        self._clipboard_mixed_images = ()
+        self._clipboard_mixed_revision = None
+
+    @property
+    def block_point_capture_active(self) -> bool:
+        return self._block_point_capture is not None
+
+    def begin_block_point_capture(
+        self,
+        callback: Callable[[Point2D], None],
+        label: str,
+        *,
+        preview: Callable[[Point2D], DrawingCollectionClipboard] | None = None,
+        cancel: Callable[[], None] | None = None,
+    ) -> None:
+        if self.has_pending_geometry or self.has_active_edit_gesture:
+            raise ValueError("请先完成或取消当前绘图操作。")
+        self._block_point_capture = callback
+        self._block_point_preview = preview
+        self._block_point_cancel = cancel
+        self.block_library_preview_payload = None
+        self.message = label
+        self.setFocus()
+        self.changed.emit()
+        self.update()
+
+    def _cancel_block_point(self) -> None:
+        cancel = self._block_point_cancel
+        self._block_point_capture = None
+        self._block_point_preview = None
+        self._block_point_cancel = None
+        self.block_library_preview_payload = None
+        if cancel is not None:
+            cancel()
+
+    def _accept_block_point(self, point: Point2D) -> None:
+        callback = self._block_point_capture
+        self._block_point_capture = None
+        self._block_point_preview = None
+        self._block_point_cancel = None
+        self.block_library_preview_payload = None
+        if callback is not None:
+            callback(point)
+        self.update()
 
     def _cancel_circle_fillet(self) -> bool:
         if (
@@ -3460,6 +4480,38 @@ class SketchCanvas(QWidget):
             return "倒角距离为 0，所选边已相交；重新执行倒角并在命令栏输入 D 设置非零距离。"
         return "所选对象已满足角点要求，图形未变化。"
 
+    @property
+    def fillet_pending_cross_tangencies(self) -> tuple[DraftTangentPair, ...]:
+        """Relations created by the current saved-source fillet candidate."""
+        return self._fillet_pending_cross_candidate
+
+    def finish_collection_offset(self, *, success: bool) -> None:
+        """Finish an offset only after the saved-source candidate was accepted."""
+        if self._transform_operation != "offset" or self._offset_pending_result_id is None:
+            return
+        result = next(
+            (
+                entity
+                for entity in self.entities
+                if entity.entity_id == self._offset_pending_result_id
+            ),
+            None,
+        )
+        self._offset_pending_result_id = None
+        if success and result is not None:
+            self._offset_undo_positions.append(self.history_position)
+            if self._offset_multiple:
+                self._offset_target = result
+                if self._collection_draft_id is not None:
+                    self._offset_target_ref = DrawingObjectRef(
+                        "geometry", result.entity_id, self._collection_draft_id
+                    )
+                self.selected_entity_ids = (
+                    {item.entity_id for item in self._offset_spline_group}
+                    if self._offset_spline_group
+                    else {result.entity_id}
+                )
+
     def finish_fillet_candidate(self, *, success: bool) -> None:
         """Finish a saved-source fillet only after its candidate has completed."""
         if not self._fillet_candidate_pending:
@@ -3483,6 +4535,41 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
         return True
+
+    def begin_ellipse_arc(self) -> bool:
+        """Switch a new ellipse command to its elliptic-arc option."""
+        if self.tool != "椭圆" or self.has_pending_geometry or self.has_active_edit_gesture:
+            self.message = "请先完成或取消当前操作。"
+            self.changed.emit()
+            return False
+        self.ellipse_arc_mode = True
+        self.ellipse_mode_prompt_active = False
+        self.message = "椭圆弧：指定中心，再指定第一半轴端点。CW / CCW 可切换方向。"
+        self.changed.emit()
+        self.update()
+        return True
+
+    def set_ellipse_arc_direction(self, clockwise: bool) -> None:
+        if self.tool != "椭圆" or not self.ellipse_arc_mode:
+            raise ValueError("椭圆弧命令未启动。")
+        self.ellipse_arc_direction = "顺时针" if clockwise else "逆时针"
+        self.message = f"椭圆弧方向：{self.ellipse_arc_direction}；继续指定点。"
+        self.changed.emit()
+        self.update()
+
+    @property
+    def ellipse_arc_angle_pending(self) -> bool:
+        return self.tool == "椭圆" and self.ellipse_arc_mode and len(self._points) in (3, 4)
+
+    def add_ellipse_arc_angle(self, angle_deg: float) -> None:
+        """Use a global direction angle, matching the point-on-ray input."""
+        if not self.ellipse_arc_angle_pending or not math.isfinite(angle_deg):
+            raise ValueError("请输入有限的椭圆弧方向角。")
+        center = self._points[0]
+        angle = math.radians(angle_deg)
+        self.add_coordinate_point(
+            (center[0] + math.cos(angle), center[1] + math.sin(angle)), exact_point=True
+        )
 
     def begin_arc_three_point(self) -> bool:
         """Use three circumference points to determine the new arc."""
@@ -3684,9 +4771,8 @@ class SketchCanvas(QWidget):
             relations, pending = self._fillet_indexed_relations(
                 arc, ((source_a, ref_a), (source_b, ref_b))
             )
-            if not self.replace_draft_entities((*self.entities, arc), new_relations=relations):
+            if not self._append_draft_geometry_with_cross_tangencies(arc, relations, pending):
                 return False
-            self.pending_cross_tangencies.extend(pending)
         except ValueError as exc:
             self.message = str(exc)
             self.changed.emit()
@@ -3972,7 +5058,7 @@ class SketchCanvas(QWidget):
                 if (item.kind, frozenset(item.references)) not in relation_keys
             ),
         )
-        if not self.replace_draft_entities((*self.entities, line), new_relations=relations):
+        if not self._append_draft_geometry_with_cross_tangencies(line, relations, pending):
             return
         self._last_polar_entity_id = line.entity_id
         self.pending_cross_tangencies.extend(pending)
@@ -4090,7 +5176,7 @@ class SketchCanvas(QWidget):
         except ValueError as exc:
             self.message = str(exc)
             return False
-        if not self.replace_draft_entities((*self.entities, circle), new_relations=relations):
+        if not self._append_draft_geometry_with_cross_tangencies(circle, relations, pending):
             return False
         self.pending_cross_tangencies.extend(pending)
         self.circle_ttr_active = False
@@ -4108,6 +5194,25 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
         return True
+
+    def _append_draft_geometry_with_cross_tangencies(
+        self,
+        entity: SketchEntity,
+        relations: tuple[SketchConstraint, ...],
+        pending: tuple[DraftTangentPair, ...],
+    ) -> bool:
+        session, draft_id = self.collection_session, self._collection_draft_id
+        if session is None or draft_id is None or not pending:
+            return self.replace_draft_entities((*self.entities, entity), new_relations=relations)
+        try:
+            operation = session.prepare_draft_with_cross_tangencies(
+                draft_id, (*self.entities, entity), (*self.constraints, *relations), pending
+            )
+            return self.stage_collection_operation(operation)
+        except (ValidationError, ValueError, StopIteration) as exc:
+            self.message = f"草稿相切暂存失败：{exc}；草稿未修改。"
+            self.changed.emit()
+            return False
 
     def undo_fillet(self) -> bool:
         """Undo only edits made since this fillet command was activated."""
@@ -4842,8 +5947,7 @@ class SketchCanvas(QWidget):
                             ),
                         ),
                     )
-                    if self.replace_draft_entities((*self.entities, arc), new_relations=relations):
-                        self.pending_cross_tangencies.extend(pending)
+                    if self._append_draft_geometry_with_cross_tangencies(arc, relations, pending):
                         self._circle_fillet_first = None
                         self._circle_fillet_segment = None
                         self._fillet_source_revision = None
@@ -4894,8 +5998,7 @@ class SketchCanvas(QWidget):
                         for index in (0, count - 1)
                     ),
                 )
-                if self.replace_draft_entities((*self.entities, arc), new_relations=relations):
-                    self.pending_cross_tangencies.extend(pending)
+                if self._append_draft_geometry_with_cross_tangencies(arc, relations, pending):
                     self._circle_fillet_first = None
                     self._circle_fillet_segment = None
                     self._fillet_source_revision = None
@@ -5044,9 +6147,12 @@ class SketchCanvas(QWidget):
                         self.message = str(exc)
                     else:
                         if self.replace_draft_entities(
-                            (*self.entities, *arcs), new_relations=tuple(all_relations)
+                            (*self.entities, *arcs),
+                            new_relations=tuple(all_relations),
+                            new_cross_tangencies=tuple(all_pending),
                         ):
-                            self.pending_cross_tangencies.extend(all_pending)
+                            if self.collection_session is None:
+                                self.pending_cross_tangencies.extend(all_pending)
                             self.circle_fillet_polyline_pending = False
                             self.message = (
                                 f"多段线圆角已创建；原对象保留，{unbound_arcs} 个圆角来源不唯一或不在原段上，未自动建立相切。"
@@ -5291,10 +6397,9 @@ class SketchCanvas(QWidget):
                                     ),
                                 ),
                             )
-                            if self.replace_draft_entities(
-                                (*self.entities, new_arc), new_relations=relations
+                            if self._append_draft_geometry_with_cross_tangencies(
+                                new_arc, relations, pending
                             ):
-                                self.pending_cross_tangencies.extend(pending)
                                 self._circle_fillet_first = None
                                 self._circle_fillet_segment = None
                                 self.selected_entity_ids.clear()
@@ -5542,6 +6647,25 @@ class SketchCanvas(QWidget):
             polyline.entity_id: (joined,),
             line.entity_id: (),
         }
+        member_mapping: dict[str, tuple[str, ...]] = {}
+        draft_events: list[tuple[str, tuple[str, ...]]] = []
+        if self.collection_session is not None and self._collection_draft_id is not None:
+            draft_ids = {item.entity_id for item in self.entities}
+            for identity, fragments in replacements.items():
+                if identity not in draft_ids:
+                    continue
+                ref = DrawingObjectRef("geometry", identity, self._collection_draft_id)
+                owners = tuple(
+                    group
+                    for group in self.collection_session.snapshot.groups
+                    if ref in group.members
+                )
+                if any(group.selectable for group in owners):
+                    raise ValueError("组选择已启用；请先关闭组选择再编辑单个成员。")
+                ids = tuple(item.entity_id for item in fragments)
+                draft_events.append((identity, ids))
+                if owners:
+                    member_mapping[identity] = ids
         candidate = tuple(
             replacement
             for item in self.entities
@@ -5587,10 +6711,14 @@ class SketchCanvas(QWidget):
                 if self.tool == "二维倒角"
                 else "正在校验多段线圆角连接。"
             )
-            self.committed_drag_trim_requested.emit(
-                events, candidate, constraints, background, revision
-            )
-        elif self.replace_draft_entities(candidate):
+            self.collection_trim_draft_events = tuple(draft_events)
+            try:
+                self.committed_drag_trim_requested.emit(
+                    events, candidate, constraints, background, revision
+                )
+            finally:
+                self.collection_trim_draft_events = ()
+        elif self.replace_draft_entities(candidate, member_mapping=member_mapping):
             self._chamfer_first = None
             self._chamfer_segment = None
             self._circle_fillet_first = None
@@ -5698,6 +6826,8 @@ class SketchCanvas(QWidget):
         relations, pending = self._fillet_indexed_relations(
             arc, ((first, first_ref), (second, second_ref))
         )
+        if self._stage_collection_notrim_fillet(arc, relations, pending):
+            return
         if self.replace_draft_entities((*self.entities, arc), new_relations=relations):
             self.pending_cross_tangencies.extend(pending)
             self._circle_fillet_first = None
@@ -5798,6 +6928,8 @@ class SketchCanvas(QWidget):
             raise ValueError("不修剪模式要求切点位于原图元上。")
         relations = self._fillet_tangent_relations(arc, (first, second))
         pending = self._fillet_cross_pairs(arc, (first, second))
+        if self._stage_collection_notrim_fillet(arc, relations, pending):
+            return
         if self.replace_draft_entities((*self.entities, arc), new_relations=relations):
             self.pending_cross_tangencies.extend(pending)
             self._circle_fillet_first = None
@@ -5814,6 +6946,32 @@ class SketchCanvas(QWidget):
             self._complete_fillet_command()
             self.changed.emit()
             self.update()
+
+    def _stage_collection_notrim_fillet(
+        self,
+        arc: ArcEntity,
+        relations: tuple[SketchConstraint, ...],
+        pending: tuple[DraftTangentPair, ...],
+    ) -> bool:
+        """Stage the new arc and its relations together when a collection is active."""
+        if self.collection_session is None:
+            return False
+        if self.source_revision_provider is None:
+            raise ValueError("缺少文档版本；圆角无法安全暂存。")
+        self._circle_fillet_first = None
+        self._circle_fillet_segment = None
+        self._fillet_source_revision = None
+        self._fillet_candidate_pending = True
+        self._fillet_pending_cross_candidate = pending
+        self.message = "正在校验圆角修改。"
+        self.committed_drag_trim_requested.emit(
+            (),
+            (*self.entities, arc),
+            (*self.constraints, *relations),
+            self.background_entities,
+            self.source_revision_provider(),
+        )
+        return True
 
     def _fillet_cross_pairs(
         self,
@@ -5989,7 +7147,8 @@ class SketchCanvas(QWidget):
         """Remove one staged relation as an undoable draft operation."""
         if pair not in self.pending_cross_tangencies:
             return False
-        self._record_undo()
+        if not self._record_undo():
+            return False
         self.pending_cross_tangencies.remove(pair)
         self.message = "暂存相切关系已移除，可撤销。"
         self.changed.emit()
@@ -6111,6 +7270,16 @@ class SketchCanvas(QWidget):
         replacements = {
             source.entity_id: result for source, result in zip(sources, results, strict=True)
         }
+        member_mapping: dict[str, tuple[str, ...]] = {}
+        if self.collection_session is not None and self._collection_draft_id is not None:
+            groups = self.collection_session.snapshot.groups
+            for identity, result in replacements.items():
+                ref = DrawingObjectRef("geometry", identity, self._collection_draft_id)
+                owners = tuple(group for group in groups if ref in group.members)
+                if any(group.selectable for group in owners):
+                    raise ValueError("组选择已启用；请先关闭组选择再编辑单个成员。")
+                if owners:
+                    member_mapping[identity] = (result.entity_id,)
         draft = tuple(replacements.get(entity.entity_id, entity) for entity in self.entities)
         candidate = (*draft, arc) if arc is not None else draft
         background = tuple(
@@ -6189,16 +7358,28 @@ class SketchCanvas(QWidget):
             self.message = "正在校验倒角修改。" if self.tool == "二维倒角" else "正在校验圆角修改。"
             self._fillet_candidate_pending = True
             self._fillet_pending_cross_candidate = pending
-            self.committed_drag_trim_requested.emit(
-                events, candidate, constraints, background, revision
+            draft_ids = {entity.entity_id for entity in self.entities}
+            self.collection_trim_draft_events = tuple(
+                (identity, (result.entity_id,))
+                for identity, result in replacements.items()
+                if identity in draft_ids
             )
+            try:
+                self.committed_drag_trim_requested.emit(
+                    events, candidate, constraints, background, revision
+                )
+            finally:
+                self.collection_trim_draft_events = ()
         else:
             if self.replace_draft_entities(
                 candidate,
                 new_relations=relations,
+                new_cross_tangencies=pending,
+                member_mapping=member_mapping,
                 preserve_unchanged_polyline_references=preserve_user_refs,
             ):
-                self.pending_cross_tangencies.extend(pending)
+                if self.collection_session is None:
+                    self.pending_cross_tangencies.extend(pending)
                 self._chamfer_first = None
                 self._circle_fillet_first = None
                 self._circle_fillet_segment = None
@@ -6214,15 +7395,401 @@ class SketchCanvas(QWidget):
                 )
                 self._complete_fillet_command()
 
-    def _record_undo(self) -> None:
-        self._undo_history.append(self._draft_state())
-        self._advance_history()
+    def _record_undo(self, *, notify: bool = True) -> bool:
+        try:
+            state = self._draft_state()
+        except ValidationError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
+        self._undo_history.append(state)
+        self._advance_history(notify=notify)
+        return True
 
-    def _advance_history(self) -> None:
+    def _advance_history(self, *, notify: bool = True) -> None:
         self._next_history_position += 1
         self.history_position = self._next_history_position
         self._redo_history.clear()
-        self.history_recorded.emit()
+        if notify:
+            self.history_recorded.emit()
+
+    def attach_collection_session(
+        self, session: DrawingCollectionSession, draft_sketch_id: str
+    ) -> None:
+        """Bind a candidate only when its draft matches the visible canvas."""
+        if self.collection_session is not None:
+            raise ValidationError("草稿已有暂存会话。")
+        draft = next(
+            (item for item in session.snapshot.sketches if item.sketch_id == draft_sketch_id),
+            None,
+        )
+        if (
+            draft is None
+            or draft.entities != tuple(self.entities)
+            or draft.constraints != tuple(self.constraints)
+        ):
+            raise ValidationError("暂存草稿与画布不一致。")
+        original = session.checkpoint()
+        if original.steps:
+            raise ValidationError("只能将未操作的暂存会话绑定到草稿。")
+        history = list(self._undo_history)
+        redo_history = list(self._redo_history)
+        first = next((index for index, state in enumerate(history) if state.entities), None)
+        mixed = self.mixed_move or next(
+            (state.mixed_move for state in reversed(redo_history) if state.mixed_move is not None),
+            None,
+        )
+        if mixed is not None:
+            self._attach_mixed_collection_session(session, draft_sketch_id, draft, mixed, first)
+            return
+        if any(
+            state.layers != draft.layers
+            or state.mixed_move is not None
+            or state.pending_cross_tangencies
+            or state.pending_associative_arrays
+            for state in (*history[first or 0 :], *redo_history)
+        ):
+            raise ValidationError("草稿历史包含尚未接入暂存的图层或关联操作。")
+        try:
+            if first is not None:
+                start = history[first]
+                session.rebase_draft(
+                    replace(draft, entities=start.entities, constraints=start.constraints)
+                )
+                previous_position = start.history_position
+                for index in range(first, len(history)):
+                    state = history[index]
+                    self._stage_collection_history_state(
+                        session,
+                        draft_sketch_id,
+                        previous_position,
+                        state.history_position,
+                        state.entities,
+                        state.constraints,
+                    )
+                    previous_position = state.history_position
+                    history[index] = replace(state, collection_checkpoint=session.checkpoint())
+                self._stage_collection_history_state(
+                    session,
+                    draft_sketch_id,
+                    previous_position,
+                    self.history_position,
+                    tuple(self.entities),
+                    tuple(self.constraints),
+                )
+            current = session.checkpoint()
+            previous_position = self.history_position
+            for index in reversed(range(len(redo_history))):
+                state = redo_history[index]
+                active = next(
+                    item for item in session.snapshot.sketches if item.sketch_id == draft_sketch_id
+                )
+                if not active.entities and state.entities and not session.checkpoint().steps:
+                    session.rebase_draft(
+                        replace(active, entities=state.entities, constraints=state.constraints)
+                    )
+                else:
+                    self._stage_collection_history_state(
+                        session,
+                        draft_sketch_id,
+                        previous_position,
+                        state.history_position,
+                        state.entities,
+                        state.constraints,
+                    )
+                previous_position = state.history_position
+                redo_history[index] = replace(state, collection_checkpoint=session.checkpoint())
+            session.restore(current)
+            session.guard_document_writes()
+        except Exception:
+            session.restore(original)
+            raise
+        self._undo_history = history
+        self._redo_history = redo_history
+        self.collection_session = session
+        self._collection_draft_id = draft_sketch_id
+        self.changed.connect(self._sync_collection_draft)
+
+    def _attach_mixed_collection_session(
+        self,
+        session: DrawingCollectionSession,
+        draft_sketch_id: str,
+        draft: Sketch,
+        mixed: MixedMoveState,
+        first: int | None,
+    ) -> None:
+        """Adopt existing mixed edits and their canvas history into one candidate."""
+        if mixed.transaction_id in self._invalid_mixed_transactions or (
+            self.source_revision_provider is not None
+            and self.source_revision_provider() != mixed.source_revision
+        ):
+            raise ValidationError("混合草稿来源已变化或失效；请先撤销或取消。")
+        history = list(self._undo_history)
+        redo_history = list(self._redo_history)
+        start = first if first is not None else 0
+        states = (*history[start:], self._draft_state(), *reversed(redo_history))
+        if any(
+            state.layers != draft.layers
+            or (
+                state.mixed_move is not None
+                and (
+                    state.mixed_move.transaction_id != mixed.transaction_id
+                    or state.mixed_move.source_revision != mixed.source_revision
+                    or state.mixed_move.original_saved != mixed.original_saved
+                )
+            )
+            for state in states
+        ):
+            raise ValidationError("混合草稿历史包含不兼容的来源、图层或操作。")
+        initial_state = states[0]
+        initial_draft = replace(
+            mixed.original_draft,
+            entities=initial_state.entities,
+            constraints=initial_state.constraints,
+            layers=initial_state.layers,
+        )
+        if initial_state.mixed_move is not None:
+            raise ValidationError("混合草稿缺少原始操作边界。")
+        previous = (
+            mixed.original_saved,
+            initial_draft,
+            initial_state.pending_cross_tangencies,
+            initial_state.pending_associative_arrays,
+        )
+        steps: list[tuple[tuple[Sketch, ...], Sketch]] = []
+        pairs: list[tuple[DraftTangentPair, ...]] = []
+        arrays: list[tuple[AssociativeRectArray, ...]] = []
+        transforms: list[tuple[RectangleTransformEvidence, ...]] = []
+        indices = [0]
+        previous_mixed = initial_state.mixed_move
+        for state in states[1:]:
+            pending = state.mixed_move
+            saved = pending.current_saved if pending is not None else mixed.original_saved
+            current_draft = replace(
+                mixed.original_draft,
+                entities=state.entities,
+                constraints=state.constraints,
+                layers=state.layers,
+            )
+            current = (
+                saved,
+                current_draft,
+                state.pending_cross_tangencies,
+                state.pending_associative_arrays,
+            )
+            if current != previous:
+                steps.append((saved, current_draft))
+                pairs.append(state.pending_cross_tangencies)
+                arrays.append(state.pending_associative_arrays)
+                transforms.append(
+                    pending.step_rectangle_transforms
+                    if pending is not None and pending is not previous_mixed
+                    else ()
+                )
+                previous = current
+            indices.append(len(steps))
+            previous_mixed = pending
+        if not steps:
+            raise ValidationError("混合草稿没有可导入的操作。")
+        checkpoints = session.adopt_mixed_history(
+            initial_draft,
+            mixed.original_saved,
+            tuple(steps),
+            cross_pairs_by_step=tuple(pairs),
+            initial_cross_pairs=initial_state.pending_cross_tangencies,
+            arrays_by_step=tuple(arrays),
+            initial_arrays=initial_state.pending_associative_arrays,
+            transforms_by_step=tuple(transforms),
+        )
+        current_index = len(history) - start
+        session.restore(checkpoints[indices[current_index]])
+        for offset, index in enumerate(range(start, len(history))):
+            history[index] = replace(
+                history[index], mixed_move=None, collection_checkpoint=checkpoints[indices[offset]]
+            )
+        for offset, index in enumerate(reversed(range(len(redo_history))), start=current_index + 1):
+            redo_history[index] = replace(
+                redo_history[index],
+                mixed_move=None,
+                collection_checkpoint=checkpoints[indices[offset]],
+            )
+        session.guard_document_writes()
+        self._undo_history = history
+        self._redo_history = redo_history
+        self.mixed_move = None
+        self.collection_session = session
+        self._collection_draft_id = draft_sketch_id
+        self.changed.connect(self._sync_collection_draft)
+        self.collection_snapshot_changed.emit(session.snapshot)
+
+    @staticmethod
+    def _unmapped_group_notice(memberships: tuple[tuple[str, DrawingObjectRef], ...]) -> str:
+        groups = "、".join(dict.fromkeys(group_id for group_id, _member in memberships))
+        return f"原组成员已清理；未提供确定的替换映射，新对象未自动加入组。受影响组：{groups}。"
+
+    def _stage_collection_history_state(
+        self,
+        session: DrawingCollectionSession,
+        draft_sketch_id: str,
+        before_position: int,
+        after_position: int,
+        entities: tuple[SketchEntity, ...],
+        constraints: tuple[SketchConstraint, ...],
+    ) -> None:
+        confirmed = self._draft_confirmed_constraints.get((before_position, after_position))
+        if confirmed is None:
+            self._stage_collection_draft_state(session, draft_sketch_id, entities, constraints)
+            return
+        original, solved, constraint, result = confirmed
+        draft = next(
+            item for item in session.snapshot.sketches if item.sketch_id == draft_sketch_id
+        )
+        if (
+            draft.entities != original.entities
+            or draft.constraints != original.constraints
+            or solved.entities != entities
+            or solved.constraints != constraints
+        ):
+            raise ValidationError("已确认约束与草稿历史不一致。")
+        updating = any(
+            item.constraint_id == constraint.constraint_id for item in original.constraints
+        )
+        operation = ReplayAppend(
+            "sketch.constraint.update" if updating else "sketch.constraint.add",
+            9 if updating else 11,
+            result.command_params(draft, constraint, local_frame=True),
+            "local",
+        )
+        projected = next(
+            item
+            for item in session.preview_operation(operation).sketches
+            if item.sketch_id == draft_sketch_id
+        )
+        if projected.entities != entities or projected.constraints != constraints:
+            raise ValidationError("已确认约束的重放结果与草稿历史不一致。")
+        session.stage(operation)
+
+    @staticmethod
+    def _stage_collection_draft_state(
+        session: DrawingCollectionSession,
+        draft_sketch_id: str,
+        entities: tuple[SketchEntity, ...],
+        constraints: tuple[SketchConstraint, ...],
+    ) -> tuple[tuple[str, DrawingObjectRef], ...]:
+        draft = next(
+            (item for item in session.snapshot.sketches if item.sketch_id == draft_sketch_id),
+            None,
+        )
+        if draft is None:
+            raise ValidationError("暂存草稿不存在。")
+        if draft.entities == entities and draft.constraints == constraints:
+            return ()
+        state = replace(draft, entities=entities, constraints=constraints).to_state_mapping()
+        return session.stage(
+            ReplayAppend(
+                "drawing.sketch.revise",
+                79,
+                {
+                    "revisions": [
+                        {
+                            "sketch_id": draft.sketch_id,
+                            "base_state_sha256": draft.local_state_digest(),
+                            "entities": state["entities"],
+                            "constraints": state["constraints"],
+                        }
+                    ]
+                },
+                "local",
+            )
+        )
+
+    def _sync_collection_draft(self) -> None:
+        """Append a completed ordinary draft edit to the shared candidate timeline."""
+        session = self.collection_session
+        if (
+            session is None
+            or self._collection_draft_id is None
+            or self._syncing_collection_draft
+            or self._drag_reference is not None
+            or self._trim_drag_start is not None
+        ):
+            return
+        self._syncing_collection_draft = True
+        try:
+            before = session.checkpoint()
+            unmapped = self._stage_collection_draft_state(
+                session, self._collection_draft_id, tuple(self.entities), tuple(self.constraints)
+            )
+            if unmapped:
+                self.message = self._unmapped_group_notice(unmapped)
+                self.changed.emit()
+            if session.checkpoint() != before:
+                self.collection_snapshot_changed.emit(session.snapshot)
+        except (ValidationError, ValueError, StopIteration) as exc:
+            self.message = f"草稿暂存同步失败：{exc or '未找到草稿'}；可撤销修改或取消。"
+        finally:
+            self._syncing_collection_draft = False
+
+    def _stage_collection_member_replacements(
+        self, identity: str, fragments: tuple[SketchEntity, ...]
+    ) -> None:
+        self._stage_collection_member_mapping(
+            {identity: tuple(item.entity_id for item in fragments)}
+        )
+
+    def _stage_collection_member_mapping(self, mapping: dict[str, tuple[str, ...]]) -> None:
+        """Stage one draft revision and its deterministic group mapping together."""
+        from mycad.core.drawing_transactions import prepare_grouped_sketch_replacements
+
+        session, draft_id = self.collection_session, self._collection_draft_id
+        if session is None or draft_id is None:
+            raise ValidationError("草稿没有暂存会话。")
+        source = next(item for item in session.snapshot.sketches if item.sketch_id == draft_id)
+        groups = session.snapshot.groups
+        refs = {
+            DrawingObjectRef("geometry", identity, draft_id): tuple(
+                DrawingObjectRef("geometry", item, draft_id) for item in replacements
+            )
+            for identity, replacements in mapping.items()
+        }
+        target = replace(source, entities=tuple(self.entities), constraints=tuple(self.constraints))
+        session.stage(prepare_grouped_sketch_replacements((source,), (target,), groups, refs))
+
+    def stage_collection_operation(self, operation: ReplayAppend) -> bool:
+        """Validate a collection step before adding it to canvas undo history."""
+        session = self.collection_session
+        if session is None or self._collection_draft_id is None:
+            self.message = "草稿没有暂存会话。"
+            return False
+        try:
+            original = session.snapshot
+            draft = next(
+                item for item in original.sketches if item.sketch_id == self._collection_draft_id
+            )
+            if draft.entities != tuple(self.entities) or draft.constraints != tuple(
+                self.constraints
+            ):
+                raise ValidationError("草稿已变化，需先同步暂存时间线。")
+            before = self._draft_state()
+            unmapped = session.stage(operation)
+            snapshot = session.snapshot
+            updated = next(
+                item for item in snapshot.sketches if item.sketch_id == self._collection_draft_id
+            )
+        except (ValidationError, StopIteration) as exc:
+            self.message = str(exc) or "暂存草稿不存在。"
+            self.changed.emit()
+            return False
+        self._undo_history.append(before)
+        self._advance_history()
+        self.entities = list(updated.entities)
+        self.constraints = list(updated.constraints)
+        self.collection_snapshot_changed.emit(snapshot)
+        if unmapped:
+            self.message = self._unmapped_group_notice(unmapped)
+        self.changed.emit()
+        self.update()
+        return True
 
     def _draft_state(self) -> _DraftState:
         return _DraftState(
@@ -6237,6 +7804,22 @@ class SketchCanvas(QWidget):
             tuple(self.pending_cross_tangencies),
             self._last_polar_entity_id,
             tuple(self.pending_associative_arrays),
+            self.collection_session.checkpoint() if self.collection_session is not None else None,
+            (
+                frozenset(self.selected_constraint_ids),
+                frozenset(self.selected_raster_ids),
+                frozenset(self.text_tools.selected_ids)
+                if self.text_tools is not None
+                else frozenset(),
+                frozenset(self.geometric_tolerance_tools.selected_ids)
+                if self.geometric_tolerance_tools is not None
+                else frozenset(),
+            )
+            if self.collection_session is not None
+            else None,
+            frozenset(self.selected_block_instance_ids),
+            frozenset(self.selected_geometry_refs),
+            frozenset(self.selected_dimension_refs),
         )
 
     def rebind_restored_source(self, previous_revision: int, revision: int) -> None:
@@ -6307,6 +7890,30 @@ class SketchCanvas(QWidget):
         return True
 
     def _restore_draft_state(self, state: _DraftState) -> None:
+        if self.collection_session is not None:
+            if state.collection_checkpoint is None:
+                draft = next(
+                    (
+                        item
+                        for item in self.collection_session.snapshot.sketches
+                        if item.sketch_id == self._collection_draft_id
+                    ),
+                    None,
+                )
+                if draft is None:
+                    raise ValidationError("暂存草稿不存在。")
+                self.collection_session.rebase_draft(
+                    replace(
+                        draft,
+                        entities=state.entities,
+                        constraints=state.constraints,
+                        layers=state.layers,
+                    ),
+                    cross_tangent_pairs=state.pending_cross_tangencies,
+                    associative_arrays=state.pending_associative_arrays,
+                )
+            else:
+                self.collection_session.restore(state.collection_checkpoint)
         previous_mixed = self.mixed_move
         self.mixed_move = state.mixed_move
         if (
@@ -6330,6 +7937,7 @@ class SketchCanvas(QWidget):
         self.pending_cross_tangencies = list(state.pending_cross_tangencies)
         self.pending_associative_arrays = list(state.pending_associative_arrays)
         self.selected_entity_ids = set(state.selected_ids)
+        self.selected_geometry_refs = set(state.selected_geometry_refs)
         self.layer_table = (
             (self.document_layer_table or state.layers)
             if self.preserve_document_layers
@@ -6344,64 +7952,158 @@ class SketchCanvas(QWidget):
                 self.active_layer_name = "0"
         except KeyError:
             self.active_layer_name = "0"
-        self.selected_entity_ids.intersection_update(
-            entity.entity_id for entity in self.selectable_entities()
-        )
         self._snap_candidates_cache = None
         self._snap_kind = ""
         self._hovered_entity_id = None
         self._hovered_line_edit_entity_id = None
         self._clear_line_edit_preview()
+        if self.collection_session is not None:
+            self.collection_snapshot_changed.emit(self.collection_session.snapshot)
+            self.selected_entity_ids = set(state.selected_ids)
+            self.selected_entity_ids.intersection_update(
+                entity.entity_id for entity in self.selectable_entities()
+            )
+            self.selected_block_instance_ids = set(state.selected_block_ids) & {
+                item.instance_id for item in self.collection_session.snapshot.block_instances
+            }
+            if state.collection_selections is not None:
+                dimensions, rasters, texts, annotations = state.collection_selections
+                self.selected_constraint_ids = set(dimensions) & {
+                    item.constraint_id for item in (*self.constraints, *self.background_constraints)
+                }
+                self.selected_raster_ids = set(rasters) & {
+                    item.image_id for item in self.drawing_rasters
+                }
+                if self.text_tools is not None:
+                    self.text_tools.selected_ids = set(texts) & {
+                        item.text_id for item in self.text_tools.texts
+                    }
+                    self.text_tools.refresh_selection()
+                if self.geometric_tolerance_tools is not None:
+                    tools = self.geometric_tolerance_tools
+                    identities = {item.frame_id for item in tools.frames}
+                    identities.update(item.datum_id for item in tools.datums)
+                    identities.update(item.dimension_id for item in tools.reference_dimensions)
+                    tools.restore_collection_selection(set(annotations) & identities)
+        else:
+            self.selected_entity_ids.intersection_update(
+                entity.entity_id for entity in self.selectable_entities()
+            )
+        self.selected_geometry_refs = {
+            ref for ref in state.selected_geometry_refs if ref.object_id in self.selected_entity_ids
+        }
+        self.selected_dimension_refs = {
+            ref
+            for ref in state.selected_dimension_refs
+            if ref.object_id in self.selected_constraint_ids
+        }
+
+    @staticmethod
+    def _entity_pick_distance(entity: SketchEntity, point: Point2D) -> float:
+        if isinstance(entity, PointEntity):
+            return _distance(point, entity.position_mm)
+        if isinstance(entity, SplineEntity | EllipseEntity):
+            points = entity.sampled_points()
+            return min(
+                _distance_to_segment(point, a, b) for a, b in zip(points, points[1:], strict=False)
+            )
+        if isinstance(entity, LineEntity):
+            return _distance_to_segment(point, entity.start_mm, entity.end_mm)
+        if isinstance(entity, PolylineEntity):
+            if entity.bulges:
+                segments = polyline_curve_segments(
+                    entity.points_mm, entity.bulges, entity.closed, entity.entity_id
+                )
+                return min(
+                    _distance_to_arc(point, segment)
+                    if isinstance(segment, ArcEntity)
+                    else _distance_to_segment(point, segment.start_mm, segment.end_mm)
+                    for segment in segments
+                )
+            points = polyline_sampled_points(entity)
+            return min(
+                _distance_to_segment(point, a, b) for a, b in zip(points, points[1:], strict=False)
+            )
+        if isinstance(entity, RectangleEntity):
+            x1, y1 = entity.first_corner_mm
+            x2, y2 = entity.opposite_corner_mm
+            corners = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
+            return min(
+                _distance_to_segment(point, a, b)
+                for a, b in zip(corners, (*corners[1:], corners[0]), strict=True)
+            )
+        if isinstance(entity, CircleEntity):
+            return _radial_distance(point, entity.center_mm, entity.radius_mm)
+        return _distance_to_arc(point, entity)
+
+    def geometry_ref_at(self, point: Point2D, draft_sketch_id: str) -> DrawingObjectRef | None:
+        """Pick a visible entity with its source sketch, retaining ambiguous legacy IDs."""
+        candidates: list[tuple[float, DrawingObjectRef | None]] = []
+        tolerance = _SNAP_RADIUS_PX / self._scale
+        for entity in self._visible_entities():
+            distance = self._entity_pick_distance(entity, point)
+            if distance <= tolerance:
+                candidates.append(
+                    (distance, DrawingObjectRef("geometry", entity.entity_id, draft_sketch_id))
+                )
+        owners_valid = self.background_entities == self._background_source_projection and len(
+            self.background_entities
+        ) == len(self._background_source_sketch_ids)
+        if self.select_committed_entities:
+            for index, (entity, layer) in enumerate(self.background_entities):
+                if not layer.displayed:
+                    continue
+                distance = self._entity_pick_distance(entity, point)
+                if distance <= tolerance:
+                    owner = self._background_source_sketch_ids[index] if owners_valid else None
+                    candidates.append(
+                        (distance, DrawingObjectRef("geometry", entity.entity_id, owner))
+                        if owner is not None
+                        else (distance, None)
+                    )
+        candidates.sort(key=lambda item: item[0])
+        if not candidates or (
+            len(candidates) > 1 and (candidates[1][0] - candidates[0][0]) * self._scale <= 1.0
+        ):
+            return None
+        return candidates[0][1]
 
     def _hit_entity_at(self, point: Point2D) -> str | None:
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[float, str]] = []
         for entity in self.selectable_entities():
-            if isinstance(entity, PointEntity):
-                distance = _distance(point, entity.position_mm)
-            elif isinstance(entity, SplineEntity):
-                points = entity.sampled_points()
-                distance = min(
-                    _distance_to_segment(point, start, end)
-                    for start, end in zip(points, points[1:], strict=False)
-                )
-            elif isinstance(entity, LineEntity):
-                distance = _distance_to_segment(point, entity.start_mm, entity.end_mm)
-            elif isinstance(entity, PolylineEntity):
-                if entity.bulges:
-                    segments = polyline_curve_segments(
-                        entity.points_mm, entity.bulges, entity.closed, entity.entity_id
-                    )
-                    distance = min(
-                        _distance_to_arc(point, segment)
-                        if isinstance(segment, ArcEntity)
-                        else _distance_to_segment(point, segment.start_mm, segment.end_mm)
-                        for segment in segments
-                    )
-                else:
-                    points = polyline_sampled_points(entity)
-                    distance = min(
-                        _distance_to_segment(point, start, end)
-                        for start, end in zip(points, points[1:], strict=False)
-                    )
-            elif isinstance(entity, RectangleEntity):
-                x1, y1 = entity.first_corner_mm
-                x2, y2 = entity.opposite_corner_mm
-                corners = ((x1, y1), (x2, y1), (x2, y2), (x1, y2))
-                distance = min(
-                    _distance_to_segment(point, start, end)
-                    for start, end in zip(corners, (*corners[1:], corners[0]), strict=True)
-                )
-            elif isinstance(entity, CircleEntity):
-                distance = abs(_distance(point, entity.center_mm) - entity.radius_mm)
-            else:
-                distance = _distance_to_arc(point, entity)
+            distance = self._entity_pick_distance(entity, point)
             if distance <= tolerance:
                 candidates.append((distance, entity.entity_id))
         candidates.sort()
         if not candidates:
             return None
         if len(candidates) > 1 and (candidates[1][0] - candidates[0][0]) * self._scale <= 1.0:
+            return None
+        return candidates[0][1]
+
+    def _hit_block_at(self, point: Point2D) -> str | None:
+        distances: dict[str, float] = {}
+        view = self.drawing_block_view()
+        for item in view.geometry:
+            if item.pickable:
+                distance = self._entity_pick_distance(item.entity, point)
+                if distance <= _SNAP_RADIUS_PX / self._scale:
+                    distances[item.instance_id] = min(
+                        distances.get(item.instance_id, math.inf), distance
+                    )
+        if self.text_tools is not None:
+            for item in view.texts:
+                if item.pickable:
+                    polygon = QPolygonF(
+                        [QPointF(*corner) for corner in self.text_tools.model_corners(item.text)]
+                    )
+                    if polygon.containsPoint(QPointF(*point), Qt.FillRule.OddEvenFill):
+                        distances[item.instance_id] = 0.0
+        candidates = sorted((distance, identity) for identity, distance in distances.items())
+        if not candidates or (
+            len(candidates) > 1 and (candidates[1][0] - candidates[0][0]) * self._scale <= 1
+        ):
             return None
         return candidates[0][1]
 
@@ -6574,19 +8276,45 @@ class SketchCanvas(QWidget):
         }
 
     def _select_at(self, point: Point2D, *, additive: bool, subtractive: bool = False) -> None:
-        identity = self._hit_entity_at(point)
+        previous_refs = set(self.selected_geometry_refs)
+        if self.text_tools is not None and not additive and not subtractive:
+            self.text_tools.selected_ids.clear()
+        reference = (
+            self.geometry_ref_at(point, self.draft_sketch_id_provider())
+            if self.draft_sketch_id_provider is not None
+            else None
+        )
+        identity = reference.object_id if reference is not None else self._hit_entity_at(point)
         if not additive and not subtractive:
             self.selected_entity_ids.clear()
+            self.selected_geometry_refs.clear()
+            previous_refs.clear()
             self.selected_constraint_ids.clear()
+            self.selected_block_instance_ids.clear()
             self.selected_segment_indices.clear()
             self._selected_segment_sources.clear()
         if identity is not None:
-            if subtractive:
+            known_refs = {item for item in previous_refs if item.object_id == identity}
+            if reference is not None and known_refs and (additive or subtractive):
+                if subtractive or reference in known_refs:
+                    previous_refs.discard(reference)
+                    if not any(item.object_id == identity for item in previous_refs):
+                        self.selected_entity_ids.discard(identity)
+                else:
+                    previous_refs.add(reference)
+            elif subtractive:
                 self.selected_entity_ids.discard(identity)
+                previous_refs = {item for item in previous_refs if item.object_id != identity}
             elif additive and identity in self.selected_entity_ids:
                 self.selected_entity_ids.remove(identity)
+                previous_refs = {item for item in previous_refs if item.object_id != identity}
             else:
                 self.selected_entity_ids.add(identity)
+                if reference is not None:
+                    previous_refs.add(reference)
+            self.selected_geometry_refs = {
+                item for item in previous_refs if item.object_id in self.selected_entity_ids
+            }
             self.selected_segment_indices.pop(identity, None)
             self._selected_segment_sources.pop(identity, None)
             if identity in self.selected_entity_ids:
@@ -6605,7 +8333,10 @@ class SketchCanvas(QWidget):
                             path, point
                         )
                         self._selected_segment_sources[identity] = entity
-            self.message = f"已选择 {len(self.selected_entity_ids)} 个草图元素。"
+            selected_count = len(self.selected_geometry_refs) + len(
+                self.selected_entity_ids - {ref.object_id for ref in self.selected_geometry_refs}
+            )
+            self.message = f"已选择 {selected_count} 个草图元素。"
         else:
             self.message = "未命中唯一草图元素；请靠近目标或缩放视图后重试。"
         self.changed.emit()
@@ -6725,12 +8456,21 @@ class SketchCanvas(QWidget):
         self.update()
 
     def _begin_selection_box(self, event: QMouseEvent) -> None:
+        if self.text_tools is not None:
+            self.text_tools.selection_original = set(self.text_tools.selected_ids)
+        if self.geometric_tolerance_tools is not None:
+            self.geometric_tolerance_tools.selection_original = set(
+                self.geometric_tolerance_tools.selection_before_press
+            )
         self._selection_anchor = event.position()
         self._selection_corner = event.position()
         self._selection_waiting_click = False
         self._selection_original = frozenset(self.selected_entity_ids)
+        self._selection_original_refs = frozenset(self.selected_geometry_refs)
         self._selection_original_constraints = frozenset(self.selected_constraint_ids)
+        self._selection_original_dimension_refs = frozenset(self.selected_dimension_refs)
         self._selection_original_raster_ids = frozenset(self.selected_raster_ids)
+        self._selection_original_block_ids = frozenset(self.selected_block_instance_ids)
         self._selection_modifiers = event.modifiers()
         self._hovered_entity_id = None
         self._snap_kind = ""
@@ -6742,8 +8482,15 @@ class SketchCanvas(QWidget):
         if self._selection_anchor is None:
             return False
         self.selected_entity_ids = set(self._selection_original)
+        self.selected_geometry_refs = set(self._selection_original_refs)
         self.selected_constraint_ids = set(self._selection_original_constraints)
+        self.selected_dimension_refs = set(self._selection_original_dimension_refs)
         self.selected_raster_ids = set(self._selection_original_raster_ids)
+        self.selected_block_instance_ids = set(self._selection_original_block_ids)
+        if self.text_tools is not None:
+            self.text_tools.selected_ids = set(self.text_tools.selection_original)
+        if self.geometric_tolerance_tools is not None:
+            self.geometric_tolerance_tools.restore_box_selection()
         self._selection_anchor = None
         self._selection_waiting_click = False
         self.message = "已取消框选。"
@@ -6757,13 +8504,85 @@ class SketchCanvas(QWidget):
             return
         self.selected_segment_indices.clear()
         self._selected_segment_sources.clear()
+        if self.text_tools is not None:
+            self.text_tools.select_box(anchor, position, self._selection_modifiers)
+        ambiguous_annotations = False
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.select_committed_entities
+            and self.tool == "选择元素"
+            and not self._transform_selecting
+            and not self._line_edit_selecting_boundaries
+            and not self._line_edit_erasing
+        ):
+            ambiguous_annotations = self.geometric_tolerance_tools.select_box(
+                anchor, position, self._selection_modifiers
+            )
         crossing = position.x() < anchor.x()
         first, second = self.screen_to_local(anchor), self.screen_to_local(position)
+        block_hits: set[str] = set()
+        if (
+            self.select_committed_entities
+            and self.tool == "选择元素"
+            and not self._line_edit_selecting_boundaries
+            and not self._line_edit_erasing
+        ):
+            matches: dict[str, list[tuple[bool, bool]]] = {}
+            block_view = self.drawing_block_view()
+            for item in block_view.geometry:
+                hit = entity_in_selection_box(item.entity, first, second, crossing=crossing)
+                matches.setdefault(item.instance_id, []).append((hit, item.pickable))
+            if self.text_tools is not None:
+                selection = QRectF(anchor, position).normalized()
+                for item in block_view.texts:
+                    bounds = QPolygonF(
+                        [
+                            self.local_to_screen_precise(point)
+                            for point in self.text_tools.model_corners(item.text)
+                        ]
+                    ).boundingRect()
+                    hit = selection.contains(bounds) or (crossing and selection.intersects(bounds))
+                    matches.setdefault(item.instance_id, []).append((hit, item.pickable))
+            block_hits = {
+                identity
+                for identity, members in matches.items()
+                if (
+                    any(hit and pickable for hit, pickable in members)
+                    if crossing
+                    else all(hit for hit, _pickable in members)
+                    and any(pickable for _hit, pickable in members)
+                )
+            }
         identities = {
             entity.entity_id
             for entity in self.selectable_entities()
             if entity_in_selection_box(entity, first, second, crossing=crossing)
         }
+        hit_refs: set[DrawingObjectRef] | None = None
+        if self.draft_sketch_id_provider is not None:
+            draft_id = self.draft_sketch_id_provider()
+            hit_refs = {
+                DrawingObjectRef("geometry", entity.entity_id, draft_id)
+                for entity in self._visible_entities()
+                if entity_in_selection_box(entity, first, second, crossing=crossing)
+            }
+            owners_valid = self.background_entities == self._background_source_projection and len(
+                self.background_entities
+            ) == len(self._background_source_sketch_ids)
+            if self.select_committed_entities:
+                for index, (entity, layer) in enumerate(self.background_entities):
+                    if not layer.displayed or not entity_in_selection_box(
+                        entity, first, second, crossing=crossing
+                    ):
+                        continue
+                    if not owners_valid:
+                        hit_refs = None
+                        break
+                    hit_refs.add(
+                        DrawingObjectRef(
+                            "geometry", entity.entity_id, self._background_source_sketch_ids[index]
+                        )
+                    )
         if self._line_edit_selecting_boundaries:
             identities.update(
                 source.entity.entity_id
@@ -6781,14 +8600,16 @@ class SketchCanvas(QWidget):
             and not self._line_edit_erasing
         ):
             selection = QRectF(anchor, position).normalized()
-            entities = self.dimension_entities()
-            label_rectangles = self.dimension_label_rectangles()
+            label_rectangles = self.dimension_label_rectangles_by_constraint()
+            dimension_refs: set[DrawingObjectRef] = set()
+            unknown_dimension_ids: set[str] = set()
             for constraint in self.dimension_constraints():
                 layer = self.annotation_layer(constraint)
                 if constraint.kind not in DIMENSION_KINDS or not layer.displayed or layer.locked:
                     continue
+                entities = self.dimension_entities_for_constraint(constraint)
                 layout = self.dimension_layout(constraint, entities)
-                label_rect = label_rectangles.get(constraint.constraint_id)
+                label_rect = label_rectangles.get(id(constraint))
                 if label_rect is None:
                     continue
                 path = QPainterPath()
@@ -6815,19 +8636,37 @@ class SketchCanvas(QWidget):
                 )
                 if hit:
                     dimension_ids.add(constraint.constraint_id)
+                    reference = self.dimension_reference(constraint)
+                    if reference is None:
+                        unknown_dimension_ids.add(constraint.constraint_id)
+                    else:
+                        dimension_refs.add(reference)
+            original_refs = set(self._selection_original_dimension_refs)
+            original_untyped = set(self._selection_original_constraints) - {
+                ref.object_id for ref in original_refs
+            }
             if self._selection_modifiers & Qt.KeyboardModifier.ShiftModifier:
-                self.selected_constraint_ids = (
-                    set(self._selection_original_constraints) - dimension_ids
-                )
+                selected_dimension_refs = original_refs - dimension_refs
+                untyped_dimensions = original_untyped - dimension_ids
             elif (
                 self._selection_modifiers & Qt.KeyboardModifier.ControlModifier
                 or self._transform_selecting
             ):
-                self.selected_constraint_ids = (
-                    set(self._selection_original_constraints) | dimension_ids
-                )
+                selected_dimension_refs = original_refs | dimension_refs
+                untyped_dimensions = original_untyped | unknown_dimension_ids
             else:
-                self.selected_constraint_ids = dimension_ids
+                selected_dimension_refs = dimension_refs
+                untyped_dimensions = unknown_dimension_ids
+            untyped_dimensions |= unknown_dimension_ids & {
+                ref.object_id for ref in selected_dimension_refs
+            }
+            selected_dimension_refs = {
+                ref for ref in selected_dimension_refs if ref.object_id not in untyped_dimensions
+            }
+            self.selected_constraint_ids = untyped_dimensions | {
+                ref.object_id for ref in selected_dimension_refs
+            }
+            self.selected_dimension_refs = selected_dimension_refs
         image_hits: list[str] = []
         if (
             self.select_committed_entities
@@ -6840,15 +8679,10 @@ class SketchCanvas(QWidget):
                 layer = self.layer_table.get(image.layer_name)
                 if not layer.displayed or layer.locked:
                     continue
-                angle = math.radians(image.angle_deg)
-                ux, uy = math.cos(angle) * image.width_mm, math.sin(angle) * image.width_mm
-                sign = -1 if image.mirrored else 1
-                vx, vy = (
-                    -math.sin(angle) * image.height_mm * sign,
-                    math.cos(angle) * image.height_mm * sign,
-                )
-                x, y = image.origin_mm
-                corners = ((x, y), (x + ux, y + uy), (x + ux + vx, y + uy + vy), (x + vx, y + vy))
+                projected = self._project_drawing_raster(image)
+                if projected is None:
+                    continue
+                corners = self._raster_corners(projected)
                 path = QPainterPath()
                 path.moveTo(self.local_to_screen(corners[0]))
                 for corner in corners[1:]:
@@ -6875,7 +8709,9 @@ class SketchCanvas(QWidget):
             )
         ):
             self.selected_entity_ids = set(self._selection_original)
+            self.selected_geometry_refs = set(self._selection_original_refs)
             self.selected_constraint_ids = set(self._selection_original_constraints)
+            self.selected_dimension_refs = set(self._selection_original_dimension_refs)
             self.selected_raster_ids = set(self._selection_original_raster_ids)
             self._selection_anchor = None
             self._selection_waiting_click = False
@@ -6890,6 +8726,37 @@ class SketchCanvas(QWidget):
         else:
             self.selected_raster_ids = set(image_hits)
         if self._selection_modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self.selected_block_instance_ids = set(self._selection_original_block_ids) - block_hits
+        elif additive:
+            self.selected_block_instance_ids = set(self._selection_original_block_ids) | block_hits
+        else:
+            self.selected_block_instance_ids = block_hits
+        if hit_refs is not None:
+            original_refs = set(self._selection_original_refs)
+            original_untyped = set(self._selection_original) - {
+                ref.object_id for ref in original_refs
+            }
+            if self._selection_modifiers & Qt.KeyboardModifier.ShiftModifier:
+                selected_refs = original_refs - hit_refs
+                untyped = original_untyped - identities
+            elif (
+                self._selection_modifiers & Qt.KeyboardModifier.ControlModifier
+                or self._transform_selecting
+                or self._line_edit_selecting_boundaries
+            ):
+                selected_refs = original_refs | hit_refs
+                untyped = original_untyped | (
+                    identities - {ref.object_id for ref in hit_refs}
+                    if self._line_edit_selecting_boundaries
+                    else set[str]()
+                )
+            else:
+                selected_refs = hit_refs
+                untyped = identities - {ref.object_id for ref in hit_refs}
+            selected_refs = {ref for ref in selected_refs if ref.object_id not in untyped}
+            self.selected_entity_ids = untyped | {ref.object_id for ref in selected_refs}
+            self.selected_geometry_refs = selected_refs
+        elif self._selection_modifiers & Qt.KeyboardModifier.ShiftModifier:
             self.selected_entity_ids = set(self._selection_original) - identities
         elif (
             self._selection_modifiers & Qt.KeyboardModifier.ControlModifier
@@ -6902,11 +8769,25 @@ class SketchCanvas(QWidget):
         self._selection_anchor = None
         self._selection_waiting_click = False
         mode = "交叉选择" if crossing else "窗口选择"
-        self.message = f"{mode} · 已选择 {len(self.selected_entity_ids)} 个草图元素。"
+        selected_count = len(self.selected_geometry_refs) + len(
+            self.selected_entity_ids - {ref.object_id for ref in self.selected_geometry_refs}
+        )
+        self.message = f"{mode} · 已选择 {selected_count} 个草图元素。"
         if self.selected_raster_ids:
             self.message += f" 已选择 {len(self.selected_raster_ids)} 张图片。"
+        if self.selected_block_instance_ids:
+            self.message += f" 已选择 {len(self.selected_block_instance_ids)} 个块实例。"
         if self.selected_constraint_ids:
             self.message += f" 已选择 {len(self.selected_constraint_ids)} 个标注。"
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.selected_ids
+        ):
+            self.message += (
+                f" 已选择 {len(self.geometric_tolerance_tools.selected_ids)} 个形位标注。"
+            )
+        if ambiguous_annotations:
+            self.message += " 标注身份重复，无法安全选择；请先修复重复身份。"
         if self._transform_selecting:
             self.message += " Enter / 右键结束选择，然后指定基点。"
         self.changed.emit()
@@ -6948,6 +8829,8 @@ class SketchCanvas(QWidget):
             )
         if isinstance(entity, CircleEntity):
             return ((SketchGeometryReference(entity.entity_id, "center"), entity.center_mm),)
+        if isinstance(entity, EllipseEntity):
+            return ()
         start = math.radians(entity.start_angle_deg)
         end = math.radians(entity.start_angle_deg + entity.sweep_angle_deg)
         return (
@@ -6974,6 +8857,16 @@ class SketchCanvas(QWidget):
     ) -> tuple[tuple[SketchGeometryReference, Point2D], ...]:
         """Return stable point references and positions for canvas picking."""
         return SketchCanvas._entity_handles(entity)
+
+    @staticmethod
+    def _clipboard_entity_anchor(entity: SketchEntity) -> Point2D:
+        """Choose a geometric placement point without creating a persistent reference."""
+        if isinstance(entity, EllipseEntity):
+            return entity.center_mm
+        handles = SketchCanvas._entity_handles(entity)
+        if not handles:
+            raise ValueError("无法确定剪贴板粘贴基点。")
+        return handles[0][1]
 
     def associative_spacing_grips(self) -> tuple[tuple[AssociativeRectArray, str, Point2D], ...]:
         """Resolve unambiguous saved-array grips in the current drawing plane."""
@@ -7114,6 +9007,11 @@ class SketchCanvas(QWidget):
             return False
         if len(candidates) > 1 and (candidates[1][0] - candidates[0][0]) * self._scale <= 1:
             return False
+        if self.collection_session is not None:
+            self.message = "请先完成或取消当前草稿，再编辑关联阵列。"
+            self.changed.emit()
+            self.update()
+            return True
         sketches_provider, arrays_provider, relations_provider, revision_provider = (
             self.associative_sketches_provider,
             self.associative_arrays_provider,
@@ -7191,6 +9089,7 @@ class SketchCanvas(QWidget):
             and not self.pending_cross_tangencies
             and not self.pending_associative_arrays
             and self.mixed_move is None
+            and self.collection_session is None
         )
 
     def _preview_array_spacing_drag(self, point: Point2D) -> None:
@@ -7507,6 +9406,28 @@ class SketchCanvas(QWidget):
     def _begin_handle_drag(
         self, entity: SketchEntity, reference: SketchGeometryReference, origin: Point2D
     ) -> None:
+        if self.ensure_group_operation is not None and not self.ensure_group_operation(
+            entity.entity_id
+        ):
+            return
+        if self.collection_session is not None:
+            try:
+                groups = self.collection_session.snapshot.groups
+            except ValidationError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
+            if any(
+                group.selectable
+                and any(
+                    member.kind == "geometry" and member.object_id == entity.entity_id
+                    for member in group.members
+                )
+                for group in groups
+            ):
+                self.message = "组选择已启用；请先关闭组选择再编辑单个控制点。"
+                self.changed.emit()
+                return
         if not any(candidate is entity for candidate in self.entities):
             self._begin_saved_handle_drag(entity, reference, origin)
             return
@@ -7514,6 +9435,16 @@ class SketchCanvas(QWidget):
             draft_tangent_reference(target).entity_id
             for _source, target in self.pending_cross_tangencies
         }
+        if self.collection_session is not None and self._collection_draft_id is not None:
+            try:
+                for relation in self.collection_session.snapshot.cross_tangencies:
+                    for item in (relation.first, relation.second):
+                        if item.sketch_id == self._collection_draft_id:
+                            connected.add(item.entity_id)
+            except ValidationError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
         while True:
             expanded = connected | {
                 ref.entity_id
@@ -7736,8 +9667,12 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
 
-    def cancel_saved_handle_drag(self, message: str = "已取消控制点拖动。") -> bool:
+    def cancel_saved_handle_drag(
+        self, message: str = "已取消控制点拖动。", *, token: str | None = None
+    ) -> bool:
         if self._saved_handle_drag is None:
+            return False
+        if token is not None and self._saved_handle_drag.token != token:
             return False
         if self._saved_handle_drag.committing:
             self.message = "控制点修改正在提交；完成后可撤销。"
@@ -7755,6 +9690,149 @@ class SketchCanvas(QWidget):
         return self._transform_preview
 
     @property
+    def collection_commit_preview(
+        self,
+    ) -> (
+        DrawingCollectionTransformPreview
+        | DrawingCollectionAffinePreview
+        | DrawingCollectionMirrorPreview
+        | None
+    ):
+        """Frozen preview made available only during its corresponding commit signal."""
+        return self._collection_commit_preview
+
+    def _collection_preview_selection_matches(
+        self,
+        preview: DrawingCollectionTransformPreview
+        | DrawingCollectionAffinePreview
+        | DrawingCollectionMirrorPreview,
+    ) -> bool:
+        annotation_ids: set[str] = (
+            self.geometric_tolerance_tools.selected_ids
+            if self.geometric_tolerance_tools is not None
+            else set()
+        )
+        selections: dict[str, set[str]] = {
+            "geometry": self.selected_entity_ids,
+            "dimension": self.selected_constraint_ids,
+            "raster": self.selected_raster_ids,
+            "block_instance": self.selected_block_instance_ids,
+            "text": self.text_tools.selected_ids if self.text_tools is not None else set(),
+        }
+        return (
+            all(
+                selected == {item.object_id for item in preview.seeds if item.kind == kind}
+                for kind, selected in selections.items()
+            )
+            and annotation_ids
+            == {
+                item.object_id
+                for item in preview.seeds
+                if item.kind in {"tolerance", "datum", "reference_dimension"}
+            }
+            and all(
+                item.kind in {*selections, "tolerance", "datum", "reference_dimension"}
+                for item in preview.seeds
+            )
+        )
+
+    def preview_collection_displacement(self, copy_source: bool, displacement: Point2D) -> None:
+        """Preview a candidate move or copy without changing the session."""
+        try:
+            self._collection_transform_preview = (
+                self.collection_transform_preview_provider(copy_source, displacement)
+                if self.collection_transform_preview_provider is not None
+                else None
+            )
+        except (KeyError, ValueError, ValidationError):
+            self._collection_transform_preview = None
+        self._transform_preview = ()
+        self._raster_transform_previews = ()
+        self.update()
+
+    def preview_collection_affine(self, kind: str, center: Point2D, value: float) -> None:
+        """Preview a rotation or scale in a disposable collection candidate."""
+        try:
+            self._collection_transform_preview = (
+                self.collection_affine_preview_provider(
+                    kind,
+                    center,
+                    value,
+                    self._rotation_copy if kind == "rotate" else self._scale_copy,
+                )
+                if self.collection_affine_preview_provider is not None
+                else None
+            )
+        except (KeyError, ValueError, ValidationError):
+            self._collection_transform_preview = None
+        self._transform_preview = ()
+        self._raster_transform_previews = ()
+        self.update()
+
+    def preview_collection_mirror(self, copy_source: bool, start: Point2D, end: Point2D) -> None:
+        """Preview one frozen group mirror operation."""
+        try:
+            self._collection_transform_preview = (
+                self.collection_mirror_preview_provider(copy_source, start, end)
+                if self.collection_mirror_preview_provider is not None
+                else None
+            )
+        except (KeyError, ValueError, ValidationError):
+            self._collection_transform_preview = None
+        self._transform_preview = ()
+        self._raster_transform_previews = ()
+        self.update()
+
+    def begin_collection_mirror_commit(
+        self, copy_source: bool, start: Point2D, end: Point2D
+    ) -> None:
+        preview = self._collection_transform_preview
+        self._collection_commit_preview = (
+            preview
+            if isinstance(preview, DrawingCollectionMirrorPreview)
+            and preview.copy_source == copy_source
+            and preview.start == start
+            and preview.end == end
+            else None
+        )
+        self._collection_transform_preview = None
+
+    def begin_collection_affine_commit(
+        self, kind: str, center: Point2D, value: float, copy_source: bool
+    ) -> None:
+        preview = self._collection_transform_preview
+        self._collection_commit_preview = (
+            preview
+            if isinstance(preview, DrawingCollectionAffinePreview)
+            and preview.kind == kind
+            and preview.center == center
+            and preview.value == value
+            and preview.copy_source == copy_source
+            else None
+        )
+        self._collection_transform_preview = None
+
+    def begin_collection_preview_commit(self, copy_source: bool, displacement: Point2D) -> None:
+        """Expose a matching frozen preview only for the current synchronous commit."""
+        preview = self._collection_transform_preview
+        self._collection_commit_preview = (
+            preview
+            if isinstance(preview, DrawingCollectionTransformPreview)
+            and preview.copy_source == copy_source
+            and preview.displacement == displacement
+            else None
+        )
+        self._collection_transform_preview = None
+
+    def end_collection_preview_commit(self) -> None:
+        self._collection_commit_preview = None
+        self.update()
+
+    def clear_collection_transform_preview(self) -> None:
+        self._collection_transform_preview = None
+        self.update()
+
+    @property
     def active_transform(self) -> str | None:
         return self._transform_operation
 
@@ -7764,6 +9842,16 @@ class SketchCanvas(QWidget):
 
     def begin_interactive_offset(self) -> None:
         """Start the independent 2D distance, object and side interaction."""
+        if (self.text_tools is not None and self.text_tools.pending) or (
+            self.geometric_tolerance_tools is not None and self.geometric_tolerance_tools.pending
+        ):
+            self.message = "请先完成或取消当前文字或标注操作，再开始偏移。"
+            self.changed.emit()
+            return
+        if self.selected_block_instance_ids:
+            self.message = "块实例暂不支持偏置。"
+            self.changed.emit()
+            return
         if not self.set_tool("选择元素"):
             return
         if (
@@ -7796,6 +9884,7 @@ class SketchCanvas(QWidget):
         self._offset_distance = None
         self._offset_through = False
         self._offset_distance_anchor = None
+        self._offset_direct_pick = False
         self.offset_erase_source = False
         self.offset_erase_pending = False
         self.offset_layer_pending = False
@@ -7803,14 +9892,30 @@ class SketchCanvas(QWidget):
         self._offset_undo_positions.clear()
         self._offset_pending_result_id = None
         self._offset_target = None
+        self._offset_target_ref = None
+        self._offset_spline_group = ()
         self._offset_signed_distance = None
         self._transform_preview = ()
         default = (
             "通过点" if self.offset_default_distance < 0 else f"{self.offset_default_distance:g}"
         )
-        self.message = f"偏移：输入距离、两点量距或 T；Enter 使用 {default}；Esc 取消。"
+        self.message = (
+            f"偏置：输入距离或两点量距；T 通过点 / E 删除源 / L 图层；"
+            f"Enter 使用 {default}；Esc 取消。"
+        )
         self.changed.emit()
         self.update()
+
+    def enable_offset_direct_pick(self) -> None:
+        """Allow the toolbar to select an object using the current default."""
+        if self.interactive_offset_needs_distance:
+            self._offset_direct_pick = True
+            self.message += (
+                " 默认距离为 0，请先输入正距离或 T。"
+                if self.offset_default_distance == 0
+                else " 也可直接选择对象，使用当前默认值。"
+            )
+            self.changed.emit()
 
     def set_interactive_offset_distance(self, distance: float) -> None:
         """Set a finite positive offset distance for the active operation."""
@@ -7823,6 +9928,7 @@ class SketchCanvas(QWidget):
         self._offset_through = False
         self._offset_distance_anchor = None
         self._offset_target = None
+        self._offset_spline_group = ()
         self._offset_signed_distance = None
         self._transform_preview = ()
         self.message = "偏移：选择对象，Enter / 右键结束。"
@@ -8001,11 +10107,12 @@ class SketchCanvas(QWidget):
             return False
         if not self._undo_history or self.has_pending_geometry:
             return False
-        self._redo_history.append(self._draft_state())
-        self._restore_draft_state(self._undo_history.pop())
+        if not self._restore_undo_step():
+            return False
         self._offset_undo_positions.pop()
         self._offset_target = None
         self._offset_multiple = False
+        self._offset_spline_group = ()
         self._offset_signed_distance = None
         self._transform_preview = ()
         self.selected_entity_ids.clear()
@@ -8032,6 +10139,7 @@ class SketchCanvas(QWidget):
         self._offset_distance = None
         self._offset_distance_anchor = None
         self._offset_target = None
+        self._offset_spline_group = ()
         self._offset_signed_distance = None
         self._transform_preview = ()
         self.message = "通过点偏移：选择对象；Enter / 右键结束。"
@@ -8081,6 +10189,30 @@ class SketchCanvas(QWidget):
         self.set_interactive_offset_distance(distance)
         self.point_accepted.emit(point)
 
+    def _offset_reference_entity(
+        self, reference: DrawingObjectRef
+    ) -> tuple[SketchEntity, SketchLayer] | None:
+        draft_id = self._collection_draft_id or (
+            self.draft_sketch_id_provider() if self.draft_sketch_id_provider is not None else None
+        )
+        if reference.sketch_id == draft_id:
+            matches = [
+                entity for entity in self.entities if entity.entity_id == reference.object_id
+            ]
+            return (matches[0], self._layer(matches[0])) if len(matches) == 1 else None
+        if self.background_entities != self._background_source_projection or len(
+            self.background_entities
+        ) != len(self._background_source_sketch_ids):
+            return None
+        matches = [
+            (entity, layer)
+            for (entity, layer), owner in zip(
+                self.background_entities, self._background_source_sketch_ids, strict=True
+            )
+            if entity.entity_id == reference.object_id and owner == reference.sketch_id
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     def _interactive_offset_point(self, point: Point2D, *, commit: bool) -> None:
         if not self._transform_revision_current():
             return
@@ -8091,6 +10223,21 @@ class SketchCanvas(QWidget):
         if self._offset_distance is None and not self._offset_through:
             if commit:
                 try:
+                    draft_id = self._collection_draft_id or (
+                        self.draft_sketch_id_provider()
+                        if self.draft_sketch_id_provider is not None
+                        else None
+                    )
+                    reference = self.geometry_ref_at(point, draft_id) if draft_id else None
+                    if (
+                        self._offset_direct_pick
+                        and self._offset_distance_anchor is None
+                        and self.offset_default_distance != 0
+                        and (reference is not None or self._hit_entity_at(point) is not None)
+                    ):
+                        self.use_interactive_offset_default()
+                        self._interactive_offset_point(point, commit=True)
+                        return
                     self.set_interactive_offset_distance_point(point)
                 except ValueError as exc:
                     self.message = str(exc)
@@ -8099,36 +10246,73 @@ class SketchCanvas(QWidget):
         if self._offset_target is None:
             if not commit:
                 return
-            identity = self._hit_entity_at(point)
+            draft_id = self._collection_draft_id or (
+                self.draft_sketch_id_provider()
+                if self.draft_sketch_id_provider is not None
+                else None
+            )
+            reference = self.geometry_ref_at(point, draft_id) if draft_id is not None else None
+            identity = reference.object_id if reference is not None else self._hit_entity_at(point)
             matches = [
                 entity for entity in self.selectable_entities() if entity.entity_id == identity
             ]
             all_ids = [entity.entity_id for entity in self.entities]
             if self.select_committed_entities:
                 all_ids.extend(entity.entity_id for entity, _layer in self.background_entities)
-            if identity is None or len(matches) != 1 or all_ids.count(identity) != 1:
+            source = self._offset_reference_entity(reference) if reference is not None else None
+            if source is not None and source[1].displayed:
+                matches = [source[0]]
+            elif identity is None or len(matches) != 1 or all_ids.count(identity) != 1:
                 self.message = "请选择唯一的可见对象。"
+                self.changed.emit()
+                self.update()
+                return
+            assert identity is not None
+            if self.offset_group_guard is not None and not self.offset_group_guard(
+                reference or identity
+            ):
+                self.message = "组选择已启用；请先关闭组选择再偏移单个成员。"
+                self.selected_entity_ids.clear()
             else:
                 self.selected_entity_ids = {identity}
+                self._offset_target_ref = reference if source is not None else None
                 error = self.transform_selection_error("offset")
                 if error:
                     self.message = error
                     self.selected_entity_ids.clear()
-                elif isinstance(matches[0], PointEntity | SplineEntity):
+                elif (
+                    isinstance(matches[0], PointEntity)
+                    or (isinstance(matches[0], SplineEntity) and self.offset_spline is None)
+                    or (isinstance(matches[0], EllipseEntity) and self.offset_ellipse is None)
+                ):
                     self.selected_entity_ids.clear()
                     self.message = "点和样条暂不支持偏移；请选择其他对象。"
                 else:
+                    self._offset_spline_group = ()
                     self._offset_target = matches[0]
                     self.message = (
-                        "偏移：指定通过点；Esc 取消。"
+                        "偏置：指定通过点；M 连续 / U 撤销 / X 退出。"
                         if self._offset_through
-                        else "偏移：指定对象的偏移侧；Esc 取消。"
+                        else "偏置：指定对象的偏置侧；M 连续 / U 撤销 / X 退出。"
                     )
             self.changed.emit()
             self.update()
             return
         identity = self._offset_target.entity_id
-        current = [entity for entity in self.selectable_entities() if entity.entity_id == identity]
+        source = (
+            self._offset_reference_entity(self._offset_target_ref)
+            if self._offset_target_ref is not None
+            else None
+        )
+        current = (
+            [source[0]]
+            if source is not None and source[1].displayed
+            else [entity for entity in self.selectable_entities() if entity.entity_id == identity]
+            if self._offset_target_ref is None
+            else []
+        )
+        group = self._offset_spline_group
+        selected_ids = {entity.entity_id for entity in group} if group else {identity}
         all_ids = [entity.entity_id for entity in self.entities]
         if self.select_committed_entities:
             all_ids.extend(entity.entity_id for entity, _layer in self.background_entities)
@@ -8136,11 +10320,16 @@ class SketchCanvas(QWidget):
         if (
             len(current) != 1
             or current[0] != self._offset_target
-            or all_ids.count(identity) != 1
-            or self.selected_entity_ids != {identity}
+            or (self._offset_target_ref is None and all_ids.count(identity) != 1)
+            or self.selected_entity_ids != selected_ids
+            or any(
+                all_ids.count(piece.entity_id) != 1 or piece not in self.selectable_entities()
+                for piece in group
+            )
             or error
         ):
             self._offset_target = None
+            self._offset_spline_group = ()
             self._offset_signed_distance = None
             self._transform_preview = ()
             self.selected_entity_ids.clear()
@@ -8157,18 +10346,43 @@ class SketchCanvas(QWidget):
             destination = self.layer_table.get(target_layer)
             if destination.locked or not destination.displayed:
                 raise ValueError("偏移目标图层已锁定或隐藏。")
-            if self._offset_through:
+            if group:
+                side = spline_path_side(group, point)
+                signed = (
+                    side
+                    if self._offset_through
+                    else math.copysign(self._offset_distance or 0, side)
+                )
+            elif self._offset_through:
                 signed = through_offset_distance(
-                    self._offset_target, point, gap_type=self.offset_gap_type
+                    self._offset_target,
+                    point,
+                    gap_type=self.offset_gap_type,
+                    closed_offset=self.offset_closed_path,
+                    spline_offset=self.offset_spline,
+                    ellipse_offset=self.offset_ellipse,
                 )
             else:
                 assert self._offset_distance is not None
                 signed = signed_offset_distance(self._offset_target, point, self._offset_distance)
             if signed != self._offset_signed_distance or not self._transform_preview:
-                source = (self._offset_target,)
-                result = offset_entities(
-                    source, (self._offset_target.entity_id,), signed, gap_type=self.offset_gap_type
-                )[1:]
+                if group:
+                    if self.offset_spline_path is None:
+                        raise ValueError("样条连续偏置不可用。")
+                    result = self.offset_spline_path(group, signed)
+                    if self._offset_through and spline_path_separation(result, point) > 0.001:
+                        raise ValueError("通过点不在偏置后的有限样条上。")
+                else:
+                    source = (self._offset_target,)
+                    result = offset_with_backend(
+                        source,
+                        (self._offset_target.entity_id,),
+                        signed,
+                        gap_type=self.offset_gap_type,
+                        closed_offset=self.offset_closed_path,
+                        spline_offset=self.offset_spline,
+                        ellipse_offset=self.offset_ellipse,
+                    )[1:]
                 self._transform_preview = tuple(
                     replace(entity, layer_name=target_layer) for entity in result
                 )
@@ -8182,15 +10396,44 @@ class SketchCanvas(QWidget):
             return
         if commit:
             candidate = self._transform_preview
-            is_saved = any(entity.entity_id == identity for entity, _ in self.background_entities)
+            spline_group = (
+                tuple(item for item in candidate if isinstance(item, SplineEntity))
+                if self._offset_multiple and self.offset_spline_path is not None
+                else ()
+            )
+            if (
+                self._offset_multiple
+                and len(candidate) != 1
+                and len(spline_group) != len(candidate)
+            ):
+                self._offset_multiple = False
+            draft_id = self._collection_draft_id or (
+                self.draft_sketch_id_provider()
+                if self.draft_sketch_id_provider is not None
+                else None
+            )
+            is_saved = (
+                self._offset_target_ref.sketch_id != draft_id
+                if self._offset_target_ref is not None
+                else any(entity.entity_id == identity for entity, _ in self.background_entities)
+            )
             if self.offset_erase_source and is_saved:
                 if self.source_revision_provider is None:
                     self.message = "缺少文档版本；无法安全删除已保存对象。"
                     self.changed.emit()
                     return
+                constraint_owners_valid = (
+                    self.background_entities == self._background_source_projection
+                    and len(self.background_constraints)
+                    == len(self._background_constraint_sketch_ids)
+                )
                 if any(
                     ref.entity_id == identity
-                    for constraint in self.background_constraints
+                    for index, constraint in enumerate(self.background_constraints)
+                    if self._offset_target_ref is None
+                    or not constraint_owners_valid
+                    or self._background_constraint_sketch_ids[index]
+                    == self._offset_target_ref.sketch_id
                     for ref in constraint.references
                 ):
                     self.message = "已保存对象有关联约束；请先处理约束。"
@@ -8199,9 +10442,20 @@ class SketchCanvas(QWidget):
                 draft = (*self.entities, *candidate)
                 background = tuple(
                     (entity, layer)
-                    for entity, layer in self.background_entities
+                    for index, (entity, layer) in enumerate(self.background_entities)
                     if entity.entity_id != identity
+                    or (
+                        self._offset_target_ref is not None
+                        and self._background_source_sketch_ids[index]
+                        != self._offset_target_ref.sketch_id
+                    )
                 )
+                event_identity = (
+                    (identity, self._offset_target_ref.sketch_id)
+                    if self._offset_target_ref is not None
+                    else identity
+                )
+                self._offset_spline_group = spline_group if len(spline_group) > 1 else ()
                 self._offset_target = None
                 self._offset_pending_result_id = candidate[0].entity_id
                 self._offset_signed_distance = None
@@ -8209,37 +10463,102 @@ class SketchCanvas(QWidget):
                 self.message = "正在校验偏移与删除源对象。"
                 self.point_accepted.emit(point)
                 self.committed_drag_trim_requested.emit(
-                    ((identity, ()),),
+                    ((event_identity, ()),),
                     draft,
                     tuple(self.constraints),
                     background,
                     self.source_revision_provider(),
                 )
-            elif self.replace_draft_entities(
-                (
-                    *(
-                        entity
-                        for entity in self.entities
-                        if not self.offset_erase_source or entity.entity_id != identity
-                    ),
-                    *candidate,
-                )
-            ):
+            elif self._replace_offset_draft(selected_ids, candidate):
                 self._offset_undo_positions.append(self.history_position)
+                self._offset_spline_group = spline_group if len(spline_group) > 1 else ()
                 self._offset_target = candidate[0] if self._offset_multiple else None
+                self._offset_target_ref = (
+                    DrawingObjectRef("geometry", candidate[0].entity_id, draft_id)
+                    if self._offset_multiple and draft_id is not None
+                    else None
+                )
                 self._offset_signed_distance = None
                 self._transform_preview = ()
                 self.selected_entity_ids = (
-                    {candidate[0].entity_id} if self._offset_multiple else set()
+                    {item.entity_id for item in candidate} if self._offset_multiple else set()
                 )
                 self.message = (
-                    "已偏移；继续指定偏移侧或通过点。"
+                    f"样条偏置生成 {len(candidate)} 个独立样条片段，误差不超过 0.001 mm；"
+                    + (
+                        "继续指定偏移侧或通过点。"
+                        if self._offset_multiple
+                        else "选择下一个对象，Enter / 右键结束。"
+                    )
+                    if isinstance(current[0], SplineEntity)
+                    else "已偏移；继续指定偏移侧或通过点。"
                     if self._offset_multiple
                     else "已偏移；选择下一个对象，Enter / 右键结束。"
                 )
                 self.point_accepted.emit(point)
         self.changed.emit()
         self.update()
+
+    def _replace_offset_draft(
+        self, selected_ids: set[str], candidate: tuple[SketchEntity, ...]
+    ) -> bool:
+        """Replace a grouped offset path and its memberships in one candidate step."""
+        target = (
+            *(
+                entity
+                for entity in self.entities
+                if not self.offset_erase_source or entity.entity_id not in selected_ids
+            ),
+            *candidate,
+        )
+        session, draft_id = self.collection_session, self._collection_draft_id
+        if session is None or draft_id is None:
+            return self.replace_draft_entities(target)
+        try:
+            groups = session.snapshot.groups
+            memberships = {
+                identity: frozenset(
+                    group.group_id
+                    for group in groups
+                    if DrawingObjectRef("geometry", identity, draft_id) in group.members
+                )
+                for identity in selected_ids
+                if self.offset_erase_source
+            }
+            grouped = any(memberships.values())
+            if grouped and len(set(memberships.values())) != 1:
+                raise ValidationError("偏移来源的组归属不同；请先调整编组。")
+            if grouped and any(
+                group.selectable and group.group_id in next(iter(memberships.values()))
+                for group in groups
+            ):
+                raise ValidationError("组选择已启用；请先关闭组选择再编辑单个成员。")
+            before = self._draft_state()
+            undo, redo = list(self._undo_history), list(self._redo_history)
+            next_position = self._next_history_position
+            notices = dict(self._pending_tangency_removal_notices)
+            actions = list(self._line_edit_undo_actions)
+            if not self.replace_draft_entities(target, defer_notifications=True):
+                return False
+            try:
+                replacements = tuple(item.entity_id for item in candidate)
+                self._stage_collection_member_mapping(
+                    dict.fromkeys(selected_ids, replacements) if grouped else {}
+                )
+            except (ValidationError, ValueError, StopIteration):
+                self._undo_history, self._redo_history = undo, redo
+                self._next_history_position = next_position
+                self._pending_tangency_removal_notices = notices
+                self._line_edit_undo_actions = actions
+                self._restore_draft_state(before)
+                raise
+            self.collection_snapshot_changed.emit(session.snapshot)
+            self.history_recorded.emit()
+            return True
+        except (ValidationError, ValueError, StopIteration) as exc:
+            self.message = f"偏移暂存失败：{exc}；草稿未修改。"
+            self.changed.emit()
+            return False
 
     def begin_transform(
         self,
@@ -8249,6 +10568,14 @@ class SketchCanvas(QWidget):
         keep_source: bool = True,
         ask_mirror_erase: bool = False,
     ) -> None:
+        if (self.text_tools is not None and self.text_tools.pending) or (
+            self.geometric_tolerance_tools is not None and self.geometric_tolerance_tools.pending
+        ):
+            self.message = "请先完成或取消当前文字或标注操作，再变换所选对象。"
+            self.changed.emit()
+            return
+        if self.ensure_group_operation is not None and not self.ensure_group_operation(None):
+            return
         if (
             operation not in {"move", "copy", "rotate", "mirror", "erase", "scale"}
             or self.has_pending_geometry
@@ -8271,7 +10598,11 @@ class SketchCanvas(QWidget):
             and (self.selected_entity_ids or self.selected_constraint_ids)
             and (
                 operation not in {"move", "scale", "rotate", "mirror", "copy", "erase"}
-                or (self.selected_constraint_ids and operation != "erase")
+                or (
+                    self.selected_constraint_ids
+                    and operation != "erase"
+                    and self.collection_session is None
+                )
             )
         ):
             self.message = "暂不能同时变换图片和其他对象，请分别选择。"
@@ -8297,6 +10628,7 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return
         self._transform_operation = operation
+        self.mixed_transform_preview_texts = ()
         self._reference_previous_mode = None
         self._transform_source_revision = (
             self.source_revision_provider() if self.source_revision_provider is not None else None
@@ -8324,7 +10656,18 @@ class SketchCanvas(QWidget):
         self._mirror_selected_sources = ()
         self._copy_repeat = self.copy_mode == 0
         self._transform_angle_text = ""
-        self._transform_selecting = not bool(self.selected_entity_ids or self.selected_raster_id)
+        self._transform_selecting = not bool(
+            self.selected_entity_ids
+            or self.selected_raster_id
+            or self.selected_block_instance_ids
+            or (self.collection_session is not None and self.selected_constraint_ids)
+            or (self.text_tools is not None and self.text_tools.selected_ids)
+            or (
+                self.collection_session is not None
+                and self.geometric_tolerance_tools is not None
+                and self.geometric_tolerance_tools.selected_ids
+            )
+        )
         self._transform_base = None
         self._transform_preview = ()
         self._copy_placements.clear()
@@ -8364,7 +10707,9 @@ class SketchCanvas(QWidget):
             self._transform_keep_source = keep_source
         else:
             return
+        self._collection_transform_preview = None
         self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
         self.message = self._transform_point_hint()
         if not self._transform_selecting and self._cursor is not None:
             self._transform_point(self._cursor, commit=False)
@@ -8389,6 +10734,8 @@ class SketchCanvas(QWidget):
         if self._transform_operation is None:
             return False
         self._transform_operation = None
+        self.mixed_transform_preview_texts = ()
+        self._collection_transform_preview = None
         self._raster_transform_preview = None
         self._raster_transform_previews = ()
         previous_reference_mode = self._reference_previous_mode
@@ -8417,6 +10764,8 @@ class SketchCanvas(QWidget):
         self._offset_undo_positions.clear()
         self._offset_pending_result_id = None
         self._offset_target = None
+        self._offset_target_ref = None
+        self._offset_spline_group = ()
         self._offset_signed_distance = None
         self._transform_source_revision = None
         self._transform_base = None
@@ -8563,6 +10912,30 @@ class SketchCanvas(QWidget):
 
     def transform_selection_error(self, operation: str) -> str:
         """Explain why the selection cannot be transformed without changing geometry."""
+        if self.selected_block_instance_ids and operation not in {
+            "move",
+            "copy",
+            "rotate",
+            "scale",
+            "erase",
+            "delete",
+            "delete_mixed",
+        }:
+            return "块实例暂不支持此操作。"
+        if self.text_tools is not None and self.text_tools.selected_ids:
+            error = self.text_tools.selection_error()
+            if error:
+                return error
+            if operation not in {
+                "move",
+                "copy",
+                "rotate",
+                "scale",
+                "mirror",
+                "erase",
+                "delete_mixed",
+            }:
+                return "所选文字不支持此操作。"
         if self._selected_committed_entities() and operation not in {
             "move",
             "copy",
@@ -8576,39 +10949,58 @@ class SketchCanvas(QWidget):
             "circular_array",
         }:
             return "选择包含已提交图元；几何修改请通过历史编辑，当前选择已保留。"
-        if operation in {
-            "move",
-            "copy",
-            "rotate",
-            "scale",
-            "mirror",
-            "offset",
-            "linear_array",
-            "rectangular_array",
-            "circular_array",
-        } and any(
-            layer.locked and entity.entity_id in self.selected_entity_ids
-            for entity, layer in self.background_entities
+        offset_ref = self._offset_target_ref if operation == "offset" else None
+        if offset_ref is not None:
+            source = self._offset_reference_entity(offset_ref)
+            if source is None:
+                return "偏移对象已变化；请重新选择。"
+            if source[1].locked:
+                return "选择包含已锁定图层；草稿未修改。"
+            if not source[1].displayed:
+                return "选择包含隐藏图层；草稿未修改。"
+        if (
+            offset_ref is None
+            and operation
+            in {
+                "move",
+                "copy",
+                "rotate",
+                "scale",
+                "mirror",
+                "offset",
+                "linear_array",
+                "rectangular_array",
+                "circular_array",
+            }
+            and any(
+                layer.locked and entity.entity_id in self.selected_entity_ids
+                for entity, layer in self.background_entities
+            )
         ):
             return "选择包含已锁定图层；草稿未修改。"
-        if operation in {
-            "scale",
-            "offset",
-            "linear_array",
-            "rectangular_array",
-            "circular_array",
-        } and any(
-            not layer.displayed and entity.entity_id in self.selected_entity_ids
-            for entity, layer in self.background_entities
+        if (
+            offset_ref is None
+            and operation
+            in {
+                "scale",
+                "offset",
+                "linear_array",
+                "rectangular_array",
+                "circular_array",
+            }
+            and any(
+                not layer.displayed and entity.entity_id in self.selected_entity_ids
+                for entity, layer in self.background_entities
+            )
         ):
             return "选择包含隐藏图层；草稿未修改。"
-        if any(
+        if offset_ref is None and any(
             self._layer(entity).locked
             for entity in self.entities
             if entity.entity_id in self.selected_entity_ids
         ):
             return "选择包含已锁定图层；草稿未修改。"
-        if any(
+        if offset_ref is None and any(
             not self._layer(entity).displayed
             for entity in self.entities
             if entity.entity_id in self.selected_entity_ids
@@ -8629,8 +11021,114 @@ class SketchCanvas(QWidget):
             return "本次移动会改变用户约束引用的图元；请先处理相关约束再改几何。草稿未变。"
         return ""
 
+    def _publish_clipboard(self, mime: QMimeData) -> None:
+        if self._capture_clipboard:
+            self._captured_clipboard = mime
+        else:
+            QApplication.clipboard().setMimeData(mime)
+
+    def capture_copy_mime(self) -> QMimeData | None:
+        """Prepare a copy without changing the system clipboard."""
+        if self._capture_clipboard:
+            raise RuntimeError("Nested clipboard capture is not supported")
+        self._capture_clipboard = True
+        self._captured_clipboard = None
+        try:
+            if not self.copy_to_clipboard():
+                return None
+            return self._captured_clipboard
+        finally:
+            self._capture_clipboard = False
+            self._captured_clipboard = None
+
+    def _copy_independent_collection_selection(self) -> bool:
+        """Copy direct selections without expanding groups for implied dimensions."""
+        try:
+            if (
+                not self.select_committed_entities
+                or self.has_pending_geometry
+                or self.has_active_edit_gesture
+            ):
+                raise ValueError("请先完成当前操作，再复制二维对象。")
+            if self.capture_collection_clipboard is None:
+                raise ValueError("当前画布不支持复制关联标注。")
+            data, omitted_constraints = self.capture_collection_clipboard(True)
+            mime = QMimeData()
+            mime.setData(DRAWING_COLLECTION_CLIPBOARD_MIME, QByteArray(data))
+            self._publish_clipboard(mime)
+        except (KeyError, ValueError, ValidationError) as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
+        self.message = "已复制二维图元及关联标注；Ctrl+V 粘贴。"
+        if omitted_constraints:
+            self.message += " 外部约束未复制。"
+        self.changed.emit()
+        return True
+
     def copy_to_clipboard(self) -> bool:
         """Copy selected drawing entities and their wholly internal relations."""
+        if self.group_clipboard_guard is not None and self.group_clipboard_guard():
+            try:
+                if (
+                    not self.select_committed_entities
+                    or self.has_pending_geometry
+                    or self.has_active_edit_gesture
+                ):
+                    raise ValueError("请先完成当前操作，再复制组。")
+                if self.capture_collection_clipboard is None:
+                    raise ValueError("当前画布不支持组剪贴板。")
+                data, omitted_constraints = self.capture_collection_clipboard(False)
+                mime = QMimeData()
+                mime.setData(DRAWING_COLLECTION_CLIPBOARD_MIME, QByteArray(data))
+                self._publish_clipboard(mime)
+            except (KeyError, ValueError, ValidationError) as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return False
+            self.message = (
+                "已复制完整组；外部约束未复制，Ctrl+V 粘贴。"
+                if omitted_constraints
+                else "已复制完整组；Ctrl+V 粘贴。"
+            )
+            self.changed.emit()
+            return True
+        mixed_selection = bool(self.selected_entity_ids) and (
+            bool(self.text_tools and self.text_tools.selected_ids)
+            or bool(
+                self.geometric_tolerance_tools
+                and self.geometric_tolerance_tools.selected_id is not None
+            )
+        )
+        if mixed_selection and self.capture_collection_clipboard is not None:
+            internal_constraints = (
+                constraint
+                for constraint in self.dimension_constraints()
+                if all(ref.entity_id in self.selected_entity_ids for ref in constraint.references)
+            )
+            rotated_constraint = any(
+                ref.entity_id in self.background_entity_basis
+                for constraint in internal_constraints
+                for ref in constraint.references
+            )
+            selected_entities = [
+                entity.entity_id
+                for entity in self.selectable_entities()
+                if entity.entity_id in self.selected_entity_ids
+            ]
+            if rotated_constraint or len(selected_entities) != len(set(selected_entities)):
+                return self._copy_independent_collection_selection()
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.selected_id is not None
+        ):
+            if self._capture_clipboard:
+                self.message = "不能将公差框与文字和图元作为此类混合载荷复制。"
+                self.changed.emit()
+                return False
+            return self.geometric_tolerance_tools.copy_frame_to_clipboard()
+        if self.text_tools is not None and self.text_tools.selected_ids:
+            return self.text_tools.copy()
         if (
             not self.select_committed_entities
             or self.has_pending_geometry
@@ -8662,7 +11160,7 @@ class SketchCanvas(QWidget):
                     return False
                 mime = QMimeData()
                 mime.setData(DRAWING_RASTER_GROUP_MIME, QByteArray(data))
-                QApplication.clipboard().setMimeData(mime)
+                self._publish_clipboard(mime)
                 self.message = f"已复制 {len(images)} 张图片；Ctrl+V 粘贴。"
                 self.changed.emit()
                 return True
@@ -8675,17 +11173,27 @@ class SketchCanvas(QWidget):
                 None,
             )
             if image is not None:
+                projected = self._project_drawing_raster(image)
+                if projected is None:
+                    self.message = "图片不在当前画布平面，无法复制。"
+                    self.changed.emit()
+                    return False
                 mime = QMimeData()
                 mime.setImageData(QImage.fromData(image.png_bytes))
                 mime.setData(
                     DRAWING_RASTER_MIME,
                     QByteArray(
                         json.dumps(
-                            [image.width_mm, image.height_mm, image.angle_deg, image.mirrored]
+                            [
+                                projected.width_mm,
+                                projected.height_mm,
+                                projected.angle_deg,
+                                projected.mirrored,
+                            ]
                         ).encode("utf-8")
                     ),
                 )
-                QApplication.clipboard().setMimeData(mime)
+                self._publish_clipboard(mime)
                 self.message = "已复制图片。"
                 self.changed.emit()
                 return True
@@ -8696,6 +11204,12 @@ class SketchCanvas(QWidget):
         )
         identities = {entity.entity_id for entity in entities}
         if identities != self.selected_entity_ids or len(identities) != len(entities):
+            if (
+                identities == self.selected_entity_ids
+                and {ref.object_id for ref in self.selected_geometry_refs} == identities
+                and self.capture_collection_clipboard is not None
+            ):
+                return self._copy_independent_collection_selection()
             self.message = "选择的图元已变化或身份不唯一；请重新选择。"
             self.changed.emit()
             return False
@@ -8712,12 +11226,14 @@ class SketchCanvas(QWidget):
             for constraint in constraints
             for ref in constraint.references
         ):
-            self.message = "旋转工作平面的关联标注暂不能复制；请先切换至其原工作平面。"
-            self.changed.emit()
-            return False
+            return self._copy_independent_collection_selection()
         try:
             sketch = Sketch(
-                uuid4().hex, WorkPlaneFrame.xy(), entities, constraints, self.layer_table
+                uuid4().hex,
+                self._spatial_target_frame,
+                entities,
+                constraints,
+                self.layer_table,
             )
             images = tuple(
                 image
@@ -8727,9 +11243,18 @@ class SketchCanvas(QWidget):
             if len(images) != len(self.selected_raster_ids):
                 raise ValueError("所选图片已变化，请重新选择。")
             data = (
-                encode_mixed_clipboard(sketch, images, self.drawing_dimension_styles)
+                encode_mixed_clipboard(
+                    sketch,
+                    images,
+                    self.drawing_dimension_styles,
+                    self.text_tools.styles if self.text_tools else None,
+                )
                 if images
-                else encode_drawing_clipboard(sketch, self.drawing_dimension_styles)
+                else encode_drawing_clipboard(
+                    sketch,
+                    self.drawing_dimension_styles,
+                    self.text_tools.styles if self.text_tools else None,
+                )
             )
         except ValueError as exc:
             self.message = str(exc)
@@ -8739,7 +11264,7 @@ class SketchCanvas(QWidget):
         mime.setData(
             DRAWING_MIXED_CLIPBOARD_MIME if images else DRAWING_CLIPBOARD_MIME, QByteArray(data)
         )
-        QApplication.clipboard().setMimeData(mime)
+        self._publish_clipboard(mime)
         self.message = f"已复制 {len(entities)} 个二维图元"
         if images:
             self.message += f"和 {len(images)} 张图片"
@@ -8789,7 +11314,97 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         return True
 
+    def _begin_collection_payload_paste(self, payload: DrawingCollectionClipboard) -> bool:
+        if payload.sketches:
+            source = payload.sketches[0]
+            point = self._clipboard_entity_anchor(source.entities[0])
+            world = source.frame.local_to_world(point)
+        else:
+            if payload.texts:
+                point = payload.texts[0].position_mm
+            elif payload.rasters:
+                point = payload.rasters[0].origin_mm
+            elif payload.frames:
+                point = payload.frames[0].position_mm
+            elif payload.datums:
+                point = payload.datums[0].position_mm
+            elif payload.reference_dimensions:
+                point = payload.reference_dimensions[0].location_mm
+            elif payload.block_instances:
+                point = payload.block_instances[0].insertion_mm
+            else:
+                raise ValueError("组剪贴板没有可放置的对象。")
+            world = WorkPlaneFrame.xy().local_to_world(point)
+        anchor = self._spatial_target_frame.world_to_local(world)
+        if self.tool != "选择元素" and not self.set_tool("选择元素"):
+            return False
+        previous_session = self.collection_session
+        undo, redo, mixed = tuple(self._undo_history), tuple(self._redo_history), self.mixed_move
+        if self.begin_collection_paste is None or not self.begin_collection_paste():
+            raise ValueError("当前图纸无法暂存组粘贴。")
+        session = self.collection_session
+        if previous_session is None and session is not None:
+            self._paste_session_origin = _PasteSessionOrigin(
+                session,
+                session.checkpoint(),
+                undo,
+                redo,
+                mixed,
+                tuple(self._undo_history),
+                tuple(self._redo_history),
+                tuple(self.entities),
+                tuple(self.constraints),
+            )
+        self._clipboard_collection = payload
+        self.collection_paste_preview = None
+        self._clipboard_anchor = anchor
+        self.selected_entity_ids.clear()
+        self.selected_constraint_ids.clear()
+        self.selected_raster_ids.clear()
+        if self.text_tools is not None:
+            self.text_tools.selected_ids.clear()
+        if self.geometric_tolerance_tools is not None:
+            self.geometric_tolerance_tools.selected_ids.clear()
+            self.geometric_tolerance_tools.selected_id = None
+        self.message = "粘贴组：指定放置点；Esc 取消。"
+        if payload.external_objects and (
+            self.geometric_tolerance_tools is None
+            or payload.source_token != self.geometric_tolerance_tools.clipboard_source
+        ):
+            self.message += " 外部标注关联将在跨文档粘贴时解除。"
+        self.changed.emit()
+        self.update()
+        return True
+
     def begin_clipboard_paste(self) -> bool:
+        if self.text_tools is not None and self.text_tools.pending:
+            self.message = "请先完成或取消当前文字操作，再粘贴。"
+            self.changed.emit()
+            return False
+        if self.geometric_tolerance_tools is not None and self.geometric_tolerance_tools.pending:
+            self.message = "请先完成或取消当前标注操作，再粘贴。"
+            self.changed.emit()
+            return False
+        mime = cast("QMimeData | None", QApplication.clipboard().mimeData())
+        if mime is not None and mime.hasFormat(DRAWING_COLLECTION_CLIPBOARD_MIME):
+            try:
+                if self.has_pending_geometry or self.has_active_edit_gesture:
+                    raise ValueError("请先完成当前操作，再粘贴组。")
+                payload = decode_collection_clipboard(
+                    bytes(mime.data(DRAWING_COLLECTION_CLIPBOARD_MIME).data())
+                )
+                return self._begin_collection_payload_paste(payload)
+            except (KeyError, ValueError, ValidationError) as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return False
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.begin_frame_paste()
+        ):
+            return True
+        if self.text_tools is not None and self.text_tools.begin_paste():
+            return True
         """Begin an insertion gesture without modifying the current draft."""
         if (
             not self.select_committed_entities
@@ -8804,7 +11419,7 @@ class SketchCanvas(QWidget):
             if mime is not None and mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME):
                 if self.commit_mixed_clipboard is None:
                     raise ValueError("当前图纸无法粘贴图片与图元。")
-                sketch, images, styles = decode_mixed_clipboard_data(
+                sketch, images, styles, text_styles = decode_mixed_clipboard_full(
                     bytes(mime.data(DRAWING_MIXED_CLIPBOARD_MIME).data())
                 )
                 names = {entity.layer_name for entity in sketch.entities}
@@ -8817,11 +11432,17 @@ class SketchCanvas(QWidget):
                         layer = sketch.layers.get(name)
                     if layer.locked or not layer.displayed:
                         raise ValueError(f"目标图层 {name} 隐藏或已锁定。")
+                project_coplanar_vector((0, 0), sketch.frame, self._spatial_target_frame)
+                project_coplanar_vector((0, 0), WorkPlaneFrame.xy(), self._spatial_target_frame)
+                anchor = self._spatial_target_frame.world_to_local(
+                    sketch.frame.local_to_world(self._clipboard_entity_anchor(sketch.entities[0]))
+                )
                 if self.tool != "选择元素" and not self.set_tool("选择元素"):
                     return False
-                self._clipboard_anchor = self._entity_handles(sketch.entities[0])[0][1]
+                self._clipboard_anchor = anchor
                 self._clipboard_paste = sketch
                 self._clipboard_styles = styles
+                self._clipboard_text_styles = text_styles
                 self._clipboard_mixed_images = tuple(
                     replace(image, image_id=uuid4().hex) for image in images
                 )
@@ -8842,6 +11463,10 @@ class SketchCanvas(QWidget):
                 if self.commit_raster_batch is None:
                     raise ValueError("当前图纸暂不能粘贴多张图片。")
                 images = decode_raster_group(bytes(mime.data(DRAWING_RASTER_GROUP_MIME).data()))
+                images = tuple(
+                    self._project_raster(item, WorkPlaneFrame.xy(), self._spatial_target_frame)
+                    for item in images
+                )
                 if self.tool != "选择元素" and not self.set_tool("选择元素"):
                     return False
                 self._clipboard_rasters = tuple(
@@ -8885,7 +11510,7 @@ class SketchCanvas(QWidget):
                 return True
             if mime is None or not mime.hasFormat(DRAWING_CLIPBOARD_MIME):
                 raise ValueError("剪贴板中没有可粘贴的二维图元或图片。")
-            sketch, styles = decode_drawing_clipboard_data(
+            sketch, styles, text_styles = decode_drawing_clipboard_full(
                 bytes(mime.data(DRAWING_CLIPBOARD_MIME).data())
             )
             names = {entity.layer_name for entity in sketch.entities}
@@ -8897,15 +11522,41 @@ class SketchCanvas(QWidget):
                     layer = sketch.layers.get(name)
                 if layer.locked or not layer.displayed:
                     raise ValueError(f"目标图层 {name} 隐藏或已锁定。")
-        except ValueError as exc:
+            if sketch.frame != self._spatial_target_frame:
+                if sketch.constraints:
+                    if sketch.support_face is not None:
+                        raise ValueError("附着平面的剪贴板无法粘贴到独立二维图纸。")
+                    project_coplanar_vector((0, 0), sketch.frame, self._spatial_target_frame)
+                    project_coplanar_vector((0, 0), sketch.frame, WorkPlaneFrame.xy())
+                    payload = DrawingCollectionClipboard(
+                        (sketch,),
+                        (),
+                        (),
+                        (),
+                        text_styles or TextStyleTable(),
+                        layers=sketch.layers,
+                        dimension_styles=styles,
+                    )
+                    return self._begin_collection_payload_paste(payload)
+                sketch = replace(
+                    sketch,
+                    frame=self._spatial_target_frame,
+                    entities=tuple(
+                        project_coplanar_entity(entity, sketch.frame, self._spatial_target_frame)
+                        for entity in sketch.entities
+                    ),
+                )
+            anchor = self._clipboard_entity_anchor(sketch.entities[0])
+        except (KeyError, ValueError, ValidationError) as exc:
             self.message = str(exc)
             self.changed.emit()
             return False
         if self.tool != "选择元素" and not self.set_tool("选择元素"):
             return False
-        self._clipboard_anchor = self._entity_handles(sketch.entities[0])[0][1]
+        self._clipboard_anchor = anchor
         self._clipboard_paste = sketch
         self._clipboard_styles = styles
+        self._clipboard_text_styles = text_styles
         self.selected_raster_ids.clear()
         self.selected_entity_ids.clear()
         self.selected_constraint_ids.clear()
@@ -8918,15 +11569,41 @@ class SketchCanvas(QWidget):
     def clipboard_paste_active(self) -> bool:
         return (
             self._clipboard_paste is not None
+            or self._clipboard_collection is not None
             or self._clipboard_raster is not None
             or bool(self._clipboard_rasters)
         )
 
     def _place_clipboard(self, point: Point2D) -> bool:
+        if self._clipboard_collection is not None:
+            payload = self._clipboard_collection
+            delta = (point[0] - self._clipboard_anchor[0], point[1] - self._clipboard_anchor[1])
+            if self.commit_collection_paste is None or not self.commit_collection_paste(
+                payload, delta
+            ):
+                return False
+            self._clipboard_collection = None
+            self.collection_paste_preview = None
+            self._paste_session_origin = None
+            self.message = "已暂存组粘贴；可一次撤销。"
+            if payload.external_objects and (
+                self.geometric_tolerance_tools is None
+                or payload.source_token != self.geometric_tolerance_tools.clipboard_source
+            ):
+                self.message += " 外部标注关联已解除。"
+            self.changed.emit()
+            self.update()
+            return True
         if self._clipboard_mixed_images and self._clipboard_paste is not None:
             sketch, images = self._clipboard_paste, self._clipboard_mixed_images
             delta = (point[0] - self._clipboard_anchor[0], point[1] - self._clipboard_anchor[1])
             try:
+                sketch_delta = project_coplanar_vector(
+                    delta, self._spatial_target_frame, sketch.frame
+                )
+                drawing_delta = project_coplanar_vector(
+                    delta, self._spatial_target_frame, WorkPlaneFrame.xy()
+                )
                 if (
                     self._clipboard_mixed_revision is not None
                     and self.source_revision_provider is not None
@@ -8935,16 +11612,24 @@ class SketchCanvas(QWidget):
                     raise ValueError("图纸已变化，请取消后重新粘贴。")
                 source_sketch = sketch
                 styles = self.drawing_dimension_styles
+                fonts = None
                 if self._clipboard_styles is not None:
                     if styles is None:
                         raise ValueError("当前图纸无法导入标注样式。")
+                    source_styles = self._clipboard_styles
+                    if self._clipboard_text_styles is not None:
+                        if self.text_tools is None:
+                            raise ValueError("当前图纸无法导入文字样式。")
+                        source_styles, fonts = reconcile_clipboard_fonts(
+                            source_styles, self._clipboard_text_styles, self.text_tools.styles
+                        )
                     styles, source_sketch = reconcile_clipboard_styles(
-                        sketch, self._clipboard_styles, styles
+                        sketch, source_styles, styles
                     )
                 else:
                     styles = None
                 entities, constraints = instantiate_drawing_clipboard(
-                    source_sketch, delta, styles=styles
+                    source_sketch, sketch_delta, styles=styles
                 )
                 layers = self.layer_table
                 names = {entity.layer_name for entity in entities}
@@ -8958,23 +11643,27 @@ class SketchCanvas(QWidget):
                         layers = layers.add(layer)
                     if layer.locked or not layer.displayed:
                         raise ValueError(f"目标图层 {name} 隐藏或已锁定。")
-                placed = Sketch(uuid4().hex, WorkPlaneFrame.xy(), entities, constraints, layers)
+                placed = Sketch(uuid4().hex, sketch.frame, entities, constraints, layers)
                 moved_images = tuple(
                     replace(
                         image,
-                        origin_mm=(image.origin_mm[0] + delta[0], image.origin_mm[1] + delta[1]),
+                        origin_mm=(
+                            image.origin_mm[0] + drawing_delta[0],
+                            image.origin_mm[1] + drawing_delta[1],
+                        ),
                     )
                     for image in images
                 )
                 if self.commit_mixed_clipboard is None:
                     raise ValueError("当前图纸无法粘贴图片与图元。")
-                self.commit_mixed_clipboard(placed, moved_images, styles)
+                self.commit_mixed_clipboard(placed, moved_images, styles, fonts)
             except ValueError as exc:
                 self.message = f"粘贴失败：{exc}"
                 self.changed.emit()
                 return False
             self._clipboard_paste = None
             self._clipboard_styles = None
+            self._clipboard_text_styles = None
             self._clipboard_mixed_images = ()
             self._clipboard_mixed_revision = None
             self.selected_entity_ids = {entity.entity_id for entity in entities}
@@ -8998,6 +11687,10 @@ class SketchCanvas(QWidget):
                     replace(item, origin_mm=(item.origin_mm[0] + dx, item.origin_mm[1] + dy))
                     for item in images
                 )
+                placed = tuple(
+                    self._project_raster(item, self._spatial_target_frame, WorkPlaneFrame.xy())
+                    for item in placed
+                )
                 if self.commit_raster_batch is None:
                     raise ValueError("当前图纸暂不能粘贴多张图片。")
                 self._clipboard_rasters = ()
@@ -9016,7 +11709,11 @@ class SketchCanvas(QWidget):
         raster = self._clipboard_raster
         if raster is not None:
             try:
-                placed = replace(raster, origin_mm=point)
+                placed = self._project_raster(
+                    replace(raster, origin_mm=point),
+                    self._spatial_target_frame,
+                    WorkPlaneFrame.xy(),
+                )
                 if self.commit_clipboard_raster is None:
                     raise ValueError("当前图纸暂不能粘贴图片。")
                 self._clipboard_raster = None
@@ -9040,12 +11737,18 @@ class SketchCanvas(QWidget):
         try:
             source_sketch = sketch
             styles = self.drawing_dimension_styles
+            fonts = None
             if self._clipboard_styles is not None:
                 if styles is None:
                     raise ValueError("当前图纸无法导入标注样式。")
-                styles, source_sketch = reconcile_clipboard_styles(
-                    sketch, self._clipboard_styles, styles
-                )
+                source_styles = self._clipboard_styles
+                if self._clipboard_text_styles is not None:
+                    if self.text_tools is None:
+                        raise ValueError("当前图纸无法导入文字样式。")
+                    source_styles, fonts = reconcile_clipboard_fonts(
+                        source_styles, self._clipboard_text_styles, self.text_tools.styles
+                    )
+                styles, source_sketch = reconcile_clipboard_styles(sketch, source_styles, styles)
             else:
                 styles = None
             entities, constraints = instantiate_drawing_clipboard(
@@ -9065,10 +11768,15 @@ class SketchCanvas(QWidget):
             if self.preserve_document_layers and (
                 layers != self.layer_table
                 or (styles is not None and styles != self.drawing_dimension_styles)
+                or (
+                    fonts is not None
+                    and self.text_tools is not None
+                    and fonts != self.text_tools.styles
+                )
             ):
                 if self.import_clipboard_layers is None:
                     raise ValueError("当前图纸无法导入剪贴板图层。")
-                finish_layer_import = self.import_clipboard_layers(layers, styles)
+                finish_layer_import = self.import_clipboard_layers(layers, styles, fonts)
         except ValueError as exc:
             self.message = f"粘贴位置无效：{exc}"
             self.changed.emit()
@@ -9098,6 +11806,7 @@ class SketchCanvas(QWidget):
         if finish_layer_import is not None:
             finish_layer_import(True)
         self._clipboard_styles = None
+        self._clipboard_text_styles = None
         if self.message == "正在粘贴二维图元。":
             self.message = f"已粘贴 {len(entities)} 个二维图元；可撤销。"
             if any(
@@ -9171,9 +11880,35 @@ class SketchCanvas(QWidget):
     def _finish_transform_selection(self) -> None:
         if self._selection_anchor is not None:
             self._finish_selection_box(self._selection_corner)
+        tolerance_tools = self.geometric_tolerance_tools
+        if (
+            self._transform_selecting
+            and self._transform_operation in {"move", "copy"}
+            and tolerance_tools is not None
+            and tolerance_tools.selected_id is not None
+        ):
+            operation = self._transform_operation
+            self.cancel_transform()
+            tolerance_tools.handle_command(operation.upper())
+            return
+        if (
+            self._transform_selecting
+            and self.selected_block_instance_ids
+            and self.collection_session is None
+            and self.ensure_group_operation is not None
+        ):
+            operation = self._transform_operation
+            self._transform_operation = None
+            try:
+                if not self.ensure_group_operation(None):
+                    return
+            finally:
+                self._transform_operation = operation
         if self._transform_selecting and (
             self.selected_entity_ids
             or self.selected_raster_id
+            or self.selected_block_instance_ids
+            or (self.text_tools is not None and self.text_tools.selected_ids)
             or (self._transform_operation == "erase" and self.selected_constraint_ids)
         ):
             if (
@@ -9482,6 +12217,9 @@ class SketchCanvas(QWidget):
         if self.scale_center is None:
             return False
         self._scale_copy = True
+        self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
+        self._collection_transform_preview = None
         self.message = "缩放复制：请输入比例或指定比例点。"
         self.changed.emit()
         return True
@@ -9490,6 +12228,9 @@ class SketchCanvas(QWidget):
         if self.scale_center is None:
             return False
         self._scale_reference_active = True
+        self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
+        self._collection_transform_preview = None
         self._raster_transform_preview = None
         self._raster_transform_previews = ()
         self._scale_reference_length = None
@@ -9515,6 +12256,9 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return False
         self._scale_target_points_active = True
+        self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
+        self._collection_transform_preview = None
         self._raster_transform_preview = None
         self._raster_transform_previews = ()
         self._scale_target_first = None
@@ -9535,6 +12279,66 @@ class SketchCanvas(QWidget):
         return self.apply_scale_factor(length / self._scale_reference_length)
 
     def apply_scale_factor(self, factor: float) -> bool:
+        if not self._transform_revision_current():
+            return False
+        if self.collection_session is not None and self._transform_operation == "scale":
+            if self._transform_base is None or not math.isfinite(factor) or factor <= 0:
+                return False
+            base, identities, copy_source = (
+                self._transform_base,
+                tuple(self.selected_entity_ids),
+                self._scale_copy,
+            )
+            self.begin_collection_affine_commit("scale", base, factor, copy_source)
+            self.cancel_transform()
+            try:
+                signal = (
+                    self.committed_scale_copy_requested
+                    if copy_source
+                    else self.committed_scale_requested
+                )
+                signal.emit(identities, base, factor)
+            finally:
+                self.end_collection_preview_commit()
+            return True
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and (self.selected_entity_ids or self.selected_raster_ids)
+            and self._transform_base is not None
+        ):
+            if not math.isfinite(factor) or factor <= 0:
+                return False
+            ids, base, copy_source = (
+                tuple(self.selected_entity_ids),
+                self._transform_base,
+                self._scale_copy,
+            )
+            self.cancel_transform()
+            if copy_source:
+                self.committed_scale_copy_requested.emit(ids, base, factor)
+            else:
+                self.committed_scale_requested.emit(ids, base, factor)
+            return True
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and not self.selected_entity_ids
+            and not self.selected_raster_ids
+            and self._transform_base is not None
+        ):
+            if not math.isfinite(factor) or factor <= 0:
+                return False
+            result = self.text_tools.transform(
+                "scale",
+                self._transform_base,
+                self._transform_base,
+                scale=factor,
+                copy=self._scale_copy,
+            )
+            if result:
+                self.cancel_transform()
+            return result
         if not self._transform_revision_current() or self.scale_center is None:
             return False
         if self.selected_raster_id is not None and not self.selected_entity_ids:
@@ -9610,12 +12414,14 @@ class SketchCanvas(QWidget):
         if self._reference_previous_mode is None:
             self._reference_previous_mode = self._transform_reference_mode
         self.configure_active_transform(reference_rotation=True, keep_source=True)
+        self._collection_transform_preview = None
         self._transform_reference = None
         self._transform_reference_end = None
         self._transform_reference_angle = None
         self._rotation_target_points_active = False
         self._rotation_target_first = None
         self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
         self._raster_transform_preview = None
         self._raster_transform_previews = ()
         self.message = self._transform_point_hint()
@@ -9629,7 +12435,9 @@ class SketchCanvas(QWidget):
         if self.rotation_center is None or not self._transform_revision_current():
             return False
         self._rotation_copy = True
+        self._collection_transform_preview = None
         self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
         self.message = (
             f"旋转副本：指定目标方向或输入角度 <{self.rotation_default_angle:g}°>；"
             "R 参考，Esc 取消。"
@@ -9646,7 +12454,9 @@ class SketchCanvas(QWidget):
         self._transform_reference = None
         self._transform_reference_end = None
         self._transform_reference_angle = angle_deg
+        self._collection_transform_preview = None
         self._transform_preview = ()
+        self.mixed_transform_preview_texts = ()
         self.message = self._transform_point_hint()
         self.changed.emit()
         self.update()
@@ -9671,6 +12481,8 @@ class SketchCanvas(QWidget):
             self.changed.emit()
             return False
         self._rotation_target_points_active = True
+        self.mixed_transform_preview_texts = ()
+        self._collection_transform_preview = None
         self._raster_transform_preview = None
         self._raster_transform_previews = ()
         self._rotation_target_first = None
@@ -9690,7 +12502,67 @@ class SketchCanvas(QWidget):
         return self.apply_rotation_angle(target_deg - reference)
 
     def apply_rotation_angle(self, angle_deg: float) -> bool:
+        if self.collection_session is not None and self._transform_operation == "rotate":
+            if self._transform_base is None or not math.isfinite(angle_deg):
+                return False
+            base, identities, copy_source = (
+                self._transform_base,
+                tuple(self.selected_entity_ids),
+                self._rotation_copy,
+            )
+            self.begin_collection_affine_commit("rotate", base, angle_deg, copy_source)
+            self.cancel_transform()
+            try:
+                signal = (
+                    self.committed_rotation_copy_requested
+                    if copy_source
+                    else self.committed_rotation_requested
+                )
+                signal.emit(identities, base, angle_deg)
+            finally:
+                self.end_collection_preview_commit()
+            return True
         """Apply an explicit relative angle about the currently picked center."""
+        if not self._transform_revision_current():
+            return False
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and (self.selected_entity_ids or self.selected_raster_ids)
+            and self._transform_base is not None
+        ):
+            if not math.isfinite(angle_deg):
+                return False
+            ids, base, copy_source = (
+                tuple(self.selected_entity_ids),
+                self._transform_base,
+                self._rotation_copy,
+            )
+            self.cancel_transform()
+            if copy_source:
+                self.committed_rotation_copy_requested.emit(ids, base, angle_deg)
+            else:
+                self.committed_rotation_requested.emit(ids, base, angle_deg)
+            return True
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and not self.selected_entity_ids
+            and not self.selected_raster_ids
+            and self._transform_base is not None
+        ):
+            if not math.isfinite(angle_deg):
+                return False
+            result = self.text_tools.transform(
+                "rotate",
+                self._transform_base,
+                self._transform_base,
+                angle=angle_deg,
+                copy=self._rotation_copy,
+            )
+            if result:
+                self.cancel_transform()
+            return result
         if not self._transform_revision_current():
             return False
         if self._transform_operation != "rotate" or self._transform_base is None:
@@ -9728,6 +12600,16 @@ class SketchCanvas(QWidget):
             angle is not None and self._rotation_copy
         )
         omission_notice = self.draft_copy_omission_notice() if copy_source else ""
+        try:
+            drawing_frame = WorkPlaneFrame.xy()
+            project_coplanar_vector((0, 0), self._spatial_target_frame, drawing_frame)
+            center = drawing_frame.world_to_local(self._spatial_target_frame.local_to_world(center))
+            if angle is not None:
+                angle = project_coplanar_rotation(angle, self._spatial_target_frame, drawing_frame)
+        except ValueError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
         for image in self.drawing_rasters:
             if image.image_id not in self.selected_raster_ids:
                 continue
@@ -9789,6 +12671,15 @@ class SketchCanvas(QWidget):
         keep_source: bool,
     ) -> bool:
         omission_notice = self.draft_copy_omission_notice() if keep_source else ""
+        try:
+            drawing_frame = WorkPlaneFrame.xy()
+            project_coplanar_vector((0, 0), self._spatial_target_frame, drawing_frame)
+            start = drawing_frame.world_to_local(self._spatial_target_frame.local_to_world(start))
+            end = drawing_frame.world_to_local(self._spatial_target_frame.local_to_world(end))
+        except ValueError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
         axis = math.atan2(end[1] - start[1], end[0] - start[0])
         c, sn = math.cos(2 * axis), math.sin(2 * axis)
         images: list[DrawingRaster] = []
@@ -9919,6 +12810,20 @@ class SketchCanvas(QWidget):
             self.update()
             return False
         self._transform_keep_source = not erase
+        if self.collection_session is not None:
+            start = self._transform_base
+            assert start is not None
+            identities = tuple(selected)
+            self.begin_collection_mirror_commit(not erase, start, point)
+            self.cancel_transform()
+            try:
+                if erase:
+                    self.committed_mirror_requested.emit(identities, start, point)
+                else:
+                    self.committed_mirror_copy_requested.emit(identities, start, point)
+            finally:
+                self.end_collection_preview_commit()
+            return True
         try:
             candidate = self._transform_candidate(point) if erase else self._mirror_candidate
         except ValueError as exc:
@@ -9986,7 +12891,10 @@ class SketchCanvas(QWidget):
             return False
         try:
             results: list[DrawingRaster] = []
-            for raster in sources:
+            for source in sources:
+                raster = self._project_raster(
+                    source, WorkPlaneFrame.xy(), self._spatial_target_frame
+                )
                 x, y = raster.origin_mm[0] - base[0], raster.origin_mm[1] - base[1]
                 if operation == "scale":
                     scale = factor if factor is not None else math.dist(base, point)
@@ -10039,6 +12947,31 @@ class SketchCanvas(QWidget):
                 self._raster_transform_previews = tuple(results)
                 self.update()
                 return True
+            world_results: list[DrawingRaster] = []
+            for source, result in zip(sources, results, strict=True):
+                projected = self._project_raster(
+                    result, self._spatial_target_frame, WorkPlaneFrame.xy()
+                )
+                if operation in {"move", "copy", "scale"}:
+                    projected = replace(
+                        projected, angle_deg=source.angle_deg, mirrored=source.mirrored
+                    )
+                elif operation == "rotate":
+                    rotation = (
+                        angle
+                        if angle is not None
+                        else math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+                    )
+                    projected = replace(
+                        projected,
+                        angle_deg=source.angle_deg
+                        + project_coplanar_rotation(
+                            rotation, self._spatial_target_frame, WorkPlaneFrame.xy()
+                        ),
+                        mirrored=source.mirrored,
+                    )
+                world_results.append(projected)
+            results = world_results
             copy_image = (
                 keep_source
                 or operation == "copy"
@@ -10067,6 +13000,27 @@ class SketchCanvas(QWidget):
         self.selected_raster_ids = {result.image_id for result in results}
         self.message = "已变换所选图片；可撤销。"
         self.changed.emit()
+        self.update()
+        return True
+
+    def _preview_mixed_transform(
+        self, operation: str, base: Point2D, value: Point2D | float
+    ) -> bool:
+        provider = self.mixed_transform_preview_provider
+        if (
+            provider is None
+            or self.text_tools is None
+            or not self.text_tools.selected_ids
+            or not self.selected_entity_ids
+        ):
+            return False
+        try:
+            self._transform_preview, self.mixed_transform_preview_texts = provider(
+                operation, base, value
+            )
+        except (KeyError, ValueError, ValidationError):
+            self._transform_preview = ()
+            self.mixed_transform_preview_texts = ()
         self.update()
         return True
 
@@ -10132,6 +13086,9 @@ class SketchCanvas(QWidget):
                 return
             length = math.dist(first, point)
             if length <= 1e-9:
+                self._collection_transform_preview = None
+                self._transform_preview = ()
+                self.mixed_transform_preview_texts = ()
                 self._raster_transform_preview = None
                 self._raster_transform_previews = ()
                 self.update()
@@ -10144,6 +13101,15 @@ class SketchCanvas(QWidget):
                     self.point_accepted.emit(point)
             else:
                 assert self._scale_reference_length is not None and self._transform_base is not None
+                if self._preview_mixed_transform(
+                    "scale", self._transform_base, length / self._scale_reference_length
+                ):
+                    return
+                if self.collection_session is not None and self.collection_affine_preview_provider:
+                    self.preview_collection_affine(
+                        "scale", self._transform_base, length / self._scale_reference_length
+                    )
+                    return
                 if self.selected_raster_id is not None and not self.selected_entity_ids:
                     self._apply_raster_transform(
                         self._transform_base,
@@ -10213,7 +13179,9 @@ class SketchCanvas(QWidget):
                     self.update()
                 return
             if _distance(first, point) <= 1e-9:
+                self._collection_transform_preview = None
                 self._transform_preview = ()
+                self.mixed_transform_preview_texts = ()
                 self._raster_transform_preview = None
                 self._raster_transform_previews = ()
                 if commit:
@@ -10228,6 +13196,18 @@ class SketchCanvas(QWidget):
             else:
                 reference = self.rotation_reference_angle
                 if reference is not None:
+                    if self._preview_mixed_transform(
+                        "rotate", self._transform_base, target_angle - reference
+                    ):
+                        return
+                    if (
+                        self.collection_session is not None
+                        and self.collection_affine_preview_provider
+                    ):
+                        self.preview_collection_affine(
+                            "rotate", self._transform_base, target_angle - reference
+                        )
+                        return
                     if self.selected_raster_id is not None and not self.selected_entity_ids:
                         self._apply_raster_transform(
                             self._transform_base, angle=target_angle - reference, preview=True
@@ -10244,6 +13224,192 @@ class SketchCanvas(QWidget):
                         self.update()
                     else:
                         self._show_transform_candidate(candidate, commit=False)
+            return
+        if (
+            not commit
+            and self.collection_session is not None
+            and self._transform_operation == "mirror"
+            and self.collection_mirror_preview_provider is not None
+        ):
+            base = self._transform_base
+            assert base is not None
+            self.preview_collection_mirror(self._transform_keep_source, base, point)
+            return
+        if (
+            not commit
+            and self.collection_session is not None
+            and self._transform_operation in {"rotate", "scale"}
+            and self.collection_affine_preview_provider is not None
+        ):
+            base = self._transform_base
+            assert base is not None
+            if self._transform_operation == "rotate":
+                value = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+                value -= self.rotation_reference_angle or 0
+            else:
+                value = math.dist(base, point)
+                if self.scale_reference_active and self._scale_reference_length is not None:
+                    value /= self._scale_reference_length
+            self.preview_collection_affine(self._transform_operation, base, value)
+            return
+        if (
+            commit
+            and self.collection_session is not None
+            and self._transform_operation in {"rotate", "scale"}
+        ):
+            base = self._transform_base
+            assert base is not None
+            if self._transform_operation == "rotate":
+                angle = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+                done = self.apply_rotation_angle(angle - (self.rotation_reference_angle or 0))
+            else:
+                factor = math.dist(base, point)
+                if self.scale_reference_active and self._scale_reference_length is not None:
+                    factor /= self._scale_reference_length
+                done = self.apply_scale_factor(factor)
+            if done:
+                self.point_accepted.emit(point)
+            return
+        if (
+            not commit
+            and self.collection_session is not None
+            and self._transform_operation in {"move", "copy"}
+            and self.collection_transform_preview_provider is not None
+        ):
+            base = self._transform_base
+            assert base is not None
+            displacement = (point[0] - base[0], point[1] - base[1])
+            if self._copy_array_count is None:
+                self.preview_collection_displacement(
+                    self._transform_operation == "copy", displacement
+                )
+            else:
+                self.clear_collection_transform_preview()
+            return
+        if (
+            commit
+            and self.collection_session is not None
+            and self._transform_operation in {"move", "copy"}
+            and (
+                self.selected_entity_ids
+                or self.selected_raster_ids
+                or self.selected_constraint_ids
+                or self.selected_block_instance_ids
+                or (self.text_tools is not None and self.text_tools.selected_ids)
+                or (
+                    self.geometric_tolerance_tools is not None
+                    and self.geometric_tolerance_tools.selected_ids
+                )
+            )
+        ):
+            base = self._transform_base
+            assert base is not None
+            operation = self._transform_operation
+            selected = tuple(self.selected_entity_ids)
+            delta = (point[0] - base[0], point[1] - base[1])
+            count = self._copy_array_count if operation == "copy" else None
+            preview = self._collection_transform_preview
+            if (
+                not isinstance(preview, DrawingCollectionTransformPreview)
+                or preview.copy_source != (operation == "copy")
+                or preview.displacement != delta
+            ) or count is not None:
+                preview = None
+            if operation == "copy" and self._copy_repeat:
+                self._mixed_copy_pending_point = point
+                self._copy_array_count = None
+                self._copy_array_fit = False
+                self._collection_transform_preview = None
+            else:
+                self.cancel_transform()
+            self._collection_commit_preview = preview
+            try:
+                if operation == "move":
+                    self.committed_move_requested.emit(selected, delta)
+                elif count is None:
+                    self.committed_mixed_copy_requested.emit(selected, delta)
+                else:
+                    self.committed_mixed_copy_array_requested.emit(selected, delta, count)
+            finally:
+                self._collection_commit_preview = None
+            self.point_accepted.emit(point)
+            return
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and (self.selected_entity_ids or self.selected_raster_ids)
+        ):
+            if not commit and self.mixed_transform_preview_provider is not None:
+                base = self._transform_base
+                operation = self._transform_operation
+                value: Point2D | float = point
+                if operation in {"move", "copy"}:
+                    value = (point[0] - base[0], point[1] - base[1])
+                elif operation == "rotate":
+                    value = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0])) - (
+                        self.rotation_reference_angle or 0
+                    )
+                elif operation == "scale":
+                    value = math.dist(base, point) / (self._scale_reference_length or 1)
+                if operation is not None:
+                    self._preview_mixed_transform(operation, base, value)
+            if commit:
+                base = self._transform_base
+                operation = self._transform_operation
+                ids = tuple(self.selected_entity_ids)
+                if operation in {"move", "copy"}:
+                    delta = (point[0] - base[0], point[1] - base[1])
+                    self.cancel_transform()
+                    if operation == "copy":
+                        self.committed_mixed_copy_requested.emit(ids, delta)
+                    else:
+                        self.committed_move_requested.emit(ids, delta)
+                elif operation == "rotate":
+                    angle = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+                    self.apply_rotation_angle(angle - (self.rotation_reference_angle or 0))
+                elif operation == "scale":
+                    self.apply_scale_factor(
+                        math.dist(base, point) / (self._scale_reference_length or 1)
+                    )
+                elif operation == "mirror":
+                    keep = self._transform_keep_source
+                    self.cancel_transform()
+                    if keep:
+                        self.committed_mirror_copy_requested.emit(ids, base, point)
+                    else:
+                        self.committed_mirror_requested.emit(ids, base, point)
+            return
+        if (
+            self.text_tools is not None
+            and self.text_tools.selected_ids
+            and not self.selected_entity_ids
+            and not self.selected_raster_ids
+        ):
+            if commit:
+                base = self._transform_base
+                assert base is not None
+                operation = self._transform_operation or "move"
+                copy_source = (
+                    self._rotation_copy
+                    or self._scale_copy
+                    or (operation == "mirror" and self._transform_keep_source)
+                )
+                factor = (
+                    math.dist(base, point) / (self._scale_reference_length or 1)
+                    if operation == "scale"
+                    else None
+                )
+                angle = (
+                    math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
+                    - (self.rotation_reference_angle or 0)
+                    if operation == "rotate"
+                    else None
+                )
+                if self.text_tools.transform(
+                    operation, base, point, copy=copy_source, scale=factor, angle=angle
+                ):
+                    self.cancel_transform()
+                    self.point_accepted.emit(point)
             return
         if self.selected_raster_id is not None and not self.selected_entity_ids:
             if commit and self._transform_operation == "mirror" and self._mirror_ask_erase:
@@ -10337,6 +13503,27 @@ class SketchCanvas(QWidget):
                 self.committed_mixed_copy_array_requested.emit(selected, delta, count)
             self.point_accepted.emit(point)
             return
+        if (
+            commit
+            and self.collection_session is not None
+            and self._transform_operation == "mirror"
+            and not self._mirror_ask_erase
+        ):
+            base = self._transform_base
+            assert base is not None
+            identities = tuple(self.selected_entity_ids)
+            keep_source = self._transform_keep_source
+            self.begin_collection_mirror_commit(keep_source, base, point)
+            self.cancel_transform()
+            try:
+                if keep_source:
+                    self.committed_mirror_copy_requested.emit(identities, base, point)
+                else:
+                    self.committed_mirror_requested.emit(identities, base, point)
+            finally:
+                self.end_collection_preview_commit()
+            self.point_accepted.emit(point)
+            return
         try:
             candidate = self._transform_candidate(point, scale_factor=reference_factor)
         except ValueError as exc:
@@ -10362,8 +13549,10 @@ class SketchCanvas(QWidget):
                     origin_mm=(image.origin_mm[0] + index * dx, image.origin_mm[1] + index * dy),
                 )
                 for index in range(1, count if count is not None else 2)
-                for image in self.drawing_rasters
-                if image.image_id in self.selected_raster_ids
+                for source in self.drawing_rasters
+                if source.image_id in self.selected_raster_ids
+                for image in (self._project_drawing_raster(source),)
+                if image is not None
             )
         elif self._transform_operation == "scale" and self.selected_raster_ids and not commit:
             base = self._transform_base
@@ -10379,8 +13568,10 @@ class SketchCanvas(QWidget):
                     width_mm=image.width_mm * factor,
                     height_mm=image.height_mm * factor,
                 )
-                for image in self.drawing_rasters
-                if image.image_id in self.selected_raster_ids
+                for source in self.drawing_rasters
+                if source.image_id in self.selected_raster_ids
+                for image in (self._project_drawing_raster(source),)
+                if image is not None
             )
         elif self._transform_operation == "rotate" and self.selected_raster_ids and not commit:
             base = self._transform_base
@@ -10401,8 +13592,10 @@ class SketchCanvas(QWidget):
                     ),
                     angle_deg=image.angle_deg + rotation,
                 )
-                for image in self.drawing_rasters
-                if image.image_id in self.selected_raster_ids
+                for source in self.drawing_rasters
+                if source.image_id in self.selected_raster_ids
+                for image in (self._project_drawing_raster(source),)
+                if image is not None
             )
         elif self._transform_operation == "mirror" and self.selected_raster_ids and not commit:
             base = self._transform_base
@@ -10423,8 +13616,10 @@ class SketchCanvas(QWidget):
                     angle_deg=math.degrees(2 * axis) - image.angle_deg,
                     mirrored=not image.mirrored,
                 )
-                for image in self.drawing_rasters
-                if image.image_id in self.selected_raster_ids
+                for source in self.drawing_rasters
+                if source.image_id in self.selected_raster_ids
+                for image in (self._project_drawing_raster(source),)
+                if image is not None
             )
         if commit and self._transform_operation == "rotate" and not self.rotation_uses_reference:
             base = self._transform_base
@@ -10465,7 +13660,16 @@ class SketchCanvas(QWidget):
         if commit and self._transform_operation == "move" and self.selected_raster_ids:
             base = self._transform_base
             assert base is not None
-            dx, dy = point[0] - base[0], point[1] - base[1]
+            try:
+                dx, dy = project_coplanar_vector(
+                    (point[0] - base[0], point[1] - base[1]),
+                    self._spatial_target_frame,
+                    WorkPlaneFrame.xy(),
+                )
+            except ValueError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
             images = tuple(
                 replace(image, origin_mm=(image.origin_mm[0] + dx, image.origin_mm[1] + dy))
                 for image in self.drawing_rasters
@@ -10492,7 +13696,16 @@ class SketchCanvas(QWidget):
         ):
             base = self._transform_base
             assert base is not None
-            dx, dy = point[0] - base[0], point[1] - base[1]
+            try:
+                dx, dy = project_coplanar_vector(
+                    (point[0] - base[0], point[1] - base[1]),
+                    self._spatial_target_frame,
+                    WorkPlaneFrame.xy(),
+                )
+            except ValueError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
             count = self._copy_array_count or 2
             if self._copy_array_count is not None and self._copy_array_fit:
                 dx, dy = dx / (count - 1), dy / (count - 1)
@@ -10697,8 +13910,8 @@ class SketchCanvas(QWidget):
             self.message = "草稿历史已变化，无法撤销该复制；请结束当前命令。"
             self.changed.emit()
             return False
-        self._redo_history.append(self._draft_state())
-        self._restore_draft_state(self._undo_history.pop())
+        if not self._restore_undo_step():
+            return False
         self._copy_placements.pop()
         self._transform_preview = ()
         self.message = "已撤销上一个副本；指定下一个目标点。"
@@ -10710,6 +13923,22 @@ class SketchCanvas(QWidget):
 
     def has_mixed_draft_copy(self, identity: str) -> bool:
         return identity in self._mixed_draft_copy_ids
+
+    def finish_collection_copy(self, before_position: int | None) -> None:
+        """Connect an isolated copy step to the active repeated-copy gesture."""
+        point = self._mixed_copy_pending_point
+        self._mixed_copy_pending_point = None
+        if point is None or self._transform_operation != "copy":
+            return
+        if before_position is None:
+            self.message = "复制失败；可以重新指定目标点。"
+        else:
+            self._copy_placements.append((point, before_position, self.history_position))
+            self._mixed_copy_started = True
+            self._transform_preview = ()
+            self.message = "已暂存副本；指定下一个目标点，U 撤销，Enter 结束。"
+        self.changed.emit()
+        self.update()
 
     def finish_mixed_copy_commit(
         self, identity: str | None, revision: int, *, includes_draft: bool = False
@@ -10764,6 +13993,7 @@ class SketchCanvas(QWidget):
         self._trim_drag_spatial_frame = self._spatial_target_frame
         self._trim_drag_spatial_unsupported = self._spatial_boundary_unsupported
         self._trim_drag_saved_events = []
+        self._trim_drag_draft_events = []
         self._trim_drag_source_revision = (
             self.source_context_revision
             if self.source_context_revision is not None
@@ -10986,6 +14216,7 @@ class SketchCanvas(QWidget):
         self._trim_drag_blocked = False
         self._trim_drag_original_background = None
         self._trim_drag_saved_events = []
+        self._trim_drag_draft_events = []
         self._trim_drag_source_revision = None
         self._trim_drag_spatial_snapshot = None
         self._trim_drag_spatial_frame = None
@@ -11180,8 +14411,27 @@ class SketchCanvas(QWidget):
                 if "没有与其他直线段的内部交点" not in str(exc):
                     self._trim_drag_blocked = True
                 continue
+            updated = tuple(
+                replace(entity, entity_id=uuid4().hex)
+                if entity.entity_id == target_id
+                and type(entity) is not type(target)
+                and not (isinstance(target, CircleEntity) and isinstance(entity, ArcEntity))
+                else entity
+                for entity in updated
+            )
             if updated == candidate_entities:
                 continue
+            known = {entity.entity_id for entity in candidate_entities}
+            self._trim_drag_draft_events.append(
+                (
+                    target_id,
+                    tuple(
+                        entity.entity_id
+                        for entity in updated
+                        if entity.entity_id == target_id or entity.entity_id not in known
+                    ),
+                )
+            )
             candidate_entities = updated
             self._trim_drag_candidate_entities = updated
             self._trim_drag_changed_count += 1
@@ -11255,6 +14505,7 @@ class SketchCanvas(QWidget):
             return True
         if self._trim_drag_saved_target:
             saved_events = tuple(self._trim_drag_saved_events)
+            draft_events = tuple(self._trim_drag_draft_events)
             source_revision = self._trim_drag_source_revision
             original_background = self._trim_drag_original_background
             final_background = self.background_entities
@@ -11283,13 +14534,17 @@ class SketchCanvas(QWidget):
                 self.message = f"正在校验{action}。"
                 self.changed.emit()
                 self.update()
-                self.committed_drag_trim_requested.emit(
-                    saved_events,
-                    candidate,
-                    candidate_constraints,
-                    final_background,
-                    source_revision,
-                )
+                self.collection_trim_draft_events = draft_events
+                try:
+                    self.committed_drag_trim_requested.emit(
+                        saved_events,
+                        candidate,
+                        candidate_constraints,
+                        final_background,
+                        source_revision,
+                    )
+                finally:
+                    self.collection_trim_draft_events = ()
                 return True
             self.message = f"{action}未能安全完成；本次未修改。"
             if last_error:
@@ -11298,6 +14553,50 @@ class SketchCanvas(QWidget):
             self.update()
             return True
         if candidate != original:
+            member_mapping: dict[str, tuple[str, ...]] = {}
+            if self.collection_session is not None:
+                revised = {entity.entity_id: entity for entity in candidate}
+                changed_ids = {
+                    entity.entity_id
+                    for entity in original
+                    if revised.get(entity.entity_id) != entity
+                }
+                try:
+                    groups = self.collection_session.snapshot.groups
+                except ValidationError as exc:
+                    self._cancel_trim_drag()
+                    self.message = str(exc)
+                    self.changed.emit()
+                    return True
+                if any(
+                    group.selectable
+                    and any(
+                        member.kind == "geometry" and member.object_id in changed_ids
+                        for member in group.members
+                    )
+                    for group in groups
+                ):
+                    self._cancel_trim_drag()
+                    self.message = "组选择已启用；请先关闭组选择再修剪单个成员。"
+                    self.changed.emit()
+                    return True
+                grouped_ids = {
+                    member.object_id
+                    for group in groups
+                    for member in group.members
+                    if member.kind == "geometry"
+                    and member.sketch_id == self._collection_draft_id
+                    and member.object_id in changed_ids
+                }
+                for identity in grouped_ids:
+                    current = (identity,)
+                    for target_id, fragments in self._trim_drag_draft_events:
+                        current = tuple(
+                            result
+                            for item in current
+                            for result in (fragments if item == target_id else (item,))
+                        )
+                    member_mapping[identity] = tuple(dict.fromkeys(current))
             try:
                 candidate_constraints = self._line_edit_user_constraints(
                     candidate, trim=self.tool == "修剪", original_entities=original
@@ -11313,20 +14612,25 @@ class SketchCanvas(QWidget):
                 self.changed.emit()
                 self.update()
                 return True
-            self._undo_history.append(
-                _DraftState(
-                    original,
-                    original_constraints,
-                    original_selection or frozenset(),
-                    self.layer_table,
-                    self.active_layer_name,
-                    history_position=self.history_position,
-                    mixed_move=self.mixed_move,
-                    pending_cross_tangencies=tuple(self.pending_cross_tangencies),
-                    last_polar_entity_id=self._last_polar_entity_id,
+            try:
+                before = replace(
+                    self._draft_state(),
+                    entities=original,
+                    constraints=original_constraints,
+                    selected_ids=original_selection or frozenset(),
                 )
-            )
-            self._advance_history()
+            except ValidationError as exc:
+                self._cancel_trim_drag()
+                self.message = str(exc)
+                self.changed.emit()
+                return True
+            undo_before = list(self._undo_history)
+            redo_before = list(self._redo_history)
+            next_history_before = self._next_history_position
+            notices_before = dict(self._pending_tangency_removal_notices)
+            line_actions_before = list(self._line_edit_undo_actions)
+            self._undo_history.append(before)
+            self._advance_history(notify=not member_mapping)
             if self.tool in {"修剪", "延伸"}:
                 self._line_edit_undo_actions.append(("draft", self.history_position, "", 0))
             self.entities = list(candidate)
@@ -11335,6 +14639,23 @@ class SketchCanvas(QWidget):
             removed_relations = self._preserve_satisfied_relations(
                 candidate, original_entities=original
             )
+            if member_mapping:
+                try:
+                    self._stage_collection_member_mapping(member_mapping)
+                except (ValidationError, ValueError, StopIteration) as exc:
+                    self._undo_history = undo_before
+                    self._redo_history = redo_before
+                    self._next_history_position = next_history_before
+                    self._pending_tangency_removal_notices = notices_before
+                    self._line_edit_undo_actions = line_actions_before
+                    self._restore_draft_state(before)
+                    self._clear_trim_drag()
+                    self.message = f"{action}暂存失败：{exc}；草稿未修改。"
+                    self.changed.emit()
+                    return True
+                if self.collection_session is not None:
+                    self.collection_snapshot_changed.emit(self.collection_session.snapshot)
+                self.history_recorded.emit()
             available = {entity.entity_id for entity in candidate}
             self.selected_entity_ids.intersection_update(available)
             self._snap_candidates_cache = None
@@ -11376,8 +14697,10 @@ class SketchCanvas(QWidget):
         self.update()
         return True
 
-    def _drag_target(self, raw_point: Point2D) -> tuple[Point2D, str]:
-        origin = self._drag_origin
+    def _drag_target(
+        self, raw_point: Point2D, *, origin: Point2D | None = None
+    ) -> tuple[Point2D, str]:
+        origin = self._drag_origin if origin is None else origin
         if origin is None or not self._snapping_enabled:
             return raw_point, ""
         candidates = tuple(
@@ -11516,20 +14839,35 @@ class SketchCanvas(QWidget):
         ):
             return False
         if current != original or current_constraints != original_constraints:
-            self._undo_history.append(
-                _DraftState(
-                    original,
-                    original_constraints,
-                    self._drag_original_selection or frozenset(),
-                    self.layer_table,
-                    self.active_layer_name,
-                    history_position=self.history_position,
-                    mixed_move=self.mixed_move,
-                    pending_cross_tangencies=tuple(self.pending_cross_tangencies),
-                    last_polar_entity_id=self._last_polar_entity_id,
+            try:
+                before = replace(
+                    self._draft_state(),
+                    entities=original,
+                    constraints=original_constraints,
+                    selected_ids=self._drag_original_selection or frozenset(),
                 )
-            )
-            self._advance_history()
+            except ValidationError as exc:
+                self._cancel_handle_drag()
+                self.message = str(exc)
+                self.changed.emit()
+                return True
+            session = self.collection_session
+            if session is not None:
+                try:
+                    if self._collection_draft_id is None:
+                        raise ValidationError("暂存草稿不存在。")
+                    self._stage_collection_draft_state(
+                        session, self._collection_draft_id, current, current_constraints
+                    )
+                except (ValidationError, ValueError, StopIteration) as exc:
+                    self._restore_draft_state(before)
+                    self._clear_handle_drag()
+                    self.message = f"夹点暂存失败：{exc}；草稿未修改。"
+                    self.changed.emit()
+                    self.update()
+                    return True
+            self._undo_history.append(before)
+            self._advance_history(notify=session is None)
             self.entities = list(current)
             self._prune_pending_cross_tangencies(original_entities=original)
             self.constraints = list(current_constraints)
@@ -11537,6 +14875,9 @@ class SketchCanvas(QWidget):
             self.message = "草图控制点已更新；当前约束保持满足，可撤销本次拖动。"
             if self._drag_branch_warning:
                 self.message += f" 分支变化：{self._drag_branch_warning}。请核对当前几何。"
+            if session is not None:
+                self.collection_snapshot_changed.emit(session.snapshot)
+                self.history_recorded.emit()
         else:
             self.entities = list(original)
             self.constraints = list(original_constraints)
@@ -11816,7 +15157,7 @@ class SketchCanvas(QWidget):
                     (
                         self._transform_operation is None
                         and self.tool
-                        in {"直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"}
+                        in {"直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"}
                     )
                     or (
                         self._transform_operation in {"move", "copy"}
@@ -11980,7 +15321,7 @@ class SketchCanvas(QWidget):
         tolerance = _SNAP_RADIUS_PX / self._scale
         candidates: list[tuple[SketchEntity, float]] = []
         for entity in self.selectable_entities():
-            if isinstance(entity, PointEntity | SplineEntity):
+            if isinstance(entity, PointEntity | SplineEntity | EllipseEntity):
                 continue
             if isinstance(entity, LineEntity):
                 distance = _distance_to_segment(point, entity.start_mm, entity.end_mm)
@@ -12078,7 +15419,53 @@ class SketchCanvas(QWidget):
 
     def _clear_line_edit_preview(self) -> None:
         self._line_edit_preview_original = None
+        self._line_edit_preview_ref = None
         self._line_edit_preview_result = ()
+
+    def _edit_saved_geometry_with_boundaries(
+        self, mode: str, point: Point2D, target_id: str, reference: DrawingObjectRef | None
+    ) -> tuple[tuple[SketchEntity, ...], set[str]]:
+        calculation_entities = tuple(self.entities)
+        backgrounds = self.background_entities
+        all_ids = [entity.entity_id for entity in self.entities] + [
+            entity.entity_id for entity, _ in backgrounds
+        ]
+        if len(all_ids) != len(set(all_ids)):
+            background_ids = [entity.entity_id for entity, _ in backgrounds]
+            background_id_set = set(background_ids)
+            used = set(all_ids)
+            counts = Counter(background_ids)
+            remapped: list[tuple[SketchEntity, SketchLayer]] = []
+            for index, (entity, layer) in enumerate(backgrounds):
+                is_target = entity.entity_id == target_id and (
+                    reference is None
+                    or self._background_source_sketch_ids[index] == reference.sketch_id
+                )
+                if counts[entity.entity_id] > 1 and not is_target:
+                    alias = uuid4().hex
+                    while alias in used:
+                        alias = uuid4().hex
+                    used.add(alias)
+                    entity = replace(entity, entity_id=alias)
+                remapped.append((entity, layer))
+            backgrounds = tuple(remapped)
+            aliases: list[SketchEntity] = []
+            for entity in self.entities:
+                if entity.entity_id in background_id_set:
+                    alias = uuid4().hex
+                    while alias in used:
+                        alias = uuid4().hex
+                    used.add(alias)
+                    entity = replace(entity, entity_id=alias)
+                aliases.append(entity)
+            calculation_entities = tuple(aliases)
+        updated = self._edit_visible_geometry(
+            calculation_entities, mode, point, target_id, background_override=backgrounds
+        )
+        original_ids = {entity.entity_id for entity in calculation_entities} | {
+            entity.entity_id for entity, _ in backgrounds
+        }
+        return updated, original_ids
 
     def _refresh_line_edit_preview(self, mode: str | None) -> None:
         self._clear_line_edit_preview()
@@ -12093,25 +15480,52 @@ class SketchCanvas(QWidget):
         if mode not in {"修剪", "延伸"} or target_id is None or point is None:
             return
         visible_entities = self.selectable_entities()
-        original = next(
-            (entity for entity in visible_entities if entity.entity_id == target_id), None
+        draft_id = self._collection_draft_id or (
+            self.draft_sketch_id_provider() if self.draft_sketch_id_provider is not None else None
+        )
+        reference = self.geometry_ref_at(point, draft_id) if draft_id is not None else None
+        if reference is not None and reference.object_id != target_id:
+            return
+        if (
+            reference is None
+            and sum(entity.entity_id == target_id for entity in visible_entities) != 1
+        ):
+            return
+        source = self._offset_reference_entity(reference) if reference is not None else None
+        if reference is not None and source is None:
+            return
+        original = (
+            source[0]
+            if source is not None
+            else next(
+                (entity for entity in visible_entities if entity.entity_id == target_id), None
+            )
         )
         if original is None:
             return
-        saved_layer = next(
-            (layer for entity, layer in self.background_entities if entity.entity_id == target_id),
-            None,
+        saved_layer = (
+            source[1]
+            if source is not None and reference is not None and reference.sketch_id != draft_id
+            else None
+            if reference is not None
+            else next(
+                (
+                    layer
+                    for entity, layer in self.background_entities
+                    if entity.entity_id == target_id
+                ),
+                None,
+            )
         )
         if saved_layer is not None:
             if saved_layer.locked:
                 return
             try:
-                updated_saved = self._edit_visible_geometry(
-                    tuple(self.entities), mode, point, target_id
+                updated_saved, original_ids = self._edit_saved_geometry_with_boundaries(
+                    mode, point, target_id, reference
                 )
             except ValueError:
                 return
-            original_ids = {entity.entity_id for entity in visible_entities}
             result = tuple(
                 entity
                 for entity in updated_saved
@@ -12119,6 +15533,7 @@ class SketchCanvas(QWidget):
             )
             if result or all(entity.entity_id != target_id for entity in updated_saved):
                 self._line_edit_preview_original = original
+                self._line_edit_preview_ref = reference
                 self._line_edit_preview_result = result
             return
         if self._layer(original).locked:
@@ -12138,6 +15553,7 @@ class SketchCanvas(QWidget):
         )
         if result or all(entity.entity_id != target_id for entity in updated):
             self._line_edit_preview_original = original
+            self._line_edit_preview_ref = reference
             self._line_edit_preview_result = result
 
     def _break_at_point_pick(self, point: Point2D, *, exact_point: bool) -> None:
@@ -12146,6 +15562,10 @@ class SketchCanvas(QWidget):
             if identity is None:
                 self.message = "请选择唯一的直线、圆弧或开放多段线。"
             else:
+                if self.ensure_group_operation is not None and not self.ensure_group_operation(
+                    identity
+                ):
+                    return
                 self._break_at_point_target = identity
                 self.message = "单点打断：指定打断点。"
             self.changed.emit()
@@ -12166,6 +15586,26 @@ class SketchCanvas(QWidget):
             else None
         )
         target = draft if draft is not None else saved[0] if saved is not None else None
+        if self.collection_session is not None:
+            try:
+                groups = self.collection_session.snapshot.groups
+            except ValidationError as exc:
+                self.message = str(exc)
+                self.changed.emit()
+                return
+            if any(
+                group.selectable
+                and any(
+                    member.kind == "geometry"
+                    and member.object_id == identity
+                    and (draft is None or member.sketch_id == self._collection_draft_id)
+                    for member in group.members
+                )
+                for group in groups
+            ):
+                self.message = "组选择已启用；请先关闭组选择再打断单个成员。"
+                self.changed.emit()
+                return
         if target is None:
             self.message = "目标已变化；请重新选择。"
             self._break_at_point_target = None
@@ -12205,7 +15645,25 @@ class SketchCanvas(QWidget):
                     self.committed_line_edit_requested.emit("单点打断", identity, fragments)
                     return
                 original = tuple(self.entities)
-                self._record_undo()
+                session = self.collection_session
+                draft_id = self._collection_draft_id
+                old_ref = (
+                    DrawingObjectRef("geometry", identity, draft_id)
+                    if session is not None and draft_id is not None
+                    else None
+                )
+                grouped = (
+                    session is not None
+                    and old_ref is not None
+                    and any(old_ref in group.members for group in session.snapshot.groups)
+                )
+                undo_before = list(self._undo_history)
+                redo_before = list(self._redo_history)
+                next_history_before = self._next_history_position
+                notices_before = dict(self._pending_tangency_removal_notices)
+                if not self._record_undo(notify=not grouped):
+                    return
+                collection_before = self._undo_history[-1]
                 self.entities = list(updated)
                 self.constraints = list(revised_constraints)
                 if isinstance(target, LineEntity | ArcEntity):
@@ -12349,6 +15807,24 @@ class SketchCanvas(QWidget):
                 removed_relations += self._preserve_satisfied_relations(
                     updated, original_entities=original
                 )
+                session = self.collection_session
+                if session is not None and self._collection_draft_id is not None:
+                    old_ref = DrawingObjectRef("geometry", identity, self._collection_draft_id)
+                    groups = session.snapshot.groups
+                    if any(old_ref in group.members for group in groups):
+                        try:
+                            self._stage_collection_member_replacements(identity, fragments)
+                        except (ValidationError, ValueError, StopIteration) as exc:
+                            self._undo_history = undo_before
+                            self._redo_history = redo_before
+                            self._next_history_position = next_history_before
+                            self._pending_tangency_removal_notices = notices_before
+                            self._restore_draft_state(collection_before)
+                            self.message = f"打断暂存失败：{exc}；草稿未修改。"
+                            self.changed.emit()
+                            return
+                        self.collection_snapshot_changed.emit(session.snapshot)
+                        self.history_recorded.emit()
                 self._snap_candidates_cache = None
                 self._break_at_point_target = None
                 self.set_tool("选择元素")
@@ -12360,6 +15836,9 @@ class SketchCanvas(QWidget):
 
     def add_coordinate_point(self, point: Point2D, *, exact_point: bool = False) -> None:
         """Add a point; explicit numeric input bypasses snap and inference."""
+        if self.block_point_capture_active:
+            self._accept_block_point(point)
+            return
         if self.tool == "单点打断":
             self._break_at_point_pick(point, exact_point=exact_point)
             return
@@ -12419,6 +15898,7 @@ class SketchCanvas(QWidget):
             "多段线",
             "圆",
             "圆弧",
+            "椭圆",
             "矩形",
             "多边形",
             "样条曲线",
@@ -12617,10 +16097,11 @@ class SketchCanvas(QWidget):
             self.message = str(exc)
             self.changed.emit()
             return
-        self._record_undo()
-        self.entities.append(entity)
+        if not self.replace_draft_entities(
+            (*self.entities, entity), new_relations=self._inferred_constraints_for_entity(entity)
+        ):
+            return
         self._last_polar_entity_id = entity.entity_id
-        self.constraints.extend(self._inferred_constraints_for_entity(entity))
         self._snap_candidates_cache = None
         self._points.clear()
         self._polyline_bulges.clear()
@@ -12645,8 +16126,8 @@ class SketchCanvas(QWidget):
             self.message = str(exc)
             self.changed.emit()
             return
-        self._record_undo()
-        self.entities.append(entity)
+        if not self.replace_draft_entities((*self.entities, entity)):
+            return
         self._points.clear()
         self._first = None
         self._snap_candidates_cache = None
@@ -12654,11 +16135,22 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
 
-    def undo_last_operation(self) -> bool:
-        if not self.can_undo:
+    def _restore_undo_step(self) -> bool:
+        """Restore an undo step before changing either history stack."""
+        try:
+            previous = self._draft_state()
+            self._restore_draft_state(self._undo_history[-1])
+        except ValidationError as exc:
+            self.message = str(exc)
+            self.changed.emit()
             return False
-        self._redo_history.append(self._draft_state())
-        self._restore_draft_state(self._undo_history.pop())
+        self._undo_history.pop()
+        self._redo_history.append(previous)
+        return True
+
+    def undo_last_operation(self) -> bool:
+        if not self.can_undo or not self._restore_undo_step():
+            return False
         self.message = "已撤销上一项草稿操作。"
         self.changed.emit()
         self.update()
@@ -12682,8 +16174,8 @@ class SketchCanvas(QWidget):
         """Restore the draft half while the repeated COPY command remains active."""
         if not self.mixed_draft_history_matches(before, after, redo=False):
             return False
-        self._redo_history.append(self._draft_state())
-        self._restore_draft_state(self._undo_history.pop())
+        if not self._restore_undo_step():
+            return False
         self.changed.emit()
         self.update()
         return True
@@ -12745,8 +16237,15 @@ class SketchCanvas(QWidget):
     def redo_last_operation(self) -> bool:
         if not self.can_redo:
             return False
-        self._undo_history.append(self._draft_state())
-        self._restore_draft_state(self._redo_history.pop())
+        try:
+            previous = self._draft_state()
+            self._restore_draft_state(self._redo_history[-1])
+        except ValidationError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
+        self._redo_history.pop()
+        self._undo_history.append(previous)
         self.message = "已重做上一项草稿操作。"
         self.changed.emit()
         self.update()
@@ -12754,7 +16253,10 @@ class SketchCanvas(QWidget):
 
     def _segments(self) -> list[tuple[Point2D, Point2D]]:
         segments: list[tuple[Point2D, Point2D]] = []
-        for entity in self.visible_snap_entities():
+        for entity in (
+            *self.visible_snap_entities(),
+            *(item.entity for item in self.drawing_block_view().geometry),
+        ):
             if isinstance(entity, LineEntity):
                 segments.append((entity.start_mm, entity.end_mm))
             elif isinstance(entity, PolylineEntity):
@@ -12783,7 +16285,10 @@ class SketchCanvas(QWidget):
         candidates: list[tuple[Point2D, str]] = []
         segments = self._segments()
         circular_curves: list[tuple[Point2D, float, float, float]] = []
-        for entity in self.visible_snap_entities():
+        for entity in (
+            *self.visible_snap_entities(),
+            *(item.entity for item in self.drawing_block_view().geometry),
+        ):
             if isinstance(entity, PointEntity):
                 candidates.append((entity.position_mm, "点"))
             elif isinstance(entity, SplineEntity):
@@ -12832,6 +16337,10 @@ class SketchCanvas(QWidget):
                                     "中点",
                                 )
                             )
+            elif isinstance(entity, EllipseEntity):
+                candidates.append((entity.center_mm, "圆心"))
+                if not entity.closed:
+                    candidates.extend((entity.point_at(value), "端点") for value in (0.0, 1.0))
             elif isinstance(entity, CircleEntity | ArcEntity):
                 candidates.append((entity.center_mm, "圆心"))
                 if isinstance(entity, ArcEntity):
@@ -12869,6 +16378,11 @@ class SketchCanvas(QWidget):
             candidates.append((((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0), "中点"))
             vector_a = (end[0] - start[0], end[1] - start[1])
             for other_start, other_end in segments[first_index + 1 :]:
+                if max(map(abs, (*start, *end, *other_start, *other_end))) > 1e150:
+                    intersection = _large_segment_intersection(start, end, other_start, other_end)
+                    if intersection is not None:
+                        candidates.append((intersection, "交点"))
+                    continue
                 vector_b = (
                     other_end[0] - other_start[0],
                     other_end[1] - other_start[1],
@@ -12914,18 +16428,95 @@ class SketchCanvas(QWidget):
         self._snap_candidates_cache = tuple(candidates)
         return candidates
 
-    def apply_constraint_solution(self, original: Sketch, solved: Sketch) -> bool:
+    def apply_constraint_solution(
+        self,
+        original: Sketch,
+        solved: Sketch,
+        *,
+        confirmed_constraint: SketchConstraint | None = None,
+        solve_result: SketchConstraintSolveResult | None = None,
+    ) -> bool:
         """Apply one isolated solve atomically as a locally undoable draft edit."""
         if (
             tuple(self.entities) != original.entities
             or tuple(self.constraints) != original.constraints
         ):
             return False
-        self._record_undo()
+        session = self.collection_session
+        try:
+            if session is not None:
+                from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+                require_independent_geometry_edits(session.snapshot.groups, (original,), (solved,))
+            before = self._draft_state() if session is not None else None
+        except ValidationError as exc:
+            self.message = str(exc)
+            self.changed.emit()
+            return False
+        undo_before, redo_before = list(self._undo_history), list(self._redo_history)
+        next_before = self._next_history_position
+        notices_before = dict(self._pending_tangency_removal_notices)
+        before_position = self.history_position
+        if not self._record_undo(notify=session is None):
+            return False
         self.entities = list(solved.entities)
         self._prune_pending_cross_tangencies(original_entities=original.entities)
         self.constraints = list(solved.constraints)
         self._snap_candidates_cache = None
+        if session is not None and before is not None:
+            try:
+                if self._collection_draft_id is None:
+                    raise ValidationError("暂存草稿不存在。")
+                if confirmed_constraint is not None and solve_result is not None:
+                    if solve_result.sketch != solved:
+                        raise ValidationError("求解结果与确认的草图不一致。")
+                    updating = any(
+                        item.constraint_id == confirmed_constraint.constraint_id
+                        for item in original.constraints
+                    )
+                    operation = ReplayAppend(
+                        "sketch.constraint.update" if updating else "sketch.constraint.add",
+                        9 if updating else 11,
+                        solve_result.command_params(
+                            original, confirmed_constraint, local_frame=True
+                        ),
+                        "local",
+                    )
+                    preview = session.preview_operation(operation)
+                    projected = next(
+                        item
+                        for item in preview.sketches
+                        if item.sketch_id == self._collection_draft_id
+                    )
+                    if (
+                        projected.entities != solved.entities
+                        or projected.constraints != solved.constraints
+                    ):
+                        raise ValidationError("确认求解结果与暂存候选不一致。")
+                    session.stage(operation)
+                elif confirmed_constraint is not None or solve_result is not None:
+                    raise ValidationError("确认约束缺少求解结果。")
+                else:
+                    self._stage_collection_draft_state(
+                        session, self._collection_draft_id, solved.entities, solved.constraints
+                    )
+            except (ValidationError, ValueError, StopIteration) as exc:
+                self._undo_history, self._redo_history = undo_before, redo_before
+                self._next_history_position = next_before
+                self._pending_tangency_removal_notices = notices_before
+                self._restore_draft_state(before)
+                self.message = f"尺寸求解暂存失败：{exc}；草稿未修改。"
+                self.changed.emit()
+                return False
+            self.collection_snapshot_changed.emit(session.snapshot)
+            self.history_recorded.emit()
+        if confirmed_constraint is not None and solve_result is not None:
+            self._draft_confirmed_constraints[(before_position, self.history_position)] = (
+                original,
+                solved,
+                confirmed_constraint,
+                solve_result,
+            )
         self.message = "尺寸已应用到草稿；可撤销。完成草图后写入文档。"
         self.changed.emit()
         self.update()
@@ -13037,6 +16628,10 @@ class SketchCanvas(QWidget):
         """Apply current object and grid snap modes to a measured point."""
         return self._snapped(point)[0]
 
+    def snap_annotation_point(self, point: Point2D) -> tuple[Point2D, str]:
+        """Apply drawing snap settings to an annotation placement point."""
+        return self._snapped(point)
+
     def set_area_preview(
         self, points: tuple[Point2D, ...], cursor: Point2D | None = None, *, subtract: bool = False
     ) -> None:
@@ -13067,7 +16662,10 @@ class SketchCanvas(QWidget):
 
     def _visible_circular_curves(self) -> Iterable[CircleEntity | ArcEntity]:
         """Yield visible circular entities and arc segments in polylines."""
-        for entity in self.visible_snap_entities():
+        for entity in (
+            *self.visible_snap_entities(),
+            *(item.entity for item in self.drawing_block_view().geometry),
+        ):
             if isinstance(entity, CircleEntity | ArcEntity):
                 yield entity
             elif isinstance(entity, PolylineEntity) and entity.bulges:
@@ -13100,6 +16698,11 @@ class SketchCanvas(QWidget):
             candidates.append((point, "切点"))
 
         for start, end in self._segments():
+            if max(map(abs, (*center, *start, *end))) > 1e150:
+                foot = _large_segment_foot(center, start, end)
+                if foot is not None:
+                    append_if_compatible(foot)
+                continue
             dx, dy = end[0] - start[0], end[1] - start[1]
             length_squared = dx * dx + dy * dy
             if length_squared <= 1e-24:
@@ -13113,11 +16716,23 @@ class SketchCanvas(QWidget):
             length = math.hypot(dx, dy)
             if length <= 1e-12:
                 continue
+            if math.isfinite(length):
+                direction = (dx / length, dy / length)
+            else:
+                scale = max(map(abs, (*center, *curve.center_mm)))
+                scaled_x = center[0] / scale - curve.center_mm[0] / scale
+                scaled_y = center[1] / scale - curve.center_mm[1] / scale
+                scaled_length = math.hypot(scaled_x, scaled_y)
+                if scaled_length <= 0 or not math.isfinite(scaled_length):
+                    continue
+                direction = (scaled_x / scaled_length, scaled_y / scaled_length)
             for sign in (-1, 1):
                 point = (
-                    curve.center_mm[0] + sign * curve.radius_mm * dx / length,
-                    curve.center_mm[1] + sign * curve.radius_mm * dy / length,
+                    curve.center_mm[0] + sign * curve.radius_mm * direction[0],
+                    curve.center_mm[1] + sign * curve.radius_mm * direction[1],
                 )
+                if not all(math.isfinite(value) for value in point):
+                    continue
                 angle = math.degrees(
                     math.atan2(point[1] - curve.center_mm[1], point[0] - curve.center_mm[0])
                 )
@@ -13132,6 +16747,11 @@ class SketchCanvas(QWidget):
         """Find feet and curve tangencies from the current line endpoint."""
         candidates: list[tuple[Point2D, str]] = []
         for start, end in self._segments():
+            if max(map(abs, (*anchor, *start, *end))) > 1e150:
+                foot = _large_segment_foot(anchor, start, end)
+                if foot is not None:
+                    candidates.append((foot, "垂足"))
+                continue
             delta = (end[0] - start[0], end[1] - start[1])
             length_squared = delta[0] ** 2 + delta[1] ** 2
             if length_squared <= 1e-24:
@@ -13157,23 +16777,32 @@ class SketchCanvas(QWidget):
             )
             delta_x, delta_y = anchor[0] - center[0], anchor[1] - center[1]
             distance = math.hypot(delta_x, delta_y)
-            if distance <= radius + 1e-12:
-                continue
-            center_angle = math.degrees(math.atan2(delta_y, delta_x))
-            tangent_offset = math.degrees(math.acos(radius / distance))
+            if math.isfinite(distance):
+                if distance <= radius + 1e-12:
+                    continue
+                direction_x, direction_y = delta_x, delta_y
+                ratio = radius / distance
+            else:
+                scale = max(map(abs, (*anchor, *center, radius)))
+                direction_x = anchor[0] / scale - center[0] / scale
+                direction_y = anchor[1] / scale - center[1] / scale
+                scaled_distance = math.hypot(direction_x, direction_y)
+                scaled_radius = radius / scale
+                if scaled_distance <= scaled_radius or not math.isfinite(scaled_distance):
+                    continue
+                ratio = scaled_radius / scaled_distance
+            center_angle = math.degrees(math.atan2(direction_y, direction_x))
+            tangent_offset = math.degrees(math.acos(ratio))
             for angle in (center_angle + tangent_offset, center_angle - tangent_offset):
                 if not _angle_on_arc(angle, start_angle, sweep_angle):
                     continue
                 radians = math.radians(angle)
-                candidates.append(
-                    (
-                        (
-                            center[0] + radius * math.cos(radians),
-                            center[1] + radius * math.sin(radians),
-                        ),
-                        "切点",
-                    )
+                point = (
+                    center[0] + radius * math.cos(radians),
+                    center[1] + radius * math.sin(radians),
                 )
+                if all(math.isfinite(value) for value in point):
+                    candidates.append((point, "切点"))
         return candidates
 
     def _placement_point(
@@ -13353,6 +16982,8 @@ class SketchCanvas(QWidget):
             )
         if isinstance(entity, CircleEntity):
             return ((SketchGeometryReference(entity.entity_id, "center"), entity.center_mm),)
+        if isinstance(entity, EllipseEntity):
+            return ()
         start = math.radians(entity.start_angle_deg)
         end = math.radians(entity.start_angle_deg + entity.sweep_angle_deg)
         return (
@@ -13520,7 +17151,8 @@ class SketchCanvas(QWidget):
             self._break_at_point_pick(raw_point, exact_point=exact_point)
             return
         if (
-            self.tool in {"点", "直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"}
+            self.tool
+            in {"点", "直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"}
             and not self._current_layer_can_draw()
         ):
             self.message = "当前图层隐藏或已锁定，无法创建图元。"
@@ -13582,15 +17214,79 @@ class SketchCanvas(QWidget):
                 self.changed.emit()
                 self.update()
                 return
-            target = next(
-                (entity for entity in self.entities if entity.entity_id == target_id), None
+            picked_ref: DrawingObjectRef | None = None
+            draft_id = self._collection_draft_id or (
+                self.draft_sketch_id_provider()
+                if self.draft_sketch_id_provider is not None
+                else None
             )
+            if (
+                sum(entity.entity_id == target_id for entity in self.entities)
+                + sum(entity.entity_id == target_id for entity, _ in self.background_entities)
+                > 1
+            ):
+                picked_ref = self.geometry_ref_at(point, draft_id) if draft_id is not None else None
+                if picked_ref is None or picked_ref.object_id != target_id:
+                    self.message = "目标身份不唯一；无法安全编辑对象。"
+                    self.changed.emit()
+                    self.update()
+                    return
+            if self.ensure_group_operation is not None and not self.ensure_group_operation(
+                target_id
+            ):
+                return
+            target = next(
+                (
+                    entity
+                    for entity in self.entities
+                    if entity.entity_id == target_id
+                    and (picked_ref is None or picked_ref.sketch_id == draft_id)
+                ),
+                None,
+            )
+            session = self.collection_session
+            old_ref = (
+                DrawingObjectRef("geometry", target_id, self._collection_draft_id)
+                if target is not None and self._collection_draft_id is not None
+                else None
+            )
+            if session is not None:
+                try:
+                    groups = session.snapshot.groups
+                except ValidationError as exc:
+                    self.message = str(exc)
+                    self.changed.emit()
+                    return
+                if any(
+                    group.selectable
+                    and any(
+                        member.kind == "geometry"
+                        and member.object_id == target_id
+                        and (
+                            picked_ref is None
+                            and old_ref is None
+                            or member == (picked_ref or old_ref)
+                        )
+                        for member in group.members
+                    )
+                    for group in groups
+                ):
+                    self.message = "组选择已启用；请先关闭组选择再编辑单个成员。"
+                    self.changed.emit()
+                    return
+            else:
+                groups = ()
+            grouped = old_ref is not None and any(old_ref in group.members for group in groups)
             if target is None and self.select_committed_entities:
                 saved = next(
                     (
                         (entity, layer)
-                        for entity, layer in self.background_entities
+                        for index, (entity, layer) in enumerate(self.background_entities)
                         if entity.entity_id == target_id
+                        and (
+                            picked_ref is None
+                            or self._background_source_sketch_ids[index] == picked_ref.sketch_id
+                        )
                     ),
                     None,
                 )
@@ -13600,13 +17296,12 @@ class SketchCanvas(QWidget):
                     self.message = "目标图元所在图层已锁定；草稿未修改。"
                 else:
                     try:
-                        updated = self._edit_visible_geometry(
-                            tuple(self.entities), active_tool, point, target_id
+                        updated, original_ids = self._edit_saved_geometry_with_boundaries(
+                            active_tool, point, target_id, picked_ref
                         )
                     except ValueError as exc:
                         self.message = str(exc)
                     else:
-                        original_ids = {entity.entity_id for entity in self.selectable_entities()}
                         edited = tuple(
                             replace(entity, entity_id=uuid4().hex)
                             if entity.entity_id == target_id
@@ -13622,7 +17317,11 @@ class SketchCanvas(QWidget):
                         self.message = f"正在校验{active_tool}。"
                         self.changed.emit()
                         self.update()
-                        self.committed_line_edit_requested.emit(active_tool, target_id, edited)
+                        self.committed_line_edit_requested.emit(
+                            active_tool,
+                            (target_id, picked_ref.sketch_id) if picked_ref else target_id,
+                            edited,
+                        )
                         return
                 self.changed.emit()
                 self.update()
@@ -13636,6 +17335,15 @@ class SketchCanvas(QWidget):
                 updated = self._edit_draft_with_boundaries(
                     tuple(self.entities), active_tool, point, target_id
                 )
+                if target is not None:
+                    updated = tuple(
+                        replace(entity, entity_id=uuid4().hex)
+                        if entity.entity_id == target_id
+                        and type(entity) is not type(target)
+                        and not (isinstance(target, CircleEntity) and isinstance(entity, ArcEntity))
+                        else entity
+                        for entity in updated
+                    )
                 if active_tool in {"修剪", "延伸"}:
                     revised_constraints = self._line_edit_user_constraints(
                         updated, trim=active_tool == "修剪"
@@ -13646,8 +17354,16 @@ class SketchCanvas(QWidget):
             except ValueError as exc:
                 self.message = str(exc)
             else:
+                undo_before = list(self._undo_history)
+                redo_before = list(self._redo_history)
+                next_history_before = self._next_history_position
+                notices_before = dict(self._pending_tangency_removal_notices)
+                line_actions_before = list(self._line_edit_undo_actions)
+                collection_before: _DraftState | None = None
                 if updated != tuple(self.entities):
-                    self._record_undo()
+                    if not self._record_undo(notify=not grouped):
+                        return
+                    collection_before = self._undo_history[-1]
                     if self.tool in {"修剪", "延伸"}:
                         self._line_edit_undo_actions.append(("draft", self.history_position, "", 0))
                 original_entities = tuple(self.entities)
@@ -13657,11 +17373,38 @@ class SketchCanvas(QWidget):
                 removed_relations = self._preserve_satisfied_relations(
                     updated, original_entities=original_entities
                 )
+                if grouped and updated != original_entities and collection_before is not None:
+                    original_ids = {entity.entity_id for entity in original_entities}
+                    fragments = tuple(
+                        entity
+                        for entity in updated
+                        if entity.entity_id == target_id or entity.entity_id not in original_ids
+                    )
+                    try:
+                        self._stage_collection_member_replacements(target_id, fragments)
+                    except (ValidationError, ValueError, StopIteration) as exc:
+                        self._undo_history = undo_before
+                        self._redo_history = redo_before
+                        self._next_history_position = next_history_before
+                        self._pending_tangency_removal_notices = notices_before
+                        self._line_edit_undo_actions = line_actions_before
+                        self._restore_draft_state(collection_before)
+                        self.message = f"{active_tool}暂存失败：{exc}；草稿未修改。"
+                        self.changed.emit()
+                        return
+                    if session is not None:
+                        self.collection_snapshot_changed.emit(session.snapshot)
+                    self.history_recorded.emit()
                 self._snap_candidates_cache = None
                 available_ids = {entity.entity_id for entity in self.entities}
                 self.selected_entity_ids.intersection_update(available_ids)
+                replacement_ids = available_ids - {entity.entity_id for entity in original_entities}
                 self.message = (
                     "快速修剪：没有有效交点，已删除目标；可撤销。"
+                    if active_tool == "修剪"
+                    and target_id not in available_ids
+                    and not replacement_ids
+                    else "修剪完成；源图元已替换为新片段。"
                     if active_tool == "修剪" and target_id not in available_ids
                     else "修剪完成；源图元身份保留在首个剩余曲线片段。"
                     if active_tool == "修剪"
@@ -13669,6 +17412,8 @@ class SketchCanvas(QWidget):
                     if active_tool == "延伸"
                     else "已分割目标图元；第一段保留原身份，第二段取得新身份。"
                 )
+                if grouped and target_id not in available_ids and not replacement_ids:
+                    self.message += " 已清理对应组成员引用及空组。"
                 if removed_relations:
                     self.message += f" 已移除 {removed_relations} 条失效或需重新确认的自动关系。"
             self._hovered_line_edit_entity_id = None
@@ -13676,10 +17421,9 @@ class SketchCanvas(QWidget):
             self.update()
             return
         if self.tool == "点":
-            self._record_undo()
-            self.entities.append(
-                PointEntity(uuid4().hex, point, self.construction, self.active_layer_name)
-            )
+            entity = PointEntity(uuid4().hex, point, self.construction, self.active_layer_name)
+            if not self.replace_draft_entities((*self.entities, entity)):
+                return
             self._snap_candidates_cache = None
             self.point_accepted.emit(point)
             self.message = "点已创建；可撤销。"
@@ -13760,6 +17504,8 @@ class SketchCanvas(QWidget):
         if self._first is None:
             if self.tool == "圆弧":
                 self.arc_mode_prompt_active = False
+            if self.tool == "椭圆":
+                self.ellipse_mode_prompt_active = False
             self._first = point
             self._points = [point]
             self.point_accepted.emit(point)
@@ -13773,7 +17519,10 @@ class SketchCanvas(QWidget):
             self.message = str(exc)
             self.changed.emit()
             return
-        if entity is None and self.tool == "圆弧" and len(self._points) == 2:
+        if entity is None and (
+            (self.tool == "圆弧" and len(self._points) == 2)
+            or (self.tool == "椭圆" and len(self._points) in (2, 3, 4))
+        ):
             self.point_accepted.emit(point)
             self.changed.emit()
             self.update()
@@ -13784,12 +17533,14 @@ class SketchCanvas(QWidget):
                 self.changed.emit()
                 self.update()
                 return
-            self._record_undo()
-            self.entities.append(entity)
+            if not self.replace_draft_entities(
+                (*self.entities, entity),
+                new_relations=self._inferred_constraints_for_entity(entity),
+            ):
+                return
             if isinstance(entity, LineEntity | PolylineEntity):
                 self._last_polar_entity_id = entity.entity_id
             self.point_accepted.emit(point)
-            self.constraints.extend(self._inferred_constraints_for_entity(entity))
             self._snap_candidates_cache = None
         if self.tool == "直线" and self.continuous_lines and entity is not None:
             if len(self._points) >= 3 and point == self._points[0]:
@@ -13807,6 +17558,8 @@ class SketchCanvas(QWidget):
         self.update()
 
     def _next_point_hint(self) -> str:
+        if self.tool == "椭圆":
+            return "椭圆：指定第一半轴端点，再指定另一半轴距离。"
         if self.tool == "圆弧":
             return (
                 "三点圆弧：指定第二点。"
@@ -13848,6 +17601,32 @@ class SketchCanvas(QWidget):
                 self.construction,
                 self.active_layer_name,
             )
+        if self.tool == "椭圆":
+            if len(self._points) == 1:
+                if _distance(first, second) <= 1e-9:
+                    raise ValueError("椭圆半轴长度必须大于零。")
+                self._points.append(second)
+                self.message = "椭圆：指定另一半轴距离。"
+                return None
+            if len(self._points) == 2:
+                shape = self._ellipse_from_axes(first, self._points[1], second, identity)
+                if not self.ellipse_arc_mode:
+                    return shape
+                self._points.append(second)
+                self.message = "椭圆弧：指定起点方向或输入起始方向角。"
+                return None
+            shape = self._ellipse_from_axes(first, self._points[1], self._points[2], identity)
+            if len(self._points) == 3:
+                self._ellipse_parameter(shape, second)
+                self._points.append(second)
+                self.message = "椭圆弧：指定终点方向或输入终止方向角；CW / CCW 可切换方向。"
+                return None
+            start = self._ellipse_parameter(shape, self._points[3])
+            end = self._ellipse_parameter(shape, second)
+            sweep = _arc_sweep(start, end, self.ellipse_arc_direction)
+            if abs(sweep) <= 1e-9:
+                raise ValueError("椭圆弧起点与终点方向不能相同。")
+            return replace(shape, start_angle_deg=start, sweep_angle_deg=sweep)
         if self.tool == "矩形":
             return RectangleEntity(
                 identity, first, second, self.construction, self.active_layer_name
@@ -13895,12 +17674,51 @@ class SketchCanvas(QWidget):
             )
         return None
 
+    def _ellipse_from_axes(
+        self, center: Point2D, axis: Point2D, other: Point2D, identity: str
+    ) -> EllipseEntity:
+        dx, dy = axis[0] - center[0], axis[1] - center[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            raise ValueError("椭圆半轴长度必须大于零。")
+        minor = abs(dx * (other[1] - center[1]) - dy * (other[0] - center[0])) / length
+        if minor <= 1e-9:
+            raise ValueError("椭圆另一半轴长度必须大于零。")
+        angle = math.degrees(math.atan2(dy, dx))
+        if minor > length:
+            length, minor = minor, length
+            angle += 90
+        return EllipseEntity(
+            identity,
+            center,
+            length,
+            minor,
+            angle,
+            construction=self.construction,
+            layer_name=self.active_layer_name,
+        )
+
+    @staticmethod
+    def _ellipse_parameter(shape: EllipseEntity, point: Point2D) -> float:
+        x, y = point[0] - shape.center_mm[0], point[1] - shape.center_mm[1]
+        if math.hypot(x, y) <= 1e-9:
+            raise ValueError("椭圆弧方向点不能位于中心。")
+        angle = math.radians(shape.rotation_deg)
+        major = x * math.cos(angle) + y * math.sin(angle)
+        minor = -x * math.sin(angle) + y * math.cos(angle)
+        return math.degrees(
+            math.atan2(minor / shape.minor_radius_mm, major / shape.major_radius_mm)
+        )
+
     def set_drawing_theme(self, theme: str) -> None:
         """Update the drawing surface without changing stored layer colors."""
         dark = self.select_committed_entities and theme == "dark"
         if dark != self._drawing_dark_theme:
             self._drawing_dark_theme = dark
             self.update()
+
+    def text_color(self, layer: SketchLayer) -> QColor:
+        return self._drawing_color(QColor(*layer.color_rgb))
 
     def _drawing_color(self, color: QColor) -> QColor:
         if not self._drawing_dark_theme:
@@ -13911,6 +17729,61 @@ class SketchCanvas(QWidget):
         if value < 190:
             return QColor.fromHsv(max(0, hue), saturation, 190, alpha)
         return color
+
+    def _draw_large_circular_entity(
+        self, painter: QPainter, entity: CircleEntity | ArcEntity
+    ) -> None:
+        """Trace visible circle branches without sending huge coordinates to Qt."""
+        left, top = self.screen_to_local(QPointF(-2, -2))
+        right, bottom = self.screen_to_local(QPointF(self.width() + 2, self.height() + 2))
+        with localcontext() as context:
+            context.prec = 340
+            center = tuple(Decimal(str(value)) for value in entity.center_mm)
+            radius = Decimal(str(entity.radius_mm))
+            bounds = (
+                (Decimal(str(left)), Decimal(str(right))),
+                (Decimal(str(bottom)), Decimal(str(top))),
+            )
+            for axis, extent in ((0, self.width()), (1, self.height())):
+                other = 1 - axis
+                for sign in (-1, 1):
+                    previous: QPoint | None = None
+                    for pixel in range(-2, extent + 3):
+                        local = self.screen_to_local(
+                            QPointF(pixel, 0) if axis == 0 else QPointF(0, pixel)
+                        )
+                        scan = Decimal(str(local[axis]))
+                        delta = scan - center[axis]
+                        radicand = radius * radius - delta * delta
+                        if radicand < 0:
+                            previous = None
+                            continue
+                        coordinate = center[other] + sign * radicand.sqrt()
+                        if not bounds[other][0] <= coordinate <= bounds[other][1]:
+                            previous = None
+                            continue
+                        values = (scan, coordinate) if axis == 0 else (coordinate, scan)
+                        if isinstance(entity, ArcEntity):
+                            angle = math.degrees(
+                                math.atan2(
+                                    float(values[1] - center[1]), float(values[0] - center[0])
+                                )
+                            )
+                            sweep = entity.sweep_angle_deg
+                            offset = (
+                                (angle - entity.start_angle_deg) % 360
+                                if sweep > 0
+                                else (entity.start_angle_deg - angle) % 360
+                            )
+                            if offset > abs(sweep) + 1e-9:
+                                previous = None
+                                continue
+                        point = self.local_to_screen((float(values[0]), float(values[1])))
+                        if previous is None:
+                            painter.drawPoint(point)
+                        else:
+                            painter.drawLine(previous, point)
+                        previous = point
 
     def _draw_entity(
         self,
@@ -13955,27 +17828,58 @@ class SketchCanvas(QWidget):
             )
         )
         if isinstance(entity, PointEntity):
-            point = self.local_to_screen(entity.position_mm)
+            visible = self._clip_visible_segment(entity.position_mm, entity.position_mm)
+            if visible is None:
+                return
+            point = visible[0]
             painter.drawLine(point.x() - 4, point.y(), point.x() + 4, point.y())
             painter.drawLine(point.x(), point.y() - 4, point.x(), point.y() + 4)
-        elif isinstance(entity, SplineEntity):
+        elif isinstance(entity, SplineEntity | EllipseEntity):
             points = entity.sampled_points()
             for start, end in zip(points, points[1:], strict=False):
-                painter.drawLine(self.local_to_screen(start), self.local_to_screen(end))
+                clipped = self._clip_visible_segment(start, end)
+                if clipped is not None:
+                    painter.drawLine(*clipped)
         elif isinstance(entity, LineEntity):
-            painter.drawLine(
-                self.local_to_screen(entity.start_mm), self.local_to_screen(entity.end_mm)
-            )
+            clipped = self._clip_visible_segment(entity.start_mm, entity.end_mm)
+            if clipped is not None:
+                painter.drawLine(*clipped)
         elif isinstance(entity, PolylineEntity):
-            points = [self.local_to_screen(point) for point in polyline_sampled_points(entity)]
+            points = polyline_sampled_points(entity)
             for start, end in zip(points, points[1:], strict=False):
-                painter.drawLine(start, end)
+                clipped = self._clip_visible_segment(start, end)
+                if clipped is not None:
+                    painter.drawLine(*clipped)
         elif isinstance(entity, RectangleEntity):
-            first = self.local_to_screen(entity.first_corner_mm)
-            opposite = self.local_to_screen(entity.opposite_corner_mm)
-            painter.drawRect(QRectF(QPointF(first), QPointF(opposite)).normalized())
+            first, opposite = entity.first_corner_mm, entity.opposite_corner_mm
+            if any(abs(value * self._scale) > 1e6 for value in (*first, *opposite)):
+                corners = (first, (opposite[0], first[1]), opposite, (first[0], opposite[1]), first)
+                for start, end in zip(corners, corners[1:], strict=False):
+                    clipped = self._clip_visible_segment(start, end)
+                    if clipped is not None:
+                        painter.drawLine(*clipped)
+            else:
+                first_screen = self.local_to_screen(first)
+                opposite_screen = self.local_to_screen(opposite)
+                painter.drawRect(
+                    QRectF(QPointF(first_screen), QPointF(opposite_screen)).normalized()
+                )
         else:
-            center = self.local_to_screen(entity.center_mm)
+            left, top = self.screen_to_local(QPointF(-20, -20))
+            right, bottom = self.screen_to_local(QPointF(self.width() + 20, self.height() + 20))
+            x, y = entity.center_mm
+            radius = entity.radius_mm
+            if x + radius < left or x - radius > right or y + radius < bottom or y - radius > top:
+                return
+            if radius * self._scale > 1e6:
+                self._draw_large_circular_entity(painter, entity)
+                return
+            precise = self.local_to_screen_precise(entity.center_mm)
+            center = (
+                QPointF(self.local_to_screen(entity.center_mm))
+                if abs(precise.x()) < 2e9 and abs(precise.y()) < 2e9
+                else precise
+            )
             radius_px = entity.radius_mm * self._scale
             bounds = QRectF(
                 center.x() - radius_px, center.y() - radius_px, radius_px * 2, radius_px * 2
@@ -13992,9 +17896,56 @@ class SketchCanvas(QWidget):
     def set_drawing_rasters(self, images: tuple[DrawingRaster, ...]) -> None:
         if images != self.drawing_rasters:
             self.drawing_rasters = images
+            self._raster_projection_sources = {item.image_id: item for item in images}
+            self._raster_projection_cache.clear()
             self.selected_raster_ids.intersection_update(image.image_id for image in images)
             self._raster_image_cache.clear()
             self.update()
+
+    @staticmethod
+    def _raster_corners(raster: DrawingRaster) -> tuple[Point2D, Point2D, Point2D, Point2D]:
+        angle = math.radians(raster.angle_deg)
+        ux, uy = math.cos(angle) * raster.width_mm, math.sin(angle) * raster.width_mm
+        sign = -1 if raster.mirrored else 1
+        vx, vy = (
+            -math.sin(angle) * raster.height_mm * sign,
+            math.cos(angle) * raster.height_mm * sign,
+        )
+        x, y = raster.origin_mm
+        return ((x, y), (x + ux, y + uy), (x + ux + vx, y + uy + vy), (x + vx, y + vy))
+
+    @staticmethod
+    def _project_raster(
+        raster: DrawingRaster, source: WorkPlaneFrame, target: WorkPlaneFrame
+    ) -> DrawingRaster:
+        """Express an image in another coplanar frame without changing its identity."""
+        if source == target:
+            return raster
+        angle = math.radians(raster.angle_deg)
+        direction = project_coplanar_vector((math.cos(angle), math.sin(angle)), source, target)
+        origin = target.world_to_local(source.local_to_world(raster.origin_mm))
+        reversed_normal = sum(a * b for a, b in zip(source.normal, target.normal, strict=True)) < 0
+        return replace(
+            raster,
+            origin_mm=origin,
+            angle_deg=math.degrees(math.atan2(direction[1], direction[0])),
+            mirrored=raster.mirrored != reversed_normal,
+        )
+
+    def _project_drawing_raster(self, raster: DrawingRaster) -> DrawingRaster | None:
+        """Project a document image onto the current coplanar canvas."""
+        cacheable = self._raster_projection_sources.get(raster.image_id) is raster
+        if cacheable and raster.image_id in self._raster_projection_cache:
+            return self._raster_projection_cache[raster.image_id]
+        try:
+            projected = self._project_raster(
+                raster, WorkPlaneFrame.xy(), self._spatial_target_frame
+            )
+        except ValueError:
+            projected = None
+        if cacheable:
+            self._raster_projection_cache[raster.image_id] = projected
+        return projected
 
     @staticmethod
     def _raster_contains(raster: DrawingRaster, point: Point2D) -> bool:
@@ -14007,7 +17958,13 @@ class SketchCanvas(QWidget):
         return 0 <= u <= raster.width_mm and 0 <= v <= raster.height_mm
 
     def _draw_raster(
-        self, painter: QPainter, raster: DrawingRaster, *, allow_missing_layer: bool = False
+        self,
+        painter: QPainter,
+        raster: DrawingRaster,
+        *,
+        allow_missing_layer: bool = False,
+        effective_ids: frozenset[str] = frozenset(),
+        cache_image: bool = True,
     ) -> None:
         try:
             if not self.layer_table.get(raster.layer_name).displayed:
@@ -14015,10 +17972,11 @@ class SketchCanvas(QWidget):
         except KeyError:
             if not allow_missing_layer:
                 return
-        image = self._raster_image_cache.get(raster.image_id)
+        image = self._raster_image_cache.get(raster.image_id) if cache_image else None
         if image is None:
             image = QImage.fromData(raster.png_bytes)
-            self._raster_image_cache[raster.image_id] = image
+            if cache_image:
+                self._raster_image_cache[raster.image_id] = image
         if image.isNull():
             return
         origin = self.local_to_screen(raster.origin_mm)
@@ -14033,13 +17991,330 @@ class SketchCanvas(QWidget):
             painter.scale(1, -1)
         bounds = QRectF(0, -height, width, height)
         painter.drawImage(bounds, image)
-        if raster.image_id in self.selected_raster_ids:
+        if raster.image_id in self.selected_raster_ids or raster.image_id in effective_ids:
             painter.setPen(QPen(QColor("#00aaff"), 2, Qt.PenStyle.DashLine))
             painter.drawRect(bounds)
         painter.restore()
 
+    def _draw_collection_preview(
+        self,
+        painter: QPainter,
+        payload: DrawingCollectionClipboard,
+        delta: Point2D,
+        *,
+        resolve_datum_labels: bool = True,
+    ) -> None:
+        try:
+            geometry_preview: list[tuple[SketchEntity, SketchLayer]] = []
+            dimension_sketches: list[Sketch] = []
+            for sketch in payload.sketches:
+                projected = tuple(
+                    project_coplanar_entity(entity, sketch.frame, self._spatial_target_frame)
+                    for entity in sketch.entities
+                )
+                translated = move_entities(
+                    projected,
+                    tuple(entity.entity_id for entity in projected),
+                    delta,
+                    preserve_rectangle_order=True,
+                )
+                for entity in translated:
+                    try:
+                        layer = self.layer_table.get(entity.layer_name)
+                    except KeyError:
+                        layer = sketch.layers.get(entity.layer_name)
+                    geometry_preview.append((entity, layer))
+                dimensions = tuple(
+                    constraint
+                    for constraint in sketch.constraints
+                    if constraint.kind in DIMENSION_KINDS
+                )
+                if dimensions:
+                    local_delta = project_coplanar_vector(
+                        delta, self._spatial_target_frame, sketch.frame
+                    )
+
+                    def move_position(
+                        point: Point2D | None, displacement: Point2D = local_delta
+                    ) -> Point2D | None:
+                        if point is None:
+                            return None
+                        return (point[0] + displacement[0], point[1] + displacement[1])
+
+                    dimension_sketches.append(
+                        replace(
+                            sketch,
+                            entities=move_entities(
+                                sketch.entities,
+                                tuple(entity.entity_id for entity in sketch.entities),
+                                local_delta,
+                                preserve_rectangle_order=True,
+                            ),
+                            constraints=tuple(
+                                replace(
+                                    constraint,
+                                    position_mm=move_position(constraint.position_mm),
+                                    text_position_mm=move_position(constraint.text_position_mm),
+                                )
+                                for constraint in dimensions
+                            ),
+                        )
+                    )
+            drawing_frame = WorkPlaneFrame.xy()
+            target_frame = self._spatial_target_frame
+            project_coplanar_vector((0, 0), drawing_frame, target_frame)
+
+            def preview_point(point: Point2D) -> Point2D:
+                local = target_frame.world_to_local(drawing_frame.local_to_world(point))
+                return (local[0] + delta[0], local[1] + delta[1])
+
+            text_preview: list[DrawingText] = []
+            for item in payload.texts:
+                try:
+                    self.layer_table.get(item.layer_name)
+                except KeyError:
+                    payload.layers.get(item.layer_name)
+                payload.text_styles.get(item.style_id)
+                angle = math.radians(item.rotation_deg)
+                direction = project_coplanar_vector(
+                    (math.cos(angle), math.sin(angle)), drawing_frame, target_frame
+                )
+                text_preview.append(
+                    replace(
+                        item,
+                        position_mm=preview_point(item.position_mm),
+                        rotation_deg=math.degrees(math.atan2(direction[1], direction[0])),
+                    )
+                )
+            raster_preview: list[DrawingRaster] = []
+            for raster in payload.rasters:
+                projected = self._project_drawing_raster(raster)
+                if projected is None:
+                    raise ValueError("图片不在当前画布平面。")
+                raster_preview.append(
+                    replace(
+                        projected,
+                        origin_mm=(
+                            projected.origin_mm[0] + delta[0],
+                            projected.origin_mm[1] + delta[1],
+                        ),
+                    )
+                )
+            reference_preview: list[tuple[DetachedDimension, bool | None]] = []
+            for item in payload.reference_dimensions:
+                try:
+                    self.layer_table.get(item.layer_name)
+                except KeyError:
+                    payload.layers.get(item.layer_name)
+                from mycad.ui.detached_dimension_layout import project_reference_dimension
+
+                reference_preview.append(
+                    (
+                        project_reference_dimension(item, drawing_frame, target_frame, delta),
+                        item.angle_deg != 0 if item.kind in ("ordinate_x", "ordinate_y") else None,
+                    )
+                )
+            annotation_tools = self.geometric_tolerance_tools
+            if (payload.frames or payload.datums) and annotation_tools is None:
+                return
+            labels = (
+                clipboard_datum_labels(
+                    payload.datums,
+                    annotation_tools.datums if annotation_tools is not None else (),
+                    allow_relayout=annotation_tools is not None,
+                )
+                if resolve_datum_labels
+                else {item.datum_id: item.label for item in payload.datums}
+            )
+            frame_preview: list[FeatureControlFrame] = []
+            from mycad.ui.drawing_annotation_projection import project_annotation
+
+            for item in payload.frames:
+                try:
+                    self.layer_table.get(item.layer_name)
+                except KeyError:
+                    payload.layers.get(item.layer_name)
+                rows = tuple(
+                    replace(
+                        row,
+                        datums=tuple(
+                            replace(ref, label=labels[ref.datum_id])
+                            if ref.datum_id is not None and ref.datum_id in labels
+                            else ref
+                            for ref in row.datums
+                        ),
+                    )
+                    for row in item.rows
+                )
+                frame_preview.append(
+                    replace(
+                        cast(
+                            "FeatureControlFrame",
+                            project_annotation(item, drawing_frame, target_frame, delta),
+                        ),
+                        rows=rows,
+                    )
+                )
+            datum_preview: list[DatumIdentifier] = []
+            for item in payload.datums:
+                try:
+                    self.layer_table.get(item.layer_name)
+                except KeyError:
+                    payload.layers.get(item.layer_name)
+                preview_datum = replace(
+                    cast(
+                        "DatumIdentifier",
+                        project_annotation(item, drawing_frame, target_frame, delta),
+                    ),
+                    label=labels[item.datum_id],
+                )
+                if (
+                    resolve_datum_labels
+                    and annotation_tools is not None
+                    and item.box_size_mm is not None
+                    and preview_datum.label != item.label
+                ):
+                    preview_datum = annotation_tools.relayout_recorded_datum(
+                        preview_datum, payload.text_styles
+                    )
+                datum_preview.append(preview_datum)
+        except (KeyError, ValueError):
+            return
+        painter.save()
+        painter.setOpacity(0.65)
+        for raster in raster_preview:
+            self._draw_raster(painter, raster, allow_missing_layer=True, cache_image=False)
+        if self.text_tools is not None:
+            for item in text_preview:
+                self.text_tools.draw_clipboard_preview(
+                    painter, item, payload.text_styles, payload.layers
+                )
+        if self.geometric_tolerance_tools is not None:
+            for item, ordinate_bent in reference_preview:
+                if ordinate_bent is None:
+                    self.geometric_tolerance_tools.draw_clipboard_preview(
+                        painter, item, payload.layers, payload.text_styles
+                    )
+                else:
+                    self.geometric_tolerance_tools.draw_clipboard_preview(
+                        painter,
+                        item,
+                        payload.layers,
+                        payload.text_styles,
+                        ordinate_bent=ordinate_bent,
+                    )
+            for item in (*frame_preview, *datum_preview):
+                self.geometric_tolerance_tools.draw_clipboard_preview(
+                    painter, item, payload.layers, payload.text_styles
+                )
+                attachment = (
+                    item.leader_attachment
+                    if isinstance(item, FeatureControlFrame)
+                    else item.attachment
+                )
+                path = self.geometric_tolerance_tools.surface_screen_path(
+                    attachment,
+                    source_sketches=payload.sketches,
+                    target_frame=target_frame,
+                    delta=delta,
+                )
+                if len(path) >= 2:
+                    try:
+                        layer = self.layer_table.get(item.layer_name)
+                    except KeyError:
+                        layer = payload.layers.get(item.layer_name)
+                    painter.save()
+                    painter.setPen(self.text_color(layer))
+                    painter.drawPolyline(QPolygonF(path))
+                    painter.restore()
+        painter.restore()
+        for entity, layer in geometry_preview:
+            self._draw_entity(painter, entity, highlighted=True, layer=layer)
+        if dimension_sketches:
+            preview_canvas = self._clipboard_dimension_canvas
+            if preview_canvas is None:
+                preview_canvas = SketchCanvas(self, select_committed_entities=True)
+                preview_canvas.hide()
+                self._clipboard_dimension_canvas = preview_canvas
+            preview_canvas.resize(self.size())
+            preview_canvas.setFont(self.font())
+            preview_canvas._pan = self._pan
+            preview_canvas._scale = self._scale
+            preview_canvas._drawing_dark_theme = self._drawing_dark_theme
+            preview_canvas.document_layer_table = merge_layer_tables(
+                payload.layers, self.layer_table
+            )
+            preview_canvas.layer_table = preview_canvas.document_layer_table
+            preview_canvas.drawing_dimension_styles = payload.dimension_styles
+            preview_canvas.text_tools = self.text_tools
+            preview_canvas._dimension_text_styles_override = payload.text_styles
+            for sketch in dimension_sketches:
+                preview_canvas.set_background_sketches((sketch,), target_frame)
+                preview_canvas._draw_constraint_overlays(painter)
+
     def _draw_preview(self, painter: QPainter) -> None:
         if self._cursor is None:
+            return
+        if self._block_point_preview is not None:
+            try:
+                payload = self._block_point_preview(self._cursor)
+                self.block_library_preview_payload = payload
+                self._draw_collection_preview(painter, payload, (0, 0), resolve_datum_labels=False)
+            except (KeyError, ValueError, ValidationError):
+                self.block_library_preview_payload = None
+            return
+        if self._clipboard_collection is not None:
+            payload = self._clipboard_collection
+            delta = (
+                self._cursor[0] - self._clipboard_anchor[0],
+                self._cursor[1] - self._clipboard_anchor[1],
+            )
+            try:
+                preview = self.collection_paste_preview
+                session = self.collection_session
+                if (
+                    preview is None
+                    or session is None
+                    or preview.checkpoint != session.checkpoint()
+                    or preview.frame != self._spatial_target_frame
+                    or preview.displacement != delta
+                    or preview.source != payload
+                ):
+                    preview = (
+                        self.collection_paste_preview_provider(payload, delta)
+                        if self.collection_paste_preview_provider is not None
+                        else None
+                    )
+                    self.collection_paste_preview = preview
+                if preview is not None:
+                    self._draw_collection_preview(
+                        painter, preview.payload, (0, 0), resolve_datum_labels=False
+                    )
+            except (KeyError, ValueError, ValidationError):
+                self.collection_paste_preview = None
+            return
+        if self._collection_transform_preview is not None:
+            try:
+                current = (
+                    self.collection_session is not None
+                    and self.collection_session.checkpoint()
+                    == self._collection_transform_preview.checkpoint
+                    and self._spatial_target_frame == self._collection_transform_preview.frame
+                    and self._collection_preview_selection_matches(
+                        self._collection_transform_preview
+                    )
+                )
+            except ValidationError:
+                current = False
+            if not current:
+                self._collection_transform_preview = None
+                return
+            self._draw_collection_preview(
+                painter,
+                self._collection_transform_preview.payload,
+                (0, 0),
+                resolve_datum_labels=False,
+            )
             return
         if self._raster_transform_previews:
             painter.save()
@@ -14077,20 +18352,34 @@ class SketchCanvas(QWidget):
                 self._cursor[1] - self._clipboard_anchor[1],
             )
             try:
-                entities, _constraints = instantiate_drawing_clipboard(self._clipboard_paste, delta)
+                sketch = self._clipboard_paste
+                displacement = (
+                    project_coplanar_vector(delta, self._spatial_target_frame, sketch.frame)
+                    if self._clipboard_mixed_images
+                    else delta
+                )
+                entities, _constraints = instantiate_drawing_clipboard(sketch, displacement)
+                if self._clipboard_mixed_images:
+                    entities = tuple(
+                        project_coplanar_entity(entity, sketch.frame, self._spatial_target_frame)
+                        for entity in entities
+                    )
             except ValueError:
                 return
             if self._clipboard_mixed_images:
                 painter.save()
                 painter.setOpacity(0.65)
                 for image in self._clipboard_mixed_images:
+                    projected = self._project_drawing_raster(image)
+                    if projected is None:
+                        continue
                     self._draw_raster(
                         painter,
                         replace(
-                            image,
+                            projected,
                             origin_mm=(
-                                image.origin_mm[0] + delta[0],
-                                image.origin_mm[1] + delta[1],
+                                projected.origin_mm[0] + delta[0],
+                                projected.origin_mm[1] + delta[1],
                             ),
                         ),
                         allow_missing_layer=True,
@@ -14144,7 +18433,7 @@ class SketchCanvas(QWidget):
                     self._draw_entity(painter, preview, highlighted=True)
                 except ValueError:
                     pass
-        if self.tool in ("直线", "矩形", "圆", "圆弧") and self._first is not None:
+        if self.tool in ("直线", "矩形", "圆", "圆弧", "椭圆") and self._first is not None:
             first = self.local_to_screen(self._first)
             if self.tool == "直线":
                 painter.drawLine(first, cursor)
@@ -14153,6 +18442,27 @@ class SketchCanvas(QWidget):
             elif self.tool == "圆":
                 radius = math.hypot(cursor.x() - first.x(), cursor.y() - first.y())
                 painter.drawEllipse(QPointF(first), radius, radius)
+            elif self.tool == "椭圆":
+                if len(self._points) == 1:
+                    painter.drawLine(first, cursor)
+                else:
+                    try:
+                        other = self._cursor if len(self._points) == 2 else self._points[2]
+                        preview = self._ellipse_from_axes(
+                            self._first, self._points[1], other, "00000000000000000000000000000000"
+                        )
+                        if self.ellipse_arc_mode and len(self._points) == 4:
+                            start = self._ellipse_parameter(preview, self._points[3])
+                            end = self._ellipse_parameter(preview, self._cursor)
+                            sweep = _arc_sweep(start, end, self.ellipse_arc_direction)
+                            if abs(sweep) > 1e-9:
+                                preview = replace(
+                                    preview, start_angle_deg=start, sweep_angle_deg=sweep
+                                )
+                    except ValueError:
+                        preview = None
+                    if isinstance(preview, EllipseEntity):
+                        self._draw_entity(painter, preview, highlighted=True)
             elif self.tool == "圆弧" and self.arc_creation_mode == "three_point":
                 if len(self._points) > 1:
                     try:
@@ -14431,9 +18741,28 @@ class SketchCanvas(QWidget):
         self, constraint: SketchConstraint
     ) -> tuple[Point2D, Point2D, float] | None:
         """Return the owning frame's projected basis, including unsaved candidates."""
-        basis = self.background_dimension_basis.get(
-            constraint.constraint_id
-        ) or self.background_entity_basis.get(constraint.references[0].entity_id)
+        reference = self.dimension_reference(constraint)
+        if reference is not None and (
+            constraint is self.dimension_candidate
+            or self.dimension_preview is not None
+            and any(item is constraint for item in self.dimension_preview.constraints)
+        ):
+            basis = next(
+                (
+                    self._background_constraint_bases.get(id(item))
+                    for index, item in enumerate(self.background_constraints)
+                    if index < len(self._background_constraint_sketch_ids)
+                    and self._background_constraint_sketch_ids[index] == reference.sketch_id
+                    and item.constraint_id == reference.object_id
+                ),
+                None,
+            )
+        elif any(item is constraint for item in (*self.constraints, *self.background_constraints)):
+            basis = self._background_constraint_bases.get(id(constraint))
+        else:
+            basis = self.background_dimension_basis.get(
+                constraint.constraint_id
+            ) or self.background_entity_basis.get(constraint.references[0].entity_id)
         if constraint.projection_axis is None:
             return basis
         u, v, orientation = basis or ((1.0, 0.0), (0.0, 1.0), 1.0)
@@ -14447,21 +18776,42 @@ class SketchCanvas(QWidget):
         """Return the same scaled font used to draw and pick a dimension."""
         font = QFont(self.font())
         style = self.dimension_style_for_constraint(constraint)
+        if style is not None and style.text_style_id is not None and self.text_tools is not None:
+            try:
+                styles = self._dimension_text_styles_override or self.text_tools.styles
+                text_style = styles.get(style.text_style_id)
+                font = self.text_tools.manager.resolve(text_style)
+                font.setStretch(round(max(0.01, min(40.0, text_style.width_factor)) * 100))
+            except KeyError:
+                pass
         height_ratio = 1.0 if style is None else style.text_height / 2.5
         font.setPointSizeF(max(0.02, 8.0 * constraint.scale * self.view_scale / 5.0 * height_ratio))
         return font
 
     def dimension_label_rect(self, constraint: SketchConstraint, center: QPointF) -> QRectF:
         """Return the screen bounds of a dimension's formatted label."""
-        label = self.dimension_display_text(constraint)
-        if not constraint.driving:
-            label = f"({label})"
-        scale = constraint.scale * self.view_scale / 5.0
+        layout = self.dimension_tolerance_layout(constraint)
+        return QRectF(
+            center.x() - layout.width / 2,
+            center.y() - layout.height / 2,
+            layout.width,
+            layout.height,
+        )
+
+    def dimension_tolerance_layout(self, constraint: SketchConstraint) -> DimensionToleranceLayout:
         style = self.dimension_style_for_constraint(constraint)
+        default = (
+            DimensionTolerance()
+            if style is None
+            else (style.angular_tolerance if constraint.kind == "angle" else style.linear_tolerance)
+        )
+        tolerance = effective_tolerance(default, constraint.tolerance)
+        scale = constraint.scale * self.view_scale / 5.0
         scale *= 1.0 if style is None else style.text_height / 2.5
-        metrics = QFontMetricsF(self.dimension_label_font(constraint), self)
-        width = max(24.0 * scale, metrics.horizontalAdvance(label) + 10.0 * scale)
-        return QRectF(center.x() - width / 2, center.y() - 10.0 * scale, width, 18.0 * scale)
+        resolved = replace(constraint, value=self.dimension_display_value(constraint))
+        return layout_dimension_tolerance(
+            resolved, tolerance, self.dimension_label_font(constraint), scale
+        )
 
     def dimension_style_for_constraint(
         self, constraint: SketchConstraint | None
@@ -14479,7 +18829,7 @@ class SketchCanvas(QWidget):
 
     def dimension_display_value(self, constraint: SketchConstraint) -> float | None:
         if constraint.kind == "angle" and constraint.position_mm is not None:
-            entities = self.dimension_entities()
+            entities = self.dimension_entities_for_constraint(constraint)
             first = self.line_for_reference(constraint.references[0], entities)
             second = self.line_for_reference(constraint.references[1], entities)
             if first is not None and second is not None:
@@ -14526,18 +18876,14 @@ class SketchCanvas(QWidget):
                 segments.append((first, second))
         return tuple(segments)
 
-    def dimension_label_rectangles(self) -> dict[str, QRectF]:
-        """Return the actual stacked label bounds used by the canvas."""
-        entities = self.dimension_entities()
+    def dimension_label_rectangles_by_constraint(self) -> dict[int, QRectF]:
+        """Compute label bounds without collapsing sketch-local identities."""
         candidate = self.dimension_candidate
-        dimensions = tuple(
-            c
-            for c in self.dimension_constraints()
-            if candidate is None or c.constraint_id != candidate.constraint_id
-        )
+        dimensions = self.dimensions_without_candidate()
         stack_bottoms: dict[tuple[int, int], float] = {}
-        rectangles: dict[str, QRectF] = {}
+        rectangles: dict[int, QRectF] = {}
         for constraint in (*dimensions, *((candidate,) if candidate is not None else ())):
+            entities = self.dimension_entities_for_constraint(constraint)
             if not self.annotation_layer(constraint).displayed:
                 continue
             if constraint.kind not in DIMENSION_KINDS and not self.constraint_markers_visible:
@@ -14560,8 +18906,18 @@ class SketchCanvas(QWidget):
             if previous_bottom is not None and rect.top() < previous_bottom:
                 rect.moveTop(previous_bottom)
             stack_bottoms[key] = rect.bottom()
-            rectangles[constraint.constraint_id] = rect
+            rectangles[id(constraint)] = rect
         return rectangles
+
+    def dimension_label_rectangles(self) -> dict[str, QRectF]:
+        """Return legacy ID-indexed bounds for callers requiring unique dimensions."""
+        rectangles = self.dimension_label_rectangles_by_constraint()
+        candidate = self.dimension_candidate
+        return {
+            constraint.constraint_id: rectangles[id(constraint)]
+            for constraint in (*self.dimension_constraints(), *((candidate,) if candidate else ()))
+            if id(constraint) in rectangles
+        }
 
     def _draw_dimension_lines(
         self,
@@ -14622,9 +18978,10 @@ class SketchCanvas(QWidget):
             painter.restore()
         painter.restore()
 
-    def _draw_constraint_overlays(self, painter: QPainter) -> None:
+    def _draw_constraint_overlays(
+        self, painter: QPainter, effective_ids: frozenset[str] = frozenset()
+    ) -> None:
         painter.save()
-        entities = self.dimension_entities()
         glyphs = {
             "coincident": "◎",
             "horizontal": "H",
@@ -14636,32 +18993,45 @@ class SketchCanvas(QWidget):
             "equal": "=",
             "fixed": "◆",
         }
-        label_rectangles = self.dimension_label_rectangles()
+        label_rectangles = self.dimension_label_rectangles_by_constraint()
         label_font = QFont(painter.font())
         label_font.setPointSize(8)
         painter.setFont(label_font)
         candidate = self.dimension_candidate
-        dimensions = tuple(
-            c
-            for c in self.dimension_constraints()
-            if candidate is None or c.constraint_id != candidate.constraint_id
-        )
+        dimensions = self.dimensions_without_candidate()
+        selected_ids_with_refs = {ref.object_id for ref in self.selected_dimension_refs}
+        effective_refs = {
+            ref for ref in self.effective_group_selection() if ref.kind == "dimension"
+        }
+        effective_ids_with_refs = {ref.object_id for ref in effective_refs}
         for constraint in (*dimensions, *((candidate,) if candidate is not None else ())):
+            entities = self.dimension_entities_for_constraint(constraint)
             layer = self.annotation_layer(constraint)
             if not layer.displayed:
                 continue
+            ref = self.dimension_reference(constraint)
+            selected = (
+                ref in self.selected_dimension_refs
+                if constraint.constraint_id in selected_ids_with_refs
+                else constraint.constraint_id in self.selected_constraint_ids
+            )
+            grouped = (
+                ref in effective_refs
+                if constraint.constraint_id in effective_ids_with_refs
+                else constraint.constraint_id in effective_ids
+            )
             label_color = (
                 QColor(210, 45, 45)
                 if constraint.constraint_id in self.dimension_error_constraint_ids
                 else QColor(0, 145, 180)
-                if constraint.constraint_id in self.selected_constraint_ids
+                if selected or grouped
                 else QColor(*layer.color_rgb)
             )
             label_color = self._drawing_color(label_color)
             dimension_pen = QPen(
                 label_color,
                 max(
-                    2.5 if constraint.constraint_id in self.selected_constraint_ids else 1.0,
+                    2.5 if selected or grouped else 1.0,
                     layer.lineweight_mm * 4,
                 ),
             )
@@ -14678,7 +19048,8 @@ class SketchCanvas(QWidget):
             style = self.dimension_style_for_constraint(constraint)
             highlighted = (
                 constraint.constraint_id in self.dimension_error_constraint_ids
-                or constraint.constraint_id in self.selected_constraint_ids
+                or selected
+                or grouped
             )
             if style is not None and not highlighted:
                 if style.dimension_lineweight != -1:
@@ -14737,7 +19108,7 @@ class SketchCanvas(QWidget):
                     label = f"({label})"
             if constraint.kind not in DIMENSION_KINDS and not self.constraint_markers_visible:
                 continue
-            rect = label_rectangles.get(constraint.constraint_id)
+            rect = label_rectangles.get(id(constraint))
             if rect is None:
                 continue
             painter.setPen(QPen(label_color, 1.0))
@@ -14755,7 +19126,10 @@ class SketchCanvas(QWidget):
                     else QColor(240, 253, 250, 235)
                 )
                 painter.drawRoundedRect(rect, 3.0, 3.0)
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+            if constraint.kind in DIMENSION_KINDS:
+                self.dimension_tolerance_layout(constraint).draw(painter, rect)
+            else:
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
         painter.restore()
 
     def track_crosshair_pointer(self, position: QPoint) -> None:
@@ -14782,12 +19156,29 @@ class SketchCanvas(QWidget):
 
     @override
     def paintEvent(self, _event: object) -> None:
+        effective = self.effective_group_selection()
+        geometry_ids = {item.object_id for item in effective if item.kind == "geometry"}
+        if geometry_ids:
+            counts = Counter(entity.entity_id for entity in self.entities)
+            counts.update(entity.entity_id for entity, _layer in self.background_entities)
+            geometry_ids = {identity for identity in geometry_ids if counts[identity] == 1}
+        raster_ids = frozenset(item.object_id for item in effective if item.kind == "raster")
+        text_ids = frozenset(item.object_id for item in effective if item.kind == "text")
+        frame_ids = frozenset(item.object_id for item in effective if item.kind == "tolerance")
+        datum_ids = frozenset(item.object_id for item in effective if item.kind == "datum")
+        reference_ids = frozenset(
+            item.object_id for item in effective if item.kind == "reference_dimension"
+        )
+        dimension_ids = frozenset(item.object_id for item in effective if item.kind == "dimension")
+        block_ids = self.selected_block_instance_ids | {
+            item.object_id for item in effective if item.kind == "block_instance"
+        }
         painter = QPainter(self)
         painter.fillRect(
             self.rect(), QColor("#202830") if self._drawing_dark_theme else Qt.GlobalColor.white
         )
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        origin = self.local_to_screen((0.0, 0.0))
+        origin = self.local_to_screen_precise((0.0, 0.0))
         if self.grid_visible:
             painter.setPen(
                 QPen(
@@ -14805,10 +19196,50 @@ class SketchCanvas(QWidget):
                     painter.drawPoint(self.local_to_screen((column * grid_mm, row * grid_mm)))
         if not self.select_committed_entities:
             painter.setPen(QPen(Qt.GlobalColor.gray, 1.4))
-            painter.drawLine(0, origin.y(), self.width(), origin.y())
-            painter.drawLine(origin.x(), 0, origin.x(), self.height())
+            if -1 <= origin.y() <= self.height() + 1:
+                painter.drawLine(0, round(origin.y()), self.width(), round(origin.y()))
+            if -1 <= origin.x() <= self.width() + 1:
+                painter.drawLine(round(origin.x()), 0, round(origin.x()), self.height())
         for raster in self.drawing_rasters:
-            self._draw_raster(painter, raster)
+            projected = self._project_drawing_raster(raster)
+            if projected is not None:
+                self._draw_raster(painter, projected, effective_ids=raster_ids)
+        block_view = self.drawing_block_view()
+        for item in block_view.geometry:
+            self._draw_entity(
+                painter, item.entity, layer=item.layer, highlighted=item.instance_id in block_ids
+            )
+        if self.text_tools is not None:
+            for item in block_view.texts:
+                drawn = self.text_tools.draw_clipboard_preview(
+                    painter, item.text, self._block_text_styles, self.layer_table
+                )
+                if drawn and item.instance_id in block_ids:
+                    painter.save()
+                    pen = QPen(QColor("#008cba"), 1, Qt.PenStyle.DashLine)
+                    pen.setCosmetic(True)
+                    painter.setPen(pen)
+                    painter.drawPolygon(
+                        QPolygonF(
+                            [
+                                self.local_to_screen_precise(point)
+                                for point in self.text_tools.model_corners(item.text)
+                            ]
+                        )
+                    )
+                    painter.restore()
+        if self.text_tools is not None:
+            self.text_tools.draw(painter, text_ids)
+            if self.mixed_transform_preview_texts:
+                painter.save()
+                painter.setOpacity(0.65)
+                for item in self.mixed_transform_preview_texts:
+                    self.text_tools.draw_clipboard_preview(
+                        painter, item, self.text_tools.styles, self.layer_table
+                    )
+                painter.restore()
+        if self.geometric_tolerance_tools is not None:
+            self.geometric_tolerance_tools.draw(painter, frame_ids, datum_ids, reference_ids)
         if self.tool in {"修剪", "延伸"}:
             painter.save()
             painter.setPen(QPen(QColor(130, 110, 160), 1.0, Qt.PenStyle.DashLine))
@@ -14838,16 +19269,74 @@ class SketchCanvas(QWidget):
         array_preview_ids = {entity.entity_id for entity, _layer in self.array_spacing_preview}
         if self._array_spacing_drag is not None:
             array_preview_ids.update(self._array_spacing_drag.hidden_ids)
-        dimension_highlights = {
-            reference.entity_id
-            for constraint in self.dimension_constraints()
-            if constraint.constraint_id in self.selected_constraint_ids
-            for reference in constraint.references
-        }
-        for entity, layer in self.background_entities:
+        dimension_highlights: set[str] = set()
+        dimension_geometry_refs: set[DrawingObjectRef] = set()
+        dimension_typed_ids = {ref.object_id for ref in self.selected_dimension_refs}
+        for constraint in self.dimension_constraints():
+            source = self.dimension_reference(constraint)
+            if constraint.constraint_id in dimension_typed_ids:
+                if source not in self.selected_dimension_refs:
+                    continue
+            elif constraint.constraint_id not in self.selected_constraint_ids:
+                continue
+            if source is None or source.sketch_id is None:
+                dimension_highlights.update(ref.entity_id for ref in constraint.references)
+            else:
+                dimension_geometry_refs.update(
+                    DrawingObjectRef("geometry", ref.entity_id, source.sketch_id)
+                    for ref in constraint.references
+                )
+        owners_valid = self.background_entities == self._background_source_projection and len(
+            self.background_entities
+        ) == len(self._background_source_sketch_ids)
+        typed_ids = {item.object_id for item in self.selected_geometry_refs}
+        counts = Counter(entity.entity_id for entity in self.entities)
+        counts.update(entity.entity_id for entity, _layer in self.background_entities)
+        hover_ref = (
+            self.geometry_ref_at(self._cursor, self.draft_sketch_id_provider())
+            if self._hovered_entity_id is not None
+            and self._cursor is not None
+            and self.draft_sketch_id_provider is not None
+            else None
+        )
+
+        def directly_selected(identity: str, ref: DrawingObjectRef | None) -> bool:
+            if identity in typed_ids:
+                return ref is not None and ref in self.selected_geometry_refs
+            return identity in self.selected_entity_ids
+
+        def highlighted(identity: str, ref: DrawingObjectRef | None) -> bool:
+            return (
+                directly_selected(identity, ref)
+                or (ref is not None and ref in effective)
+                or (ref is not None and ref in dimension_geometry_refs)
+                or identity in geometry_ids
+                or identity in dimension_highlights
+                or (hover_ref is not None and ref == hover_ref)
+                or (
+                    hover_ref is None
+                    and identity == self._hovered_entity_id
+                    and counts[identity] == 1
+                )
+            )
+
+        for index, (entity, layer) in enumerate(self.background_entities):
+            ref = (
+                DrawingObjectRef(
+                    "geometry", entity.entity_id, self._background_source_sketch_ids[index]
+                )
+                if owners_valid
+                else None
+            )
+            direct = directly_selected(entity.entity_id, ref)
             if (
                 self._line_edit_preview_original is not None
                 and entity.entity_id == self._line_edit_preview_original.entity_id
+                and (
+                    ref == self._line_edit_preview_ref
+                    if self._line_edit_preview_ref is not None
+                    else counts[entity.entity_id] == 1
+                )
             ):
                 continue
             painter.save()
@@ -14857,20 +19346,10 @@ class SketchCanvas(QWidget):
                 painter,
                 entity,
                 layer=layer,
-                highlighted=self.select_committed_entities
-                and (
-                    entity.entity_id in self.selected_entity_ids
-                    or entity.entity_id in dimension_highlights
-                    or entity.entity_id == self._hovered_entity_id
-                ),
+                highlighted=self.select_committed_entities and highlighted(entity.entity_id, ref),
             )
             painter.restore()
-            if (
-                self.select_committed_entities
-                and entity.entity_id in self.selected_entity_ids
-                and layer.displayed
-                and not layer.locked
-            ):
+            if self.select_committed_entities and direct and layer.displayed and not layer.locked:
                 painter.save()
                 painter.setPen(QPen(QColor(0, 100, 110), 1.0))
                 painter.setBrush(QColor(225, 250, 250))
@@ -14889,9 +19368,20 @@ class SketchCanvas(QWidget):
         for entity, layer in self.array_spacing_preview:
             self._draw_entity(painter, entity, layer=layer, highlighted=True)
         for entity in self.entities:
+            ref = (
+                DrawingObjectRef("geometry", entity.entity_id, self.draft_sketch_id_provider())
+                if self.draft_sketch_id_provider is not None
+                else None
+            )
+            direct = directly_selected(entity.entity_id, ref)
             if (
                 self._line_edit_preview_original is not None
                 and entity.entity_id == self._line_edit_preview_original.entity_id
+                and (
+                    ref == self._line_edit_preview_ref
+                    if self._line_edit_preview_ref is not None
+                    else counts[entity.entity_id] == 1
+                )
             ):
                 continue
             painter.save()
@@ -14899,22 +19389,16 @@ class SketchCanvas(QWidget):
                 self._transform_operation is not None
                 and not self._transform_copies_source()
                 and self._transform_preview
-                and entity.entity_id in self.selected_entity_ids
+                and direct
             ):
                 painter.setOpacity(0.25)
             self._draw_entity(
                 painter,
                 entity,
-                highlighted=entity.entity_id in self.selected_entity_ids
-                or entity.entity_id in dimension_highlights
-                or entity.entity_id == self._hovered_entity_id,
+                highlighted=highlighted(entity.entity_id, ref),
             )
             painter.restore()
-            if (
-                entity.entity_id in self.selected_entity_ids
-                and self._layer(entity).displayed
-                and not self._layer(entity).locked
-            ):
+            if direct and self._layer(entity).displayed and not self._layer(entity).locked:
                 painter.save()
                 painter.setPen(QPen(QColor(0, 100, 110), 1.0))
                 painter.setBrush(QColor(225, 250, 250))
@@ -15027,7 +19511,7 @@ class SketchCanvas(QWidget):
                 painter.drawLine(position.x() - 5, position.y(), position.x() + 5, position.y())
                 painter.drawLine(position.x(), position.y() - 5, position.x(), position.y() + 5)
             painter.restore()
-        self._draw_constraint_overlays(painter)
+        self._draw_constraint_overlays(painter, dimension_ids)
         for preview in (
             *self.dimension_linked_previews,
             *((self.dimension_preview,) if self.dimension_preview else ()),
@@ -15176,9 +19660,9 @@ class SketchCanvas(QWidget):
         painter.end()
 
     def _draw_ucs(self, painter: QPainter) -> None:
-        origin = self.local_to_screen((0.0, 0.0))
+        origin = self.local_to_screen_precise((0.0, 0.0))
         at_origin = 30 <= origin.x() <= self.width() - 85 and 85 <= origin.y() <= self.height() - 30
-        base = origin if at_origin else QPoint(35, self.height() - 35)
+        base = origin.toPoint() if at_origin else QPoint(35, self.height() - 35)
         labels = {"XY": ("X", "Y"), "XZ": ("X", "−Z"), "YZ": ("Y", "Z")}.get(
             self.ucs_plane, ("U", "V")
         )
@@ -15207,14 +19691,58 @@ class SketchCanvas(QWidget):
         painter.restore()
 
     @override
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.double_click(event)
+        ):
+            event.accept()
+            return
+        if self.text_tools is not None and self.text_tools.double_click(event):
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    @override
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self.block_point_capture_active:
+            if event.button() == Qt.MouseButton.LeftButton:
+                point, _ = self._placement_point(
+                    self.screen_to_local(event.position()),
+                    temporarily_disable_snapping=bool(
+                        event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                    ),
+                )
+                self._accept_block_point(point)
+            elif event.button() == Qt.MouseButton.RightButton:
+                if self._block_point_preview is not None and self._cursor is not None:
+                    self._accept_block_point(self._cursor)
+                    self.suppress_next_mouse_context_menu()
+                else:
+                    self._cancel_block_point()
+                    self.message = "已取消取点。"
+                    self.changed.emit()
+                self.update()
+            event.accept()
+            return
+        if (
+            self._selection_anchor is None
+            and not self.clipboard_paste_active
+            and self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.mouse_press(event)
+        ):
+            event.accept()
+            return
+        if (
+            not self.clipboard_paste_active
+            and self.text_tools is not None
+            and self.text_tools.mouse_press(event)
+        ):
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.RightButton and self.clipboard_paste_active:
             self._suppress_clipboard_context = True
-            self._clipboard_paste = None
-            self._clipboard_raster = None
-            self._clipboard_rasters = ()
-            self._clipboard_mixed_images = ()
-            self._clipboard_mixed_revision = None
+            self._clear_clipboard_paste()
             self.message = "已取消粘贴，图形未修改。"
             self.changed.emit()
             self.update()
@@ -15267,10 +19795,17 @@ class SketchCanvas(QWidget):
                 point = self.screen_to_local(event.position())
                 spatial_id = self._hit_spatial_boundary_at(point)
                 if spatial_id is not None and self._hit_entity_at(point) is None:
+                    selected_refs = set(self.selected_geometry_refs)
+                    if any(ref.object_id == spatial_id for ref in selected_refs):
+                        self.message = "平面与异面边界身份冲突；请重新选择。"
+                        self.changed.emit()
+                        event.accept()
+                        return
                     if spatial_id in self.selected_entity_ids:
                         self.selected_entity_ids.remove(spatial_id)
                     else:
                         self.selected_entity_ids.add(spatial_id)
+                    self.selected_geometry_refs = selected_refs
                     self.message = "选择边界；Enter / 右键确认，Esc 取消。"
                     self.changed.emit()
                     self.update()
@@ -15278,6 +19813,27 @@ class SketchCanvas(QWidget):
                     return
                 if self._hit_entity_at(point) is None:
                     self._begin_selection_box(event)
+                    event.accept()
+                    return
+                reference = (
+                    self.geometry_ref_at(point, self.draft_sketch_id_provider())
+                    if self.draft_sketch_id_provider is not None
+                    else None
+                )
+                if (
+                    reference is not None
+                    and reference.object_id in self.selected_entity_ids
+                    and not any(
+                        item.object_id == reference.object_id
+                        for item in self.selected_geometry_refs
+                    )
+                    and any(
+                        source.entity.entity_id == reference.object_id
+                        for source in self.spatial_boundaries
+                    )
+                ):
+                    self.message = "平面与异面边界身份冲突；请重新选择。"
+                    self.changed.emit()
                     event.accept()
                     return
                 self._select_at(point, additive=True)
@@ -15317,13 +19873,25 @@ class SketchCanvas(QWidget):
                     event.accept()
                     return
                 if self._transform_selecting and target is None:
+                    block_id = self._hit_block_at(raw)
+                    if block_id is not None:
+                        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                            self.selected_block_instance_ids.discard(block_id)
+                        else:
+                            self.selected_block_instance_ids.add(block_id)
+                        self.message = f"已选择 {len(self.selected_block_instance_ids)} 个块实例；Enter / 右键结束选择。"
+                        self.changed.emit()
+                        self.update()
+                        event.accept()
+                        return
                     image = next(
                         (
                             item
                             for item in reversed(self.drawing_rasters)
                             if self.layer_table.get(item.layer_name).displayed
                             and not self.layer_table.get(item.layer_name).locked
-                            and self._raster_contains(item, raw)
+                            and (projected := self._project_drawing_raster(item)) is not None
+                            and self._raster_contains(projected, raw)
                         ),
                         None,
                     )
@@ -15494,13 +20062,38 @@ class SketchCanvas(QWidget):
                         event.accept()
                         return
                 if self._hit_entity_at(point) is None:
+                    block_id = self._hit_block_at(point)
+                    if block_id is not None:
+                        additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                        subtractive = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                        if not additive and not subtractive:
+                            self.selected_entity_ids.clear()
+                            self.selected_constraint_ids.clear()
+                            self.selected_raster_ids.clear()
+                            self.selected_block_instance_ids.clear()
+                            if self.text_tools is not None:
+                                self.text_tools.selected_ids.clear()
+                            if self.geometric_tolerance_tools is not None:
+                                self.geometric_tolerance_tools.restore_collection_selection(set())
+                        if subtractive:
+                            self.selected_block_instance_ids.discard(block_id)
+                        elif additive and block_id in self.selected_block_instance_ids:
+                            self.selected_block_instance_ids.remove(block_id)
+                        else:
+                            self.selected_block_instance_ids.add(block_id)
+                        self.message = f"已选择 {len(self.selected_block_instance_ids)} 个块实例。"
+                        self.changed.emit()
+                        self.update()
+                        event.accept()
+                        return
                     image = next(
                         (
                             item
                             for item in reversed(self.drawing_rasters)
                             if self.layer_table.get(item.layer_name).displayed
                             and not self.layer_table.get(item.layer_name).locked
-                            and self._raster_contains(item, point)
+                            and (projected := self._project_drawing_raster(item)) is not None
+                            and self._raster_contains(projected, point)
                         ),
                         None,
                     )
@@ -15515,6 +20108,7 @@ class SketchCanvas(QWidget):
                         if not additive:
                             self.selected_entity_ids.clear()
                             self.selected_constraint_ids.clear()
+                            self.selected_block_instance_ids.clear()
                         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                             self.selected_raster_ids.discard(image.image_id)
                         elif additive:
@@ -15548,7 +20142,7 @@ class SketchCanvas(QWidget):
                         event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                     )
                     and self.tool
-                    in {"点", "直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"},
+                    in {"点", "直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"},
                 )
                 self.pointer_moved.emit(event.position().toPoint())
             event.accept()
@@ -15638,9 +20232,14 @@ class SketchCanvas(QWidget):
         if self._saved_handle_drag is not None:
             state = self._saved_handle_drag
             if not state.released:
-                state.target = self.screen_to_local(event.position())
+                state.target, self._snap_kind = self._drag_target(
+                    self.screen_to_local(event.position()), origin=state.origin
+                )
+                self._cursor = state.target
+                self.cursor_changed.emit(*state.target, self._snap_kind)
                 if _distance(state.target, state.origin) * self._scale > 3:
                     self._request_saved_handle_preview()
+                self.update()
             event.accept()
             return
         if (
@@ -15726,7 +20325,7 @@ class SketchCanvas(QWidget):
             return
         raw_point = self.screen_to_local(event.position())
         self._last_placement_raw = raw_point
-        if self.tool in {"直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"}:
+        if self.tool in {"直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"}:
             self._acquire_object_tracking(raw_point)
         self._cursor, self._snap_kind = (
             (raw_point, "")
@@ -15737,7 +20336,7 @@ class SketchCanvas(QWidget):
                     event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                 )
                 and self.tool
-                in {"点", "直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"},
+                in {"点", "直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"},
             )
         )
         if self._first is not None and self.dynamic_point_resolver is not None:
@@ -15788,6 +20387,12 @@ class SketchCanvas(QWidget):
 
     @override
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if (
+            self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.datum_mouse_release(event)
+        ):
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._corner_drag_points:
             self._finish_corner_drag(self.screen_to_local(event.position()))
             event.accept()
@@ -15846,7 +20451,11 @@ class SketchCanvas(QWidget):
             return
         if event.button() == Qt.MouseButton.LeftButton and self._saved_handle_drag is not None:
             state = self._saved_handle_drag
-            state.target = self.screen_to_local(event.position())
+            state.target, self._snap_kind = self._drag_target(
+                self.screen_to_local(event.position()), origin=state.origin
+            )
+            self._cursor = state.target
+            self.cursor_changed.emit(*state.target, self._snap_kind)
             if _distance(state.target, state.origin) * self._scale <= 3:
                 self.cancel_saved_handle_drag("控制点未移动。")
             else:
@@ -15921,6 +20530,13 @@ class SketchCanvas(QWidget):
         self.changed.emit()
         self.update()
 
+    def supports_clipboard_context_menu(self) -> bool:
+        return self.select_committed_entities
+
+    def suppress_next_mouse_context_menu(self) -> None:
+        """Consume the context event generated by a handled right-click."""
+        self._suppress_clipboard_context = True
+
     @override
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         if self._suppress_clipboard_context and event.reason() == QContextMenuEvent.Reason.Mouse:
@@ -15929,10 +20545,15 @@ class SketchCanvas(QWidget):
             return
         self._suppress_clipboard_context = False
         if (
-            not self.select_committed_entities
+            not self.supports_clipboard_context_menu()
             or self.tool != "选择元素"
             or self.has_active_edit_gesture
             or self.has_pending_geometry
+            or (self.text_tools is not None and self.text_tools.pending)
+            or (
+                self.geometric_tolerance_tools is not None
+                and self.geometric_tolerance_tools.pending
+            )
         ):
             super().contextMenuEvent(event)
             return
@@ -15947,17 +20568,41 @@ class SketchCanvas(QWidget):
         delete_action = menu.addAction("删除\tDelete")
         delete_action.setEnabled(
             bool(
-                self.selected_entity_ids or self.selected_constraint_ids or self.selected_raster_id
+                self.selected_entity_ids
+                or self.selected_constraint_ids
+                or self.selected_raster_id
+                or self.selected_block_instance_ids
+                or (self.text_tools is not None and self.text_tools.selected_ids)
+                or (
+                    self.geometric_tolerance_tools is not None
+                    and self.geometric_tolerance_tools.selected_id is not None
+                )
             )
         )
         copy_action = menu.addAction("复制\tCtrl+C")
-        copy_action.setEnabled(bool(self.selected_entity_ids or self.selected_raster_id))
+        copy_action.setEnabled(
+            bool(
+                self.selected_entity_ids
+                or self.selected_raster_id
+                or self.selected_block_instance_ids
+                or (self.text_tools is not None and self.text_tools.selected_ids)
+                or (self.group_clipboard_guard is not None and self.group_clipboard_guard())
+                or (
+                    self.geometric_tolerance_tools is not None
+                    and self.geometric_tolerance_tools.selected_kind == "frame"
+                    and self.geometric_tolerance_tools.selected_id is not None
+                )
+            )
+        )
         paste_action = menu.addAction("粘贴\tCtrl+V")
         mime = cast("QMimeData | None", QApplication.clipboard().mimeData())
         paste_action.setEnabled(
             mime is not None
             and (
-                mime.hasFormat(DRAWING_CLIPBOARD_MIME)
+                mime.hasFormat(TEXT_CLIPBOARD_MIME)
+                or mime.hasFormat(TOLERANCE_CLIPBOARD_MIME)
+                or mime.hasFormat(DRAWING_COLLECTION_CLIPBOARD_MIME)
+                or mime.hasFormat(DRAWING_CLIPBOARD_MIME)
                 or mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME)
                 or mime.hasFormat(DRAWING_RASTER_GROUP_MIME)
                 or mime.hasImage()
@@ -16011,9 +20656,9 @@ class SketchCanvas(QWidget):
         previous = self._view_state()
         before = self.screen_to_local(event.position())
         factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
-        self._scale = min(60.0, max(1e-6, self._scale * factor))
-        after = self.local_to_screen(before)
-        self._pan += event.position() - QPointF(after)
+        self._scale = min(60.0, max(_MIN_VIEW_SCALE, self._scale * factor))
+        after = self.local_to_screen_precise(before)
+        self._pan += event.position() - after
         self._remember_changed_view(previous)
         if self._pan_start_view is not None:
             self._pan_start_view = self._view_state()
@@ -16022,6 +20667,33 @@ class SketchCanvas(QWidget):
 
     @override
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape and self.block_point_capture_active:
+            self._cancel_block_point()
+            self.message = "已取消取点。"
+            self.changed.emit()
+            self.update()
+            event.accept()
+            return
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space)
+            and self._block_point_preview is not None
+            and self._cursor is not None
+        ):
+            self._accept_block_point(self._cursor)
+            event.accept()
+            return
+        if (
+            event.key() == Qt.Key.Key_Escape
+            and self.geometric_tolerance_tools is not None
+            and self.geometric_tolerance_tools.cancel()
+        ):
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self.text_tools is not None:
+            if self.text_tools.cancel():
+                event.accept()
+                return
+            self.text_tools.selected_ids.clear()
         if event.matches(QKeySequence.StandardKey.Copy) and self.select_committed_entities:
             self.copy_to_clipboard()
             event.accept()
@@ -16031,11 +20703,7 @@ class SketchCanvas(QWidget):
             event.accept()
             return
         if event.key() == Qt.Key.Key_Escape and self.clipboard_paste_active:
-            self._clipboard_paste = None
-            self._clipboard_raster = None
-            self._clipboard_rasters = ()
-            self._clipboard_mixed_images = ()
-            self._clipboard_mixed_revision = None
+            self._clear_clipboard_paste()
             self.message = "已取消粘贴，图形未修改。"
             self.changed.emit()
             self.update()
@@ -16056,7 +20724,8 @@ class SketchCanvas(QWidget):
                 self._object_tracking_enabled
                 and self._object_tracking_shift_to_acquire
                 and self._transform_operation is None
-                and self.tool in {"直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"}
+                and self.tool
+                in {"直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"}
             )
         ):
             self.set_temporary_snap_disabled(True)
@@ -16466,6 +21135,9 @@ class SketchEditorDialog(QDialog):
     assign_selection_construction_requested = Signal(object, bool)
     document_undo_requested = Signal()
     document_redo_requested = Signal()
+    block_manage_requested = Signal()
+    block_library_requested = Signal()
+    block_write_requested = Signal()
 
     def __init__(
         self,
@@ -16488,6 +21160,12 @@ class SketchEditorDialog(QDialog):
         measure_planar_region: Callable[
             [tuple[SketchEntity, ...], Point2D], SampledMeasuredRegion | None
         ]
+        | None = None,
+        offset_closed_path: Callable[[PolylineEntity, float, int], tuple[PolylineEntity, ...]]
+        | None = None,
+        offset_spline: Callable[[SplineEntity, float], tuple[SplineEntity, ...]] | None = None,
+        offset_ellipse: Callable[[EllipseEntity, float], tuple[SplineEntity, ...]] | None = None,
+        offset_spline_path: Callable[[tuple[SplineEntity, ...], float], tuple[SplineEntity, ...]]
         | None = None,
     ) -> None:
         super().__init__(parent)
@@ -16528,6 +21206,7 @@ class SketchEditorDialog(QDialog):
         self._suspended_toolbar_state: QByteArray | None = None
         self.drawing_toolbar = self._make_toolbar("绘图", "draftingDrawingToolbar")
         self.modify_toolbar = self._make_toolbar("修改", "draftingModifyToolbar")
+        self.collection_toolbar = self._make_toolbar("块与组", "draftingCollectionToolbar")
         self.dimension_toolbar = self._make_toolbar("尺寸标注", "draftingDimensionToolbar")
         self._measurement_available = select_committed_entities
         self.measurement_toolbar = self._make_toolbar("测量", "draftingMeasurementToolbar")
@@ -16575,6 +21254,7 @@ class SketchEditorDialog(QDialog):
                 "多段线",
                 "圆",
                 "圆弧",
+                "椭圆",
                 "矩形",
                 "多边形",
                 "样条曲线",
@@ -16736,6 +21416,41 @@ class SketchEditorDialog(QDialog):
         toolbar_menu = QMenu(self.toolbar_menu_button)
         for bar in self.drafting_toolbars:
             toolbar_menu.addAction(bar.toggleViewAction())
+        docking_menu = toolbar_menu.addMenu("停靠工具栏")
+        for bar in self.drafting_toolbars:
+            bar_menu = docking_menu.addMenu(bar.windowTitle())
+            bar_menu.setObjectName("dockToolbar-" + bar.objectName())
+            docking_menu.aboutToShow.connect(
+                lambda current=bar, menu=bar_menu: menu.setEnabled(current.isMovable())
+            )
+            for label, area in (
+                ("停靠到上方", Qt.ToolBarArea.TopToolBarArea),
+                ("停靠到下方", Qt.ToolBarArea.BottomToolBarArea),
+                ("停靠到左侧", Qt.ToolBarArea.LeftToolBarArea),
+                ("停靠到右侧", Qt.ToolBarArea.RightToolBarArea),
+            ):
+                bar_menu.addAction(
+                    label,
+                    lambda _checked=False, current=bar, target=area: self._dock_toolbar(
+                        current, target
+                    ),
+                )
+            adjacent_menu = bar_menu.addMenu("停靠到指定工具栏右侧")
+            adjacent_menu.setObjectName("dockToolbarAdjacent-" + bar.objectName())
+            for anchor in self.drafting_toolbars:
+                if anchor is bar:
+                    continue
+                action = adjacent_menu.addAction(anchor.windowTitle())
+                action.triggered.connect(
+                    lambda _checked=False, current=bar, target=anchor: self._dock_toolbar_right_of(
+                        current, target
+                    )
+                )
+                adjacent_menu.aboutToShow.connect(
+                    lambda current=bar, target=anchor, item=action: item.setEnabled(
+                        self._can_dock_toolbar_right_of(current, target)
+                    )
+                )
         toolbar_menu.addSeparator()
         for dock in self.drafting_docks:
             toolbar_menu.addAction(dock.toggleViewAction())
@@ -16754,6 +21469,7 @@ class SketchEditorDialog(QDialog):
                 "多边形",
                 "圆",
                 "圆弧",
+                "椭圆",
                 "样条曲线",
                 "修剪",
                 "延伸",
@@ -16773,6 +21489,7 @@ class SketchEditorDialog(QDialog):
                         "多边形",
                         "圆",
                         "圆弧",
+                        "椭圆",
                         "样条曲线",
                         "修剪",
                         "延伸",
@@ -16787,6 +21504,7 @@ class SketchEditorDialog(QDialog):
                         "polygon",
                         "circle",
                         "arc",
+                        "ellipse",
                         "spline",
                         "trim",
                         "extend",
@@ -16815,6 +21533,15 @@ class SketchEditorDialog(QDialog):
                 self.modify_toolbar if tool in {"修剪", "延伸", "分割"} else self.drawing_toolbar
             )
             toolbar.addWidget(button)
+        self.ellipse_arc_button = QToolButton()
+        self.ellipse_arc_button.setText("椭圆弧")
+        set_button_icon(self.ellipse_arc_button, "draw-ellipse-arc")
+        self.ellipse_arc_button.setIconSize(QSize(26, 26))
+        self.ellipse_arc_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.ellipse_arc_button.setToolTip("创建椭圆弧：中心、两个半轴，再指定起点和终点方向。")
+        self.ellipse_arc_button.setMinimumSize(44, 54)
+        self.ellipse_arc_button.clicked.connect(self._start_ellipse_arc)
+        self.drawing_toolbar.addWidget(self.ellipse_arc_button)
         if select_committed_entities:
             break_button = QToolButton()
             break_button.setText("单点打断")
@@ -16912,6 +21639,16 @@ class SketchEditorDialog(QDialog):
         self.parameter_tabs.addTab(self._parameter_page(origin_group), "UCS")
 
         self.canvas = SketchCanvas(self, select_committed_entities=select_committed_entities)
+        from mycad.ui.toolbar_drag import ToolbarDragRepaintGuard
+
+        self._toolbar_drag_repaint_guard = ToolbarDragRepaintGuard(
+            self, self.canvas, self.drafting_toolbars
+        )
+        self.canvas.draft_sketch_id_provider = lambda: self.draft_sketch_id
+        self.canvas.offset_closed_path = offset_closed_path
+        self.canvas.offset_spline = offset_spline
+        self.canvas.offset_ellipse = offset_ellipse
+        self.canvas.offset_spline_path = offset_spline_path
         self.canvas.draft_sketches_provider = self.dimension_sources
         self.canvas.continuous_lines = continuous_lines
         self.canvas.set_layer_table(self.layer_table, active_layer)
@@ -16970,6 +21707,8 @@ class SketchEditorDialog(QDialog):
             configure_polygon=self._configure_command_polygon,
             measure_planar_region=measure_planar_region,
         )
+        self.drawing_command_bar.block_library_requested.connect(self.block_library_requested.emit)
+        self.drawing_command_bar.block_write_requested.connect(self.block_write_requested.emit)
         self.dynamic_input.escape_requested.connect(self.drawing_command_bar.cancel)
         self.drawing_command_bar.setVisible(select_committed_entities)
         drawing.addWidget(self.drawing_command_bar)
@@ -17182,10 +21921,13 @@ class SketchEditorDialog(QDialog):
             self.transform_buttons[operation] = button
             button.setMinimumWidth(44)
             button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            self.modify_toolbar.addWidget(button)
+            if operation != "offset" or not select_committed_entities:
+                self.modify_toolbar.addWidget(button)
         self.interactive_offset_button = QToolButton()
-        self.interactive_offset_button.setText("侧向偏移")
-        self.interactive_offset_button.setToolTip("输入距离后选择对象及偏移侧，可连续操作。")
+        self.interactive_offset_button.setText("偏置")
+        self.interactive_offset_button.setToolTip(
+            "偏置（O / OFFSET）：输入距离或 T 通过点，选择对象和偏置侧；支持连续偏置。"
+        )
         set_button_icon(self.interactive_offset_button, "edit-offset")
         self.interactive_offset_button.setIconSize(QSize(26, 26))
         self.interactive_offset_button.setToolButtonStyle(
@@ -17195,6 +21937,76 @@ class SketchEditorDialog(QDialog):
         self.interactive_offset_button.setVisible(select_committed_entities)
         self.interactive_offset_button.clicked.connect(self.drawing_command_bar.start_offset)
         self.modify_toolbar.addWidget(self.interactive_offset_button)
+        self.group_button = QToolButton()
+        self.group_button.setText("编组")
+        self.group_button.setToolTip("GROUP：将所选对象编为匿名组。")
+        self.group_button.setMinimumSize(44, 54)
+        self.group_button.setVisible(select_committed_entities)
+        self.group_button.clicked.connect(self.drawing_command_bar.group_requested.emit)
+        self.block_create_button = QToolButton()
+        self.block_create_button.setText("创建块")
+        self.block_create_button.setToolTip("BLOCK：将所选几何和文字创建为块定义。")
+        self.block_create_button.setMinimumSize(44, 54)
+        self.block_create_button.setVisible(select_committed_entities)
+        self.block_create_button.clicked.connect(self.drawing_command_bar.block_requested.emit)
+        self.block_insert_button = QToolButton()
+        self.block_insert_button.setText("插入块")
+        self.block_insert_button.setToolTip("INSERT：插入当前图纸中的块定义。")
+        self.block_insert_button.setMinimumSize(44, 54)
+        self.block_insert_button.setVisible(select_committed_entities)
+        self.block_insert_button.clicked.connect(
+            self.drawing_command_bar.block_insert_requested.emit
+        )
+        self.block_edit_button = QToolButton()
+        self.block_edit_button.setText("编辑块")
+        self.block_edit_button.setToolTip("BEDIT：编辑所选实例的共享块定义。")
+        self.block_edit_button.setMinimumSize(44, 54)
+        self.block_edit_button.setVisible(select_committed_entities)
+        self.block_edit_button.clicked.connect(self.drawing_command_bar.block_edit_requested.emit)
+        self.block_explode_button = QToolButton()
+        self.block_explode_button.setText("分解块")
+        self.block_explode_button.setToolTip("EXPLODE：将选中的块实例分解为独立对象。")
+        self.block_explode_button.setMinimumSize(44, 54)
+        self.block_explode_button.setVisible(select_committed_entities)
+        self.block_explode_button.clicked.connect(
+            self.drawing_command_bar.block_explode_requested.emit
+        )
+        self.ungroup_button = QToolButton()
+        self.ungroup_button.setText("解组")
+        self.ungroup_button.setToolTip("UNGROUP：解散唯一选中组并保留对象。")
+        self.ungroup_button.setMinimumSize(44, 54)
+        self.ungroup_button.setVisible(select_committed_entities)
+        self.ungroup_button.clicked.connect(self.drawing_command_bar.ungroup_requested.emit)
+        self.group_edit_button = QToolButton()
+        self.group_edit_button.setText("组管理")
+        self.group_edit_button.setToolTip("GROUPEDIT：管理组名称、说明、选择状态和成员。")
+        self.group_edit_button.setMinimumSize(44, 54)
+        self.group_edit_button.setVisible(select_committed_entities)
+        self.group_edit_button.clicked.connect(self.drawing_command_bar.group_edit_requested.emit)
+        self.block_manage_button = QToolButton()
+        self.block_manage_button.setText("块管理")
+        self.block_manage_button.setToolTip("管理当前图纸的块定义。")
+        self.block_manage_button.setMinimumSize(44, 54)
+        self.block_manage_button.setVisible(select_committed_entities)
+        self.block_manage_button.clicked.connect(self.block_manage_requested.emit)
+        self.block_library_button = QToolButton()
+        self.block_library_button.setText("块库")
+        self.block_library_button.setToolTip("浏览本地及共享块库。")
+        self.block_library_button.setMinimumSize(44, 54)
+        self.block_library_button.setVisible(select_committed_entities)
+        self.block_library_button.clicked.connect(self.block_library_requested.emit)
+        for button in (self.group_button, self.ungroup_button, self.group_edit_button):
+            self.collection_toolbar.addWidget(button)
+        self.collection_toolbar.addSeparator()
+        for button in (
+            self.block_create_button,
+            self.block_insert_button,
+            self.block_edit_button,
+            self.block_explode_button,
+            self.block_manage_button,
+            self.block_library_button,
+        ):
+            self.collection_toolbar.addWidget(button)
         transform_group = QGroupBox("修改参数 · 先选择元素")
         transform_group.setLayout(transform_grid)
         self.numeric_move_button = QPushButton("按 ΔU / ΔV 移动")
@@ -17210,6 +22022,9 @@ class SketchEditorDialog(QDialog):
         self.numeric_mirror_button = QPushButton("按输入中心 / 方向镜像")
         self.numeric_mirror_button.clicked.connect(lambda: self._apply_transform("mirror"))
         transform_grid.addWidget(self.numeric_mirror_button, len(fields) + 3, 0)
+        if select_committed_entities:
+            self.transform_buttons["offset"].setText("按输入距离偏置")
+            transform_grid.addWidget(self.transform_buttons["offset"], len(fields) + 4, 0)
         self.transform_buttons["rotate"].setToolTip(
             "旋转：选择对象 → 中心 → 鼠标指定方向或键入角度；可选三点参考旋转。"
         )
@@ -17301,6 +22116,7 @@ class SketchEditorDialog(QDialog):
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.status_label.text_changed.connect(self._update_property_feedback)
         self.dimensions = DimensionTools(self)
+        self.canvas.dimension_candidate_reference_provider = self.dimensions.candidate_reference
         self.drawing_command_bar.bind_dimensions(self.dimensions)
         self.canvas.deleting.connect(self.dimensions.cancel)
         self.navigator.delete_requested.connect(self.canvas.delete_selected)
@@ -17429,7 +22245,11 @@ class SketchEditorDialog(QDialog):
                         )
                         button.setMinimumHeight(32)
                         button.setIconSize(QSize(18, 18))
-                        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                        button.setToolButtonStyle(
+                            Qt.ToolButtonStyle.ToolButtonTextOnly
+                            if toolbar is self.collection_toolbar and button.icon().isNull()
+                            else Qt.ToolButtonStyle.ToolButtonIconOnly
+                        )
         else:
             self.ucs_label.show()
             for button, (height, icon_size, style) in self._compact_toolbar_states.items():
@@ -17458,7 +22278,11 @@ class SketchEditorDialog(QDialog):
     @property
     def drafting_toolbars(self) -> tuple[QToolBar, ...]:
         bars = (self.drawing_toolbar, self.modify_toolbar, self.dimension_toolbar)
-        return (*bars, self.measurement_toolbar) if self._measurement_available else bars
+        return (
+            (*bars, self.measurement_toolbar, self.collection_toolbar)
+            if self._measurement_available
+            else bars
+        )
 
     def _make_toolbar(self, title: str, name: str) -> QToolBar:
         bar = QToolBar(title, self.toolbar_host)
@@ -17471,14 +22295,58 @@ class SketchEditorDialog(QDialog):
         )
         return bar
 
+    def _dock_toolbar(self, bar: QToolBar, area: Qt.ToolBarArea) -> None:
+        if not bar.isMovable():
+            return
+        self._toolbar_drag_repaint_guard.finish()
+        if not bar.isFloating() and self.toolbar_host.toolBarArea(bar) == area:
+            bar.show()
+            return
+        if bar.isFloating():
+            # Rebuild Qt's layout before redocking: an unfinished native drag
+            # can leave its temporary toolbar geometry in the layout engine.
+            self.toolbar_host.restoreState(self.toolbar_host.saveState())
+        self.toolbar_host.removeToolBar(bar)
+        self.toolbar_host.addToolBar(area, bar)
+        bar.show()
+
+    def _can_dock_toolbar_right_of(self, bar: QToolBar, anchor: QToolBar) -> bool:
+        area = self.toolbar_host.toolBarArea(anchor)
+        return (
+            bar is not anchor
+            and bar.isMovable()
+            and anchor.isVisible()
+            and not anchor.isFloating()
+            and area in (Qt.ToolBarArea.TopToolBarArea, Qt.ToolBarArea.BottomToolBarArea)
+            and bool(bar.allowedAreas() & area)
+        )
+
+    def _dock_toolbar_right_of(self, bar: QToolBar, anchor: QToolBar) -> None:
+        if not self._can_dock_toolbar_right_of(bar, anchor):
+            return
+        self._toolbar_drag_repaint_guard.finish()
+        if bar.isFloating():
+            self.toolbar_host.restoreState(self.toolbar_host.saveState())
+            self.toolbar_host.removeToolBar(bar)
+            self.toolbar_host.addToolBar(self.toolbar_host.toolBarArea(anchor), bar)
+        self.toolbar_host.insertToolBar(anchor, bar)
+        self.toolbar_host.insertToolBar(bar, anchor)
+        bar.show()
+
     def reset_toolbar_layout(self) -> None:
         self._suspended_toolbar_state = None
+        if any(bar.isFloating() for bar in self.drafting_toolbars):
+            self.toolbar_host.restoreState(self.toolbar_host.saveState())
         for bar in self.drafting_toolbars:
             self.toolbar_host.removeToolBarBreak(bar)
             self.toolbar_host.removeToolBar(bar)
         for bar in (self.drawing_toolbar, self.modify_toolbar):
             self.toolbar_host.addToolBar(Qt.ToolBarArea.TopToolBarArea, bar)
             bar.show()
+        if self._measurement_available:
+            self.toolbar_host.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+            self.toolbar_host.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.collection_toolbar)
+            self.collection_toolbar.show()
         self.toolbar_host.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
         self.toolbar_host.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.dimension_toolbar)
         self.dimension_toolbar.show()
@@ -17523,7 +22391,8 @@ class SketchEditorDialog(QDialog):
 
     def _navigation_busy(self) -> bool:
         return (
-            self.canvas.has_pending_geometry
+            (self.canvas.text_tools is not None and self.canvas.text_tools.pending)
+            or self.canvas.has_pending_geometry
             or self.canvas.has_active_edit_gesture
             or self.dimensions.mode is not None
             or self.dimensions.candidate is not None
@@ -17579,9 +22448,14 @@ class SketchEditorDialog(QDialog):
                 self.toolbar_host.restoreState(state)
 
     def set_toolbars_locked(self, locked: bool) -> None:
+        if locked:
+            self._toolbar_drag_repaint_guard.finish()
         for bar in self.drafting_toolbars:
             bar.setMovable(not locked)
             bar.setFloatable(not locked)
+
+    def protect_canvas_during_toolbar_drag(self, toolbars: tuple[QToolBar, ...]) -> None:
+        self._toolbar_drag_repaint_guard.register(toolbars)
 
     @override
     def hideEvent(self, event: QHideEvent) -> None:
@@ -18148,6 +23022,15 @@ class SketchEditorDialog(QDialog):
         panel.show()
 
     def finish_sketch(self) -> None:
+        if (
+            self.canvas.geometric_tolerance_tools is not None
+            and self.canvas.geometric_tolerance_tools.pending
+        ):
+            self.status_label.setText("形位公差或基准尚未放置，请先完成或按 Esc 取消。")
+            return
+        if self.canvas.text_tools is not None and self.canvas.text_tools.pending:
+            self.status_label.setText("请先 Ctrl+Enter 完成文字，或 Esc 取消文字编辑，再完成草图。")
+            return
         if self.canvas.has_active_edit_gesture:
             self.status_label.setText("先松开鼠标确认当前草稿预览，或按 Esc 取消后再完成草图。")
             return
@@ -18157,18 +23040,46 @@ class SketchEditorDialog(QDialog):
         if self.canvas.has_pending_geometry:
             self.status_label.setText("当前图元未完成；先完成图元或按 Esc 清除后再完成草图。")
             return
-        if not self.canvas.entities and self.canvas.mixed_move is None:
+        if (
+            not self.canvas.entities
+            and self.canvas.mixed_move is None
+            and self.canvas.collection_session is None
+        ):
             self.status_label.setText("草图至少需要一个有效元素。")
             return
         try:
+            if self.canvas.collection_session is not None:
+                recovered = self.canvas.collection_session.retry_failed_commit_recovery()
+                if recovered is not None:
+                    try:
+                        self.canvas.rebind_restored_source(*recovered)
+                    except Exception as exc:
+                        raise ValidationError(f"二维暂存画布恢复失败：{exc}") from exc
+                    self.canvas.collection_session.complete_failed_commit_canvas_rebind(recovered)
             self.result_sketch = Sketch(
-                uuid4().hex,
+                self.draft_sketch_id if self.canvas.collection_session is not None else uuid4().hex,
                 self.current_frame(),
                 tuple(self.canvas.entities),
                 constraints=tuple(self.canvas.constraints),
                 layers=self.layer_table,
                 support_face=self._support_face,
             )
+            if self.canvas.collection_session is not None:
+                staged = next(
+                    (
+                        item
+                        for item in self.canvas.collection_session.snapshot.sketches
+                        if item.sketch_id == self.draft_sketch_id
+                    ),
+                    None,
+                )
+                if staged != self.result_sketch:
+                    raise ValidationError("草稿与暂存结果不一致，请先同步或撤销草稿修改。")
+                self.canvas.collection_session.validate_draft_dependencies(
+                    self.draft_sketch_id,
+                    tuple(self.canvas.pending_cross_tangencies),
+                    tuple(self.canvas.pending_associative_arrays),
+                )
             arrays = tuple(
                 replace(
                     array,
@@ -18241,7 +23152,8 @@ class SketchEditorDialog(QDialog):
                 sketches = (self.result_sketch, *self.dimension_sources()[1:])
                 propagate_array_changes(sketches, sketches, arrays)
             self.result_associative_arrays = arrays
-        except ValueError as exc:
+        except (ValueError, ValidationError) as exc:
+            self.result_sketch = None
             self.status_label.setText(str(exc))
             return
         self.accept()
@@ -18250,7 +23162,7 @@ class SketchEditorDialog(QDialog):
         if hasattr(self, "dimensions"):
             self.dimensions.cancel()
         return_to_zero = (
-            tool in {"点", "直线", "多段线", "圆", "圆弧", "矩形", "多边形", "样条曲线"}
+            tool in {"点", "直线", "多段线", "圆", "圆弧", "椭圆", "矩形", "多边形", "样条曲线"}
             and self.canvas.active_layer_name.casefold() == "dim"
         )
         if return_to_zero and self.layer_table.get("0").frozen:
@@ -18348,6 +23260,12 @@ class SketchEditorDialog(QDialog):
         if self.canvas.tool == "圆弧" and self.canvas.begin_arc_center():
             self.canvas.setFocus()
 
+    def _start_ellipse_arc(self) -> None:
+        if self.canvas.tool != "椭圆":
+            self.tool_combo.setCurrentText("椭圆")
+        if self.canvas.tool == "椭圆" and self.canvas.begin_ellipse_arc():
+            self.canvas.setFocus()
+
     def _start_three_point_arc(self) -> None:
         if self.canvas.tool != "圆弧":
             self.tool_combo.setCurrentText("圆弧")
@@ -18385,6 +23303,15 @@ class SketchEditorDialog(QDialog):
 
     def _start_transform(self, operation: str) -> None:
         self.parameter_tabs.setCurrentWidget(self.modify_page)
+        tolerance_tools = self.canvas.geometric_tolerance_tools
+        if (
+            operation in {"move", "copy"}
+            and tolerance_tools is not None
+            and tolerance_tools.selected_id is not None
+            and tolerance_tools.handle_command(operation.upper())
+        ):
+            tolerance_tools.use_datum_arrow_as_transform_base()
+            return
         if operation in {"move", "copy", "rotate", "mirror", "scale"}:
             self.canvas.begin_transform(
                 operation,
@@ -18666,6 +23593,7 @@ class SketchEditorDialog(QDialog):
             self.canvas.selected_entity_ids
             or self.canvas.selected_constraint_ids
             or self.canvas.selected_raster_id
+            or self.canvas.selected_block_instance_ids
         ):
             return self.canvas.delete_selected()
         if operation == "erase":
@@ -18779,7 +23707,45 @@ class SketchEditorDialog(QDialog):
         return success, self.canvas.message
 
     def _apply_transform(self, operation: str) -> None:
+        if (self.canvas.text_tools is not None and self.canvas.text_tools.pending) or (
+            self.canvas.geometric_tolerance_tools is not None
+            and self.canvas.geometric_tolerance_tools.pending
+        ):
+            self.canvas.message = "请先完成或取消当前文字或标注操作，再变换所选对象。"
+            self.canvas.changed.emit()
+            return
         self.canvas.cancel_transform()
+        if (
+            operation in {"move", "copy", "rotate", "mirror"}
+            and self.canvas.group_clipboard_guard is not None
+            and self.canvas.group_clipboard_guard()
+        ):
+            delta = (self.delta_u_field.value(), self.delta_v_field.value())
+            if operation in {"move", "copy"} and math.hypot(*delta) <= 1e-9:
+                self.status_label.setText("请指定非零 ΔU / ΔV。")
+                return
+            keep_source = operation == "mirror" and self.mirror_keep_source_check.isChecked()
+            self.canvas.begin_transform(operation, keep_source=keep_source)
+            if self.canvas.active_transform != operation:
+                return
+            center = (self.center_u_field.value(), self.center_v_field.value())
+            if operation in {"move", "copy"}:
+                if operation == "copy":
+                    self.canvas.use_single_copy_for_command()
+                self.canvas.add_coordinate_point((0, 0), exact_point=True)
+                self.canvas.add_coordinate_point(delta, exact_point=True)
+            elif operation == "rotate":
+                self.canvas.add_coordinate_point(center, exact_point=True)
+                self.canvas.apply_rotation_angle(self.angle_field.value())
+            else:
+                end = (
+                    (center[0] + 1.0, center[1])
+                    if self.mirror_axis_combo.currentText() == "水平轴"
+                    else (center[0], center[1] + 1.0)
+                )
+                self.canvas.add_coordinate_point(center, exact_point=True)
+                self.canvas.add_coordinate_point(end, exact_point=True)
+            return
         if (
             self.canvas.source_revision_provider is not None
             and self.canvas.source_context_revision is not None
@@ -18909,11 +23875,14 @@ class SketchEditorDialog(QDialog):
                 return
             try:
                 if operation == "offset":
-                    result = offset_entities(
+                    result = offset_with_backend(
                         source,
                         selected,
                         self.offset_distance_field.value(),
                         gap_type=self.canvas.offset_gap_type,
+                        closed_offset=self.canvas.offset_closed_path,
+                        spline_offset=self.canvas.offset_spline,
+                        ellipse_offset=self.canvas.offset_ellipse,
                     )
                 elif operation == "linear_array":
                     result = linear_array_entities(
@@ -19063,8 +24032,14 @@ class SketchEditorDialog(QDialog):
             if operation == "rotate":
                 return rotate_entities(entities, selected_ids, center, angle)
             if operation == "offset":
-                return offset_entities(
-                    entities, selected_ids, offset_distance, gap_type=self.canvas.offset_gap_type
+                return offset_with_backend(
+                    entities,
+                    selected_ids,
+                    offset_distance,
+                    gap_type=self.canvas.offset_gap_type,
+                    closed_offset=self.canvas.offset_closed_path,
+                    spline_offset=self.canvas.offset_spline,
+                    ellipse_offset=self.canvas.offset_ellipse,
                 )
             if operation == "mirror":
                 axis_end = (
@@ -19179,6 +24154,7 @@ class SketchEditorDialog(QDialog):
                 RectangleEntity: "矩形",
                 PointEntity: "点",
                 SplineEntity: "样条曲线",
+                EllipseEntity: "椭圆",
             }
             kinds = {names.get(type(entity), "二维图元") for entity in entities}
             layers = {entity.layer_name for entity in entities}
@@ -19260,6 +24236,15 @@ class SketchEditorDialog(QDialog):
                     )
                 elif isinstance(entity, PointEntity):
                     rows.append(("位置", f"{entity.position_mm[0]:g}, {entity.position_mm[1]:g}"))
+                elif isinstance(entity, EllipseEntity):
+                    rows.extend(
+                        (
+                            ("中心", f"{entity.center_mm[0]:g}, {entity.center_mm[1]:g}"),
+                            ("长半轴", f"{entity.major_radius_mm:g} mm"),
+                            ("短半轴", f"{entity.minor_radius_mm:g} mm"),
+                            ("旋转角", f"{entity.rotation_deg:g}°"),
+                        )
+                    )
                 else:
                     rows.append(("控制点数", str(len(entity.control_points_mm))))
         elif other_count == 1 and not entities and len(self.canvas.selected_raster_ids) == 1:

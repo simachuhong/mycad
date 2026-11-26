@@ -16,10 +16,11 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from functools import partial
-from math import atan2, cos, degrees, hypot, isfinite, radians, sin
+from math import atan2, cos, degrees, hypot, isfinite, radians, remainder, sin
 from pathlib import Path
 from typing import TYPE_CHECKING, cast, override
 from uuid import uuid4
+from weakref import WeakValueDictionary
 
 from PySide6.QtCore import (
     QByteArray,
@@ -102,6 +103,7 @@ from mycad.core.cross_sketch_tangency import (
     unique_split_arc_relation_fragment,
     unique_split_line_relation_fragment,
 )
+from mycad.core.detached_dimension import DetachedDimension
 from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
 from mycad.core.document import AFFECTED_OBJECTS
 from mycad.core.document_kinds import (
@@ -111,7 +113,17 @@ from mycad.core.document_kinds import (
     DocumentType,
 )
 from mycad.core.drawing_raster import DrawingRaster
+from mycad.core.drawing_text import (
+    DrawingText,
+    TextStyleTable,
+    mirror_text,
+    move_text,
+    rotate_text,
+    scale_text,
+    text_style_geometry_signature,
+)
 from mycad.core.exceptions import InvalidHistoryError, MycadError, ValidationError
+from mycad.core.geometric_tolerance import DatumIdentifier, FeatureControlFrame
 from mycad.core.identity import BodyId
 from mycad.core.persistence import LoadedDocument, save_document
 from mycad.core.plan import Plan
@@ -120,6 +132,7 @@ from mycad.core.signals import SignalName
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     PointEntity,
     PolylineEntity,
@@ -146,6 +159,7 @@ from mycad.core.sketch_edit import (
 from mycad.core.sketch_layers import SketchLayer, SketchLayerTable, merge_layer_tables
 from mycad.core.spatial_frames import RigidFrame
 from mycad.core.spatial_references import SpatialReference
+from mycad.core.text_interchange import reconcile_text_style_ids
 from mycad.core.viewport_protocol import PlanarFaceFrame, ViewportData, ViewportSketchData
 from mycad.formats.dxf_preview import DxfOutputPreview, prepare_dxf_output_preview
 from mycad.formats.providers.dxf_provider import (
@@ -175,10 +189,13 @@ from mycad.ui.drawing_clipboard import (
 )
 from mycad.ui.drawing_dimension_styles import DrawingDimensionStylesDialog
 from mycad.ui.drawing_templates import DrawingTemplateChoiceDialog
+from mycad.ui.drawing_text_tools import TEXT_CLIPBOARD_MIME, DrawingTextTools
 from mycad.ui.drawing_workbench import DrawingWorkbench
+from mycad.ui.dxf_import_identity import remap_colliding_curves, remap_datum_labels
 from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
 from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
 from mycad.ui.fillet_toolbar import FilletCommandBar
+from mycad.ui.geometric_tolerance_tools import TOLERANCE_CLIPBOARD_MIME
 from mycad.ui.history_repair_task import HistoryRepairTask
 from mycad.ui.modeling_handles import DimensionHandle
 from mycad.ui.modeling_toolbar import ModelingCommandBar
@@ -190,7 +207,9 @@ from mycad.ui.plan_draft import PlanDraftController
 from mycad.ui.preferences import (
     CONSTRAINT_MARKERS_KEY,
     CURSOR_STYLE_KEY,
+    DATUM_SYMBOL_STYLE_KEY,
     CursorSettingsDialog,
+    default_datum_symbol_style,
     drawing_constraint_markers_visible,
     drawing_cursor_style,
 )
@@ -230,6 +249,18 @@ from mycad.ui.workspace_tabs import WorkspaceId, WorkspaceTabs
 
 if TYPE_CHECKING:
     from mycad.app import AppServices
+    from mycad.core.drawing_collection_clipboard import DrawingCollectionClipboard
+    from mycad.core.drawing_collection_state import DrawingCollectionSnapshot
+    from mycad.core.drawing_groups import DrawingObjectRef
+    from mycad.ui.drawing_block_editor import DrawingBlockEditorDialog
+    from mycad.ui.drawing_collection_session import (
+        DrawingCollectionAffinePreview,
+        DrawingCollectionCheckpoint,
+        DrawingCollectionMirrorPreview,
+        DrawingCollectionPastePreview,
+        DrawingCollectionSession,
+        DrawingCollectionTransformPreview,
+    )
 
 CENTER_OBJECT_NAME = "viewportHost"
 LEFT_DOCK_OBJECT_NAME = "leftPanelDock"
@@ -253,6 +284,34 @@ SETTINGS_KEY_TRIM_STANDARD = "drawing2d/trimStandard"
 SETTINGS_KEY_PROJECTION_MODE = "drawing2d/projectionMode"
 
 APP_VERSION = "0.1.0"
+
+
+def _dimensions_have_unselected_tolerance_attachment(
+    sketches: Sequence[Sketch],
+    frames: Sequence[FeatureControlFrame],
+    datums: Sequence[DatumIdentifier],
+    dimension_ids: set[str],
+    selected_annotations: set[str],
+) -> bool:
+    selected_dimensions = {
+        (sketch.sketch_id, constraint.constraint_id)
+        for sketch in sketches
+        for constraint in sketch.constraints
+        if constraint.constraint_id in dimension_ids
+    }
+    for annotation in (*frames, *datums):
+        if isinstance(annotation, FeatureControlFrame):
+            identity, attachment = annotation.frame_id, annotation.leader_annotation_attachment
+        else:
+            identity, attachment = annotation.datum_id, annotation.annotation_attachment
+        if (
+            identity not in selected_annotations
+            and attachment is not None
+            and attachment.kind == "sketch_dimension"
+            and (attachment.sketch_id, attachment.object_id) in selected_dimensions
+        ):
+            return True
+    return False
 
 
 def _staged_committed_tangencies(
@@ -336,6 +395,14 @@ class _DraftTangencyPreview:
     revision: int
 
 
+@dataclass(frozen=True, slots=True)
+class _CollectionTangencyPreview:
+    relation: CrossSketchTangency
+    session: DrawingCollectionSession
+    checkpoint: DrawingCollectionCheckpoint
+    operation: ReplayAppend
+
+
 @dataclass
 class _PreparedSketchSave:
     entry: SessionDocument
@@ -344,6 +411,8 @@ class _PreparedSketchSave:
     checkpoint: str
     source_revision: int
     prepared_revision: int
+    checkpoint_restored: bool = False
+    collection_restored: bool = False
 
 
 #: UI draft §3, menu order and titles verbatim — pinned by tests/ui.
@@ -438,7 +507,11 @@ class MainWindow(QMainWindow):
         self._chamfer_method_angle = False
         self._busy_action_states: dict[QAction, bool] = {}
         self._loaded: LoadedDocument | None = None
+        self._collection_clipboard_documents: WeakValueDictionary[str, LoadedDocument] = (
+            WeakValueDictionary()
+        )
         self._sketch_dialog: SketchEditorDialog | None = None
+        self._block_editor: DrawingBlockEditorDialog | None = None
         self._mixed_history_pending = False
         self.part_sketch_task: PartSketchWorkbench | None = None
         self._preferred_part_sketch: tuple[LoadedDocument, str] | None = None
@@ -466,6 +539,7 @@ class MainWindow(QMainWindow):
         self._cross_tangency_preview: (
             tuple[CrossSketchTangency, tuple[Sketch, ...], tuple[Sketch, ...], int]
             | _DraftTangencyPreview
+            | _CollectionTangencyPreview
             | None
         ) = None
         self._document_path: Path | None = None
@@ -974,6 +1048,39 @@ class MainWindow(QMainWindow):
         self.act_paste.setEnabled(False)
         self.act_delete = self.menu_edit.addAction("删除")
         self.act_delete.triggered.connect(self._delete_drawing_selection)
+        self.drawing_group_menu = self.menu_edit.addMenu("二维组")
+        self.act_drawing_group = self.drawing_group_menu.addAction("编组")
+        self.act_drawing_ungroup = self.drawing_group_menu.addAction("解组")
+        self.act_drawing_group_edit = self.drawing_group_menu.addAction("组管理")
+        self.act_drawing_group.triggered.connect(lambda: self._run_drawing_group_menu("group"))
+        self.act_drawing_ungroup.triggered.connect(lambda: self._run_drawing_group_menu("ungroup"))
+        self.act_drawing_group_edit.triggered.connect(lambda: self._run_drawing_group_menu("edit"))
+        self.drawing_group_menu.setEnabled(False)
+        self.menu_edit.aboutToShow.connect(self._sync_drawing_group_menu)
+        self.drawing_block_menu = self.menu_edit.addMenu("二维块")
+        self.act_drawing_block_create = self.drawing_block_menu.addAction("创建块")
+        self.act_drawing_block_insert = self.drawing_block_menu.addAction("插入块")
+        self.act_drawing_block_explode = self.drawing_block_menu.addAction("分解块")
+        self.act_drawing_block_edit = self.drawing_block_menu.addAction("编辑块定义")
+        self.act_drawing_block_manage = self.drawing_block_menu.addAction("管理块定义")
+        self.act_drawing_block_library = self.drawing_block_menu.addAction("块库")
+        self.act_drawing_block_create.triggered.connect(
+            lambda: self._run_drawing_block_menu("create")
+        )
+        self.act_drawing_block_insert.triggered.connect(
+            lambda: self._run_drawing_block_menu("insert")
+        )
+        self.act_drawing_block_explode.triggered.connect(
+            lambda: self._run_drawing_block_menu("explode")
+        )
+        self.act_drawing_block_edit.triggered.connect(lambda: self._run_drawing_block_menu("edit"))
+        self.act_drawing_block_manage.triggered.connect(
+            lambda: self._run_drawing_block_menu("manage")
+        )
+        self.act_drawing_block_library.triggered.connect(
+            lambda: self._run_drawing_block_menu("library")
+        )
+        self.drawing_block_menu.setEnabled(False)
         self.selection_filter_menu: QMenu = self.menu_edit.addMenu("选择过滤器")
         self.act_select_filter = self.selection_filter_menu.menuAction()
         self.selection_filter_group = QActionGroup(self)
@@ -1224,9 +1331,49 @@ class MainWindow(QMainWindow):
         self.act_options.triggered.connect(self._show_options)
         self.act_units = self.menu_tools.addAction("单位")
         self.act_units.triggered.connect(self._show_units)
+        self.act_text = self.menu_tools.addAction("单行文字 TEXT")
+        self.act_mtext = self.menu_tools.addAction("多行文字 MTEXT")
+        self.act_text_style = self.menu_tools.addAction("文字样式 STYLE…")
+        self.act_text.triggered.connect(lambda: self._start_drawing_text("text"))
+        self.act_mtext.triggered.connect(lambda: self._start_drawing_text("mtext"))
+        self.act_text_style.triggered.connect(lambda: self._start_drawing_text("style"))
         self.act_drawing_dimension_styles = self.menu_tools.addAction("标注样式…")
         self.act_drawing_dimension_styles.setEnabled(False)
         self.act_drawing_dimension_styles.triggered.connect(self._show_drawing_dimension_styles)
+        self.act_geometric_tolerance = self.menu_tools.addAction("形位公差…")
+        self.act_datum_label = self.menu_tools.addAction("基准标识…")
+        self.act_datum_symbol_style = self.menu_tools.addAction("基准标识样式…")
+        self.menu_default_datum_style = self.menu_tools.addMenu("新建基准默认样式")
+        default_group = QActionGroup(self)
+        self.act_default_datum_rectangle = self.menu_default_datum_style.addAction(
+            "矩形（设置为默认）"
+        )
+        self.act_default_datum_circle = self.menu_default_datum_style.addAction(
+            "圆圈（设置为默认）"
+        )
+        for action in (self.act_default_datum_rectangle, self.act_default_datum_circle):
+            action.setCheckable(True)
+            default_group.addAction(action)
+        self.act_default_datum_rectangle.triggered.connect(
+            lambda: self._set_default_datum_style("rectangle")
+        )
+        self.act_default_datum_circle.triggered.connect(
+            lambda: self._set_default_datum_style("circle")
+        )
+        self.menu_default_datum_style.aboutToShow.connect(self._sync_default_datum_style)
+        self._sync_default_datum_style()
+        self.act_datum_text_style = self.menu_tools.addAction("基准文字样式…")
+        self.act_datum_arrow_style = self.menu_tools.addAction("基准主引线箭头样式…")
+        self.act_geometric_tolerance.setEnabled(False)
+        self.act_datum_label.setEnabled(False)
+        self.act_datum_symbol_style.setEnabled(False)
+        self.act_datum_text_style.setEnabled(False)
+        self.act_datum_arrow_style.setEnabled(False)
+        self.act_geometric_tolerance.triggered.connect(self._start_geometric_tolerance)
+        self.act_datum_label.triggered.connect(self._start_datum_label)
+        self.act_datum_symbol_style.triggered.connect(self._edit_datum_symbol_style)
+        self.act_datum_text_style.triggered.connect(self._edit_datum_text_style)
+        self.act_datum_arrow_style.triggered.connect(self._edit_datum_arrow_style)
         self.act_measure = self.menu_tools.addAction("测量")
         self.act_measure.setEnabled(False)
         self.act_measure.triggered.connect(self._show_measure_panel)
@@ -1471,6 +1618,8 @@ class MainWindow(QMainWindow):
             self.act_options: "settings",
             self.act_units: "units",
             self.act_measure: "measure",
+            self.act_geometric_tolerance: "geometric-tolerance",
+            self.act_datum_label: "datum-identifier",
             self.act_rebuild: "rebuild",
             self.act_clear_chat: "delete",
             self.act_shortcuts: "keyboard",
@@ -1646,7 +1795,8 @@ class MainWindow(QMainWindow):
             self.part_sketch_task.select_tool(tool)
 
     def _on_sketch_start(self, _checked: bool = False) -> None:
-        if self._prepared_sketch_save is not None:
+        preparation = self._prepared_sketch_save
+        if preparation is not None and preparation.loaded is self._loaded:
             self.status_command.setText("保存恢复尚未完成；原草稿已保留，请先处理保存错误。")
             return
         if self.execution_unit is not None and (
@@ -1751,6 +1901,10 @@ class MainWindow(QMainWindow):
             constraint_preview=self._services.kernel.preview_sketch_constraint,
             constraint_update_preview=self._services.kernel.preview_sketch_constraint_update,
             measure_planar_region=self._services.kernel.measure_planar_region,
+            offset_closed_path=self._services.kernel.offset_closed_path,
+            offset_spline=self._services.kernel.offset_spline,
+            offset_ellipse=self._services.kernel.offset_ellipse,
+            offset_spline_path=self._services.kernel.offset_spline_path,
         )
         if self._loaded.document.document_type == "drawing2d":
             dialog.canvas.set_drawing_theme(self._theme_name)
@@ -1824,7 +1978,9 @@ class MainWindow(QMainWindow):
             dialog.canvas.persist_chamfer_values = persist_chamfer_values
 
             def import_clipboard_layers(
-                layers: SketchLayerTable, styles: DimensionStyleTable | None
+                layers: SketchLayerTable,
+                styles: DimensionStyleTable | None,
+                text_styles: TextStyleTable | None,
             ) -> Callable[[bool], None]:
                 if self._loaded is not radius_document or self._services is not radius_services:
                     raise ValueError("图纸已切换；剪贴板图层未导入。")
@@ -1841,12 +1997,20 @@ class MainWindow(QMainWindow):
                         "assignments": [],
                     }
                     command = "drawing.layers.set"
-                    if (
-                        styles is not None
-                        and styles != radius_services.kernel.drawing_dimension_styles
+                    if styles is not None and (
+                        styles != radius_services.kernel.drawing_dimension_styles
+                        or (
+                            text_styles is not None
+                            and text_styles != radius_services.kernel.drawing_text_styles
+                        )
                     ):
                         command = "drawing.clipboard.prepare"
                         params["clipboard_styles"] = styles.to_mapping()
+                        if (
+                            text_styles is not None
+                            and text_styles != radius_services.kernel.drawing_text_styles
+                        ):
+                            params["clipboard_text_styles"] = text_styles.to_mapping()
                     if (
                         command == "drawing.clipboard.prepare"
                         and radius_document.document.archive_version < 8
@@ -1856,7 +2020,17 @@ class MainWindow(QMainWindow):
                         )
                         candidate.stage(
                             ReplayChangeSet(
-                                (), (ReplayAppend(command, 6, params, "local"),), False, 8
+                                (),
+                                (
+                                    ReplayAppend(
+                                        command,
+                                        radius_services.registry.get(command).version,
+                                        params,
+                                        "local",
+                                    ),
+                                ),
+                                False,
+                                8,
                             ),
                             current_session_identity=self._session_id,
                         )
@@ -1872,7 +2046,7 @@ class MainWindow(QMainWindow):
                             command,
                             params,
                             "local",
-                            version=6 if command == "drawing.clipboard.prepare" else 1,
+                            version=radius_services.registry.get(command).version,
                         )
                 except (MycadError, ValueError) as exc:
                     radius_document.bus.release_save_checkpoint(checkpoint)
@@ -1907,12 +2081,36 @@ class MainWindow(QMainWindow):
 
             dialog.canvas.import_clipboard_layers = import_clipboard_layers
 
+            def stage_rasters(action: str, rasters: tuple[DrawingRaster, ...]) -> bool:
+                if action != "add":
+                    self._reject_group_member_edit(
+                        dialog, {("raster", raster.image_id) for raster in rasters}
+                    )
+                session = dialog.canvas.collection_session
+                if session is None:
+                    return False
+                params: dict[str, object] = (
+                    {"action": action, "image_ids": [item.image_id for item in rasters]}
+                    if action == "remove"
+                    else {
+                        "action": action,
+                        "images": [item.to_mapping(version=2) for item in rasters],
+                    }
+                )
+                if not dialog.canvas.stage_collection_operation(
+                    ReplayAppend("drawing.raster.batch", 2, params, "local")
+                ):
+                    raise ValueError(dialog.canvas.message)
+                return True
+
             def commit_clipboard_raster(raster: DrawingRaster) -> None:
                 if self._loaded is not radius_document or self._services is not radius_services:
                     raise ValueError("图纸已切换；图片未粘贴。")
                 unit = self.execution_unit
                 if unit is not None and (unit.is_busy or unit.is_notifying_result):
                     raise ValueError("应用正在执行其他命令；请稍后粘贴。")
+                if stage_rasters("add", (raster,)):
+                    return
                 mixed = dialog.canvas.mixed_move
                 if mixed is not None and (
                     not dialog.canvas.mixed_move_is_valid
@@ -1922,7 +2120,7 @@ class MainWindow(QMainWindow):
                 previous_revision = radius_document.document.revision
                 try:
                     radius_document.bus.execute(
-                        "drawing.raster.add", raster.to_mapping(version=2), "local", version=2
+                        "drawing.raster.add", raster.to_mapping(version=2), "local", version=3
                     )
                 except MycadError as exc:
                     raise ValueError(f"无法粘贴图片：{exc}") from exc
@@ -1943,6 +2141,7 @@ class MainWindow(QMainWindow):
                 sketch: Sketch,
                 images: tuple[DrawingRaster, ...],
                 styles: DimensionStyleTable | None,
+                text_styles: TextStyleTable | None,
             ) -> None:
                 if self._loaded is not radius_document or self._services is not radius_services:
                     raise ValueError("图纸已切换；对象未粘贴。")
@@ -1965,21 +2164,31 @@ class MainWindow(QMainWindow):
                         layer = sketch.layers.get(name)
                     if layer.locked or not layer.displayed:
                         raise ValueError(f"目标图层 {name} 隐藏或已锁定。")
-                params = replace(sketch, frame=dialog.current_frame()).to_state_mapping()
+                params = sketch.to_state_mapping()
                 params["raster_batch"] = {
                     "action": "add",
                     "images": [image.to_mapping(version=2) for image in images],
                 }
-                if styles is not None and styles != radius_services.kernel.drawing_dimension_styles:
+                if styles is not None and (
+                    styles != radius_services.kernel.drawing_dimension_styles
+                    or (
+                        text_styles is not None
+                        and text_styles != radius_services.kernel.drawing_text_styles
+                    )
+                ):
                     params["clipboard_styles"] = styles.to_mapping()
+                    if (
+                        text_styles is not None
+                        and text_styles != radius_services.kernel.drawing_text_styles
+                    ):
+                        params["clipboard_text_styles"] = text_styles.to_mapping()
                 version = (
-                    44
-                    if "clipboard_styles" in params
-                    else 33
-                    if any(c.style_name is not None for c in sketch.constraints)
-                    else 31
-                    if any(c.text_override is not None for c in sketch.constraints)
-                    else 29
+                    57
+                    if any(
+                        isinstance(entity, PolylineEntity | SplineEntity) and entity.point_ids
+                        for entity in sketch.entities
+                    )
+                    else 56
                 )
                 try:
                     if radius_document.document.archive_version < 8:
@@ -2039,6 +2248,8 @@ class MainWindow(QMainWindow):
                 layer = dialog.canvas.layer_table.get(raster.layer_name)
                 if layer.locked or not layer.displayed:
                     raise ValueError("图片所在图层已锁定或隐藏。")
+                if stage_rasters(action, (raster,)):
+                    return
                 params = (
                     {"image_id": raster.image_id}
                     if action == "remove"
@@ -2049,7 +2260,7 @@ class MainWindow(QMainWindow):
                         f"drawing.raster.{action}",
                         params,
                         "local",
-                        version=1 if action == "remove" else 2,
+                        version=2 if action == "remove" else 3,
                     )
                 except MycadError as exc:
                     raise ValueError(f"无法修改图片：{exc}") from exc
@@ -2077,6 +2288,8 @@ class MainWindow(QMainWindow):
                     layer = dialog.canvas.layer_table.get(raster.layer_name)
                     if layer.locked or not layer.displayed:
                         raise ValueError("图片所在图层已锁定或隐藏。")
+                if stage_rasters(action, rasters):
+                    return
                 params = (
                     {"action": action, "image_ids": [item.image_id for item in rasters]}
                     if action == "remove"
@@ -2086,7 +2299,7 @@ class MainWindow(QMainWindow):
                     }
                 )
                 try:
-                    radius_document.bus.execute("drawing.raster.batch", params, "local", version=1)
+                    radius_document.bus.execute("drawing.raster.batch", params, "local", version=2)
                 except MycadError as exc:
                     raise ValueError(f"无法修改图片：{exc}") from exc
                 dialog.layer_history_boundaries[radius_document.document.command_count] = (
@@ -2146,7 +2359,7 @@ class MainWindow(QMainWindow):
                             }
                         ),
                         "local",
-                        version=1,
+                        version=2,
                     )
                 except MycadError as exc:
                     radius_document.bus.release_save_checkpoint(checkpoint)
@@ -2476,6 +2689,30 @@ class MainWindow(QMainWindow):
                 self._show_options()
 
         dialog.drawing_command_bar.panel_requested.connect(show_drawing_options)
+        dialog.drawing_command_bar.group_requested.connect(
+            lambda: self._create_drawing_group(dialog)
+        )
+        dialog.drawing_command_bar.ungroup_requested.connect(
+            lambda: self._remove_drawing_group(dialog)
+        )
+        dialog.drawing_command_bar.group_edit_requested.connect(
+            lambda: self._edit_drawing_group(dialog)
+        )
+        dialog.drawing_command_bar.block_requested.connect(
+            lambda: self._create_drawing_block(dialog)
+        )
+        dialog.drawing_command_bar.block_insert_requested.connect(
+            lambda: self._insert_drawing_block(dialog)
+        )
+        dialog.drawing_command_bar.block_explode_requested.connect(
+            lambda: self._explode_drawing_block(dialog)
+        )
+        dialog.drawing_command_bar.block_edit_requested.connect(
+            lambda: self._edit_drawing_block(dialog)
+        )
+        dialog.block_manage_requested.connect(lambda: self._run_drawing_block_menu("manage"))
+        dialog.block_library_requested.connect(lambda: self._run_drawing_block_menu("library"))
+        dialog.block_write_requested.connect(lambda: self._run_drawing_block_menu("write"))
         dialog.set_document_layers(
             self._services.kernel.drawing_layers, self._services.kernel.dimension_layer
         )
@@ -2495,7 +2732,48 @@ class MainWindow(QMainWindow):
         dialog.dimensions.preview_requested.connect(dimension_preview)
         dialog.restore_toolbar_layout(self._drafting_toolbar_state)
         dialog.set_toolbars_locked(self.act_lock_toolbar.isChecked())
+        dialog.protect_canvas_during_toolbar_drag((self.main_toolbar, self.modeling_toolbar))
         self._sketch_dialog = dialog
+        if dialog.canvas.select_committed_entities:
+            self._bind_drawing_text_tools(dialog)
+            self._bind_geometric_tolerance_tools(dialog)
+            dialog.dimensions.independent_edit_guard = lambda ref: (
+                self._require_independent_dimension_edit(dialog, ref)
+            )
+            dialog.canvas.ensure_group_operation = lambda identity: self._ensure_group_operation(
+                dialog, identity
+            )
+            dialog.canvas.offset_group_guard = lambda identity: self._offset_group_member_allowed(
+                dialog, identity
+            )
+            dialog.canvas.delete_collection_selection = lambda: self._delete_collection_selection(
+                dialog
+            )
+            dialog.canvas.group_selection_provider = lambda: self._effective_group_selection(dialog)
+            dialog.canvas.collection_transform_preview_provider = lambda copy_source, delta: (
+                self._preview_collection_transform(dialog, delta, copy_source=copy_source)
+            )
+            dialog.canvas.collection_affine_preview_provider = lambda kind, center, value, copy: (
+                self._preview_collection_affine(dialog, kind, center, value, copy_source=copy)
+            )
+            dialog.canvas.collection_mirror_preview_provider = lambda copy_source, start, end: (
+                self._preview_collection_mirror(dialog, start, end, copy_source=copy_source)
+            )
+            dialog.canvas.group_clipboard_guard = lambda: self._group_clipboard_requires_support(
+                dialog
+            )
+            dialog.canvas.capture_collection_clipboard = lambda include_dimensions=False: (
+                self._capture_collection_clipboard(
+                    dialog, include_internal_dimensions=include_dimensions
+                )
+            )
+            dialog.canvas.begin_collection_paste = lambda: self._begin_collection_paste(dialog)
+            dialog.canvas.collection_paste_preview_provider = lambda payload, delta: (
+                self._preview_collection_paste(dialog, payload, delta)
+            )
+            dialog.canvas.commit_collection_paste = lambda payload, delta: (
+                self._commit_collection_paste(dialog, payload, delta)
+            )
         dialog.canvas.changed.connect(self._sync_drawing_clipboard_actions)
         dialog.plane_combo.currentTextChanged.connect(self._sync_camera_status)
         dialog.set_context_sketches(self._services.kernel.sketches)
@@ -2655,7 +2933,15 @@ class MainWindow(QMainWindow):
             bool(
                 ready
                 and canvas is not None
-                and (canvas.selected_entity_ids or canvas.selected_raster_id)
+                and (
+                    canvas.selected_entity_ids
+                    or canvas.selected_raster_id
+                    or (canvas.text_tools is not None and canvas.text_tools.selected_ids)
+                    or (
+                        canvas.geometric_tolerance_tools is not None
+                        and canvas.geometric_tolerance_tools.selected_id is not None
+                    )
+                )
             )
         )
         self.act_delete.setToolTip(
@@ -2669,6 +2955,11 @@ class MainWindow(QMainWindow):
                     canvas.selected_entity_ids
                     or canvas.selected_constraint_ids
                     or canvas.selected_raster_id
+                    or (canvas.text_tools is not None and canvas.text_tools.selected_ids)
+                    or (
+                        canvas.geometric_tolerance_tools is not None
+                        and canvas.geometric_tolerance_tools.selected_id is not None
+                    )
                 )
             )
         )
@@ -2678,7 +2969,9 @@ class MainWindow(QMainWindow):
                 ready
                 and mime is not None
                 and (
-                    mime.hasFormat(DRAWING_CLIPBOARD_MIME)
+                    mime.hasFormat(TEXT_CLIPBOARD_MIME)
+                    or mime.hasFormat(TOLERANCE_CLIPBOARD_MIME)
+                    or mime.hasFormat(DRAWING_CLIPBOARD_MIME)
                     or mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME)
                     or mime.hasFormat(DRAWING_RASTER_GROUP_MIME)
                     or mime.hasImage()
@@ -2706,11 +2999,29 @@ class MainWindow(QMainWindow):
 
     def _sync_workspace_actions(self) -> None:
         self._sync_drawing_clipboard_actions()
+        for action in (self.act_text, self.act_mtext, self.act_text_style):
+            action.setEnabled(
+                self.active_workspace == "sketch"
+                and self._loaded is not None
+                and self._loaded.document.document_kind == "sketch"
+            )
         self.act_drawing_dimension_styles.setEnabled(
             self.active_workspace == "sketch"
             and self._loaded is not None
             and self._loaded.document.document_type == "drawing2d"
         )
+        for action in (
+            self.act_geometric_tolerance,
+            self.act_datum_label,
+            self.act_datum_symbol_style,
+            self.act_datum_text_style,
+            self.act_datum_arrow_style,
+        ):
+            action.setEnabled(
+                self.active_workspace == "sketch"
+                and self._loaded is not None
+                and self._loaded.document.document_type == "drawing2d"
+            )
         for action in (
             *self.orientation_actions.values(),
             *self.projection_actions.values(),
@@ -2832,6 +3143,14 @@ class MainWindow(QMainWindow):
         if preparation is not None and preparation.draft is editor:
             return
         if editor is not None and services is not None:
+            if editor.canvas.collection_session is not None:
+                try:
+                    self._apply_collection_snapshot(
+                        editor, editor.canvas.collection_session.snapshot
+                    )
+                except ValidationError as exc:
+                    editor.status_label.setText(str(exc))
+                return
             if editor.canvas.select_committed_entities:
                 editor.canvas.drawing_dimension_styles = services.kernel.drawing_dimension_styles
                 editor.canvas.circle_fillet_radius = services.kernel.drawing_fillet_radius
@@ -2856,11 +3175,703 @@ class MainWindow(QMainWindow):
             editor.set_document_layers(
                 services.kernel.drawing_layers, services.kernel.dimension_layer
             )
+            if editor.canvas.text_tools is not None:
+                editor.canvas.text_tools.sync(
+                    services.kernel.drawing_texts, services.kernel.drawing_text_styles
+                )
+            editor.canvas.set_drawing_blocks(
+                services.kernel.drawing_block_definitions,
+                services.kernel.drawing_block_instances,
+                services.kernel.drawing_text_styles,
+            )
+            if editor.canvas.geometric_tolerance_tools is not None:
+                editor.canvas.geometric_tolerance_tools.sync(
+                    services.kernel.drawing_tolerance_frames,
+                    services.kernel.drawing_datum_identifiers,
+                    services.kernel.drawing_reference_dimensions,
+                )
+
+    def _bind_geometric_tolerance_tools(self, editor: SketchEditorDialog) -> None:
+        from mycad.ui.geometric_tolerance_tools import GeometricToleranceTools
+
+        loaded, services = self._loaded, self._services
+        if loaded is None or services is None:
+            return
+        tools = GeometricToleranceTools(editor.canvas, editor)
+        tools.default_datum_symbol_style = lambda: default_datum_symbol_style(
+            QSettings(ORG_NAME, APP_NAME)
+        )
+        token = next(
+            (
+                key
+                for key, document in self._collection_clipboard_documents.items()
+                if document is loaded
+            ),
+            None,
+        )
+        if token is None:
+            token = uuid4().hex
+            self._collection_clipboard_documents[token] = loaded
+        tools.set_collection_clipboard_source(token)
+        editor.canvas.geometric_tolerance_tools = tools
+        tools.sync(
+            services.kernel.drawing_tolerance_frames,
+            services.kernel.drawing_datum_identifiers,
+            services.kernel.drawing_reference_dimensions,
+        )
+
+        def execute(command: str, params: dict[str, object]) -> bool:
+            unit = self.execution_unit
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；形位公差未修改。")
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后修改形位公差。")
+            changed: set[tuple[str, str]] = set()
+            fields = (
+                (
+                    ("update_frames", "tolerance", "frame_id"),
+                    ("update_datums", "datum", "datum_id"),
+                    ("remove_frames", "tolerance", ""),
+                    ("remove_datums", "datum", ""),
+                )
+                if command == "drawing.tolerance.batch"
+                else (
+                    ("update", "reference_dimension", "dimension_id"),
+                    ("remove", "reference_dimension", ""),
+                )
+                if command == "drawing.reference_dimensions.batch"
+                else ()
+            )
+            for field, kind, identity_field in fields:
+                raw_items = params.get(field, ())
+                if not isinstance(raw_items, list | tuple):
+                    continue
+                for raw in cast("Sequence[object]", raw_items):
+                    value = (
+                        cast("Mapping[str, object]", raw).get(identity_field)
+                        if identity_field and isinstance(raw, Mapping)
+                        else raw
+                        if not identity_field
+                        else None
+                    )
+                    if isinstance(value, str):
+                        changed.add((kind, value))
+            self._reject_group_member_edit(editor, changed)
+            if editor.canvas.collection_session is not None:
+                operation = ReplayAppend(
+                    command, services.registry.get(command).version, params, "local"
+                )
+                if not editor.canvas.stage_collection_operation(operation):
+                    raise ValueError(editor.canvas.message)
+                return True
+            try:
+                loaded.bus.execute(command, params, "local")
+            except (KeyError, MycadError) as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        def commit_mixed_tolerances(
+            sketch: Sketch,
+            frames: tuple[FeatureControlFrame, ...],
+            datums: tuple[DatumIdentifier, ...],
+            references: tuple[DetachedDimension, ...],
+            texts: tuple[DrawingText, ...],
+            rasters: tuple[DrawingRaster, ...],
+            styles: DimensionStyleTable | None,
+            text_styles: TextStyleTable | None,
+            preserve_external: bool,
+        ) -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；混合标注未粘贴。")
+            unit = self.execution_unit
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后粘贴。")
+            if editor.canvas.collection_session is not None:
+                raise ValueError("请先完成或取消当前暂存，再粘贴混合对象。")
+            used_sketch_layers = {item.layer_name for item in sketch.entities} | {
+                item.layer_name for item in sketch.constraints if item.layer_name is not None
+            }
+            for name in used_sketch_layers:
+                try:
+                    layer = services.kernel.drawing_layers.get(name)
+                except KeyError:
+                    layer = sketch.layers.get(name)
+                if layer.locked or not layer.displayed:
+                    raise ValueError("目标图层已锁定或隐藏，不能粘贴。")
+            for item in (*frames, *datums, *references, *texts):
+                try:
+                    layer = services.kernel.drawing_layers.get(item.layer_name)
+                except KeyError:
+                    layer = sketch.layers.get(item.layer_name)
+                if layer.locked or not layer.displayed:
+                    raise ValueError("目标标注或文字图层已锁定或隐藏，不能粘贴。")
+            for raster in rasters:
+                try:
+                    layer = services.kernel.drawing_layers.get(raster.layer_name)
+                except KeyError:
+                    layer = sketch.layers.get(raster.layer_name)
+                if layer.locked or not layer.displayed:
+                    raise ValueError("目标图片图层已锁定或隐藏，不能粘贴。")
+            try:
+                mycad_app.commit_new_sketch(
+                    services,
+                    loaded,
+                    sketch,
+                    session_identity=self._session_id,
+                    imported_styles=styles,
+                    imported_text_styles=text_styles,
+                    imported_texts=texts,
+                    imported_rasters=rasters,
+                    imported_tolerance_frames=frames,
+                    imported_datums=datums,
+                    imported_reference_dimensions=references,
+                    preserve_existing_datum_refs=preserve_external,
+                    persistent_batch=True,
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        def commit_mixed_tolerance_move(
+            entity_ids: tuple[str, ...],
+            frame_ids: tuple[str, ...],
+            datum_ids: tuple[str, ...],
+            reference_ids: tuple[str, ...],
+            text_ids: tuple[str, ...],
+            raster_ids: tuple[str, ...],
+            delta: tuple[float, float],
+            revision: int,
+            *,
+            copy_source: bool = False,
+        ) -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+                or loaded.document.revision != revision
+            ):
+                raise ValueError("图纸或选择已变化，请重新开始移动。")
+            unit = self.execution_unit
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后移动。")
+            if editor.canvas.collection_session is not None:
+                if (
+                    set(entity_ids) != editor.canvas.selected_entity_ids
+                    or set(text_ids)
+                    != (
+                        editor.canvas.text_tools.selected_ids if editor.canvas.text_tools else set()
+                    )
+                    or set(raster_ids) != editor.canvas.selected_raster_ids
+                    or {*frame_ids, *datum_ids, *reference_ids} != tools.selected_ids
+                ):
+                    raise ValueError("选择已变化，请重新开始移动。")
+                annotations = (
+                    *(("tolerance", item) for item in frame_ids),
+                    *(("datum", item) for item in datum_ids),
+                    *(("reference_dimension", item) for item in reference_ids),
+                )
+                if not self._move_collection_geometry(
+                    editor, entity_ids, delta, copy_source=copy_source, annotation_seeds=annotations
+                ):
+                    raise ValueError(editor.status_label.text())
+                return True
+            if copy_source:
+                raise ValueError("当前图纸无法暂存组复制。")
+            try:
+                mycad_app.move_tolerance_selection(
+                    services,
+                    loaded,
+                    entity_ids,
+                    frame_ids,
+                    datum_ids,
+                    reference_ids,
+                    delta,
+                    session_identity=self._session_id,
+                    text_ids=text_ids,
+                    raster_ids=raster_ids,
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        def commit_mixed_tolerance_delete(
+            frame_ids: tuple[str, ...],
+            datum_ids: tuple[str, ...],
+            reference_ids: tuple[str, ...],
+            text_ids: tuple[str, ...],
+            raster_ids: tuple[str, ...],
+        ) -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；标注未删除。")
+            unit = self.execution_unit
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后删除标注。")
+            try:
+                mycad_app.delete_tolerance_selection(
+                    services,
+                    loaded,
+                    frame_ids,
+                    datum_ids,
+                    reference_ids,
+                    session_identity=self._session_id,
+                    text_ids=text_ids,
+                    raster_ids=raster_ids,
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        def commit_geometry_tolerance_delete() -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                editor.status_label.setText("图纸已切换；对象未删除。")
+                return True
+            if editor.canvas.has_pending_geometry or editor.canvas.has_active_edit_gesture:
+                editor.status_label.setText("请先完成或取消当前操作，再删除所选对象。")
+                return True
+            self._on_drawing_move(
+                editor,
+                self._session_id,
+                tuple(sorted(editor.canvas.selected_entity_ids)),
+                (0.0, 0.0),
+                erase=True,
+            )
+            return True
+
+        def commit_identity_repair() -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；标注身份未修复。")
+            unit = self.execution_unit
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后修复标注身份。")
+            try:
+                mycad_app.repair_tolerance_annotation_identities(
+                    services, loaded, session_identity=self._session_id
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        def commit_curve_identity_upgrade() -> bool:
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；曲线点身份未升级。")
+            unit = self.execution_unit
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后升级曲线点身份。")
+            try:
+                mycad_app.upgrade_selected_curve_identities(
+                    services,
+                    loaded,
+                    tuple(sorted(editor.canvas.selected_entity_ids)),
+                    session_identity=self._session_id,
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            return True
+
+        tools.commit_curve_identity_upgrade = commit_curve_identity_upgrade
+        tools.commit_identity_repair = commit_identity_repair
+        tools.commit_geometry_delete = commit_geometry_tolerance_delete
+        tools.commit_delete = commit_mixed_tolerance_delete
+        tools.source_revision = lambda: loaded.document.revision
+
+        def source_subject(
+            kind: str, identity: str
+        ) -> FeatureControlFrame | DatumIdentifier | DetachedDimension | None:
+            if self._loaded is not loaded or self._services is not services:
+                return None
+            if kind == "frame":
+                return next(
+                    (
+                        item
+                        for item in services.kernel.drawing_tolerance_frames
+                        if item.frame_id == identity
+                    ),
+                    None,
+                )
+            if kind == "datum":
+                return next(
+                    (
+                        item
+                        for item in services.kernel.drawing_datum_identifiers
+                        if item.datum_id == identity
+                    ),
+                    None,
+                )
+            if kind == "reference":
+                return next(
+                    (
+                        item
+                        for item in services.kernel.drawing_reference_dimensions
+                        if item.dimension_id == identity
+                    ),
+                    None,
+                )
+            return None
+
+        tools.source_subject = source_subject
+
+        def source_layer_editable(name: str) -> bool:
+            if self._loaded is not loaded or self._services is not services:
+                return False
+            try:
+                layer = services.kernel.drawing_layers.get(name)
+            except KeyError:
+                return False
+            return layer.displayed and not layer.locked
+
+        tools.source_layer_editable = source_layer_editable
+
+        def source_text(identity: str) -> DrawingText | None:
+            if self._loaded is not loaded or self._services is not services:
+                return None
+            return next(
+                (item for item in services.kernel.drawing_texts if item.text_id == identity), None
+            )
+
+        tools.source_text = source_text
+
+        def source_raster(identity: str) -> DrawingRaster | None:
+            if self._loaded is not loaded or self._services is not services:
+                return None
+            return next(
+                (item for item in services.kernel.drawing_rasters if item.image_id == identity),
+                None,
+            )
+
+        tools.source_raster = source_raster
+        tools.commit_move = commit_mixed_tolerance_move
+        tools.commit_collection_copy = partial(commit_mixed_tolerance_move, copy_source=True)
+        tools.commit_mixed = commit_mixed_tolerances
+        tools.execute = execute
+        tools.attachment_resolved = services.kernel.datum_attachment_resolved
+        first_dimension_action = next(iter(editor.dimension_toolbar.actions()), None)
+        if first_dimension_action is None:
+            editor.dimension_toolbar.addAction(self.act_geometric_tolerance)
+            editor.dimension_toolbar.addAction(self.act_datum_label)
+        else:
+            editor.dimension_toolbar.insertAction(
+                first_dimension_action, self.act_geometric_tolerance
+            )
+            editor.dimension_toolbar.insertAction(first_dimension_action, self.act_datum_label)
+            editor.dimension_toolbar.insertSeparator(first_dimension_action)
+        for action in (self.act_geometric_tolerance, self.act_datum_label):
+            button = editor.dimension_toolbar.widgetForAction(action)
+            if isinstance(button, QToolButton):
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        maintenance = QMenu("基准操作", editor)
+        maintenance.addAction(self.act_datum_symbol_style)
+        maintenance.addMenu(self.menu_default_datum_style)
+        maintenance.addAction(self.act_datum_text_style)
+        maintenance.addAction(self.act_datum_arrow_style)
+        extension_action = maintenance.addAction("编辑表面延伸线…")
+        extension_action.triggered.connect(tools.edit_surface_extension)
+        surface_action = maintenance.addAction("添加或重设表面指示…")
+        surface_action.triggered.connect(tools.begin_surface_indication_edit)
+        edge_action = maintenance.addAction("切换为边线指示")
+        edge_action.triggered.connect(tools.remove_surface_indication)
+        detach_action = maintenance.addAction("解除基准附着")
+        detach_action.triggered.connect(tools.detach_selected_datum)
+        detach_frame_action = maintenance.addAction("解除公差框附着")
+        detach_frame_action.triggered.connect(tools.detach_selected_frame)
+        reattach_action = maintenance.addAction("重新关联基准")
+        reattach_action.triggered.connect(tools.begin_reattach)
+        repair_action = maintenance.addAction("修复标注身份")
+        repair_action.triggered.connect(tools.repair_annotation_ids)
+        curve_upgrade_action = maintenance.addAction("升级曲线点身份")
+        curve_upgrade_action.triggered.connect(tools.upgrade_curve_identities)
+        editor.dimension_toolbar.addAction(maintenance.menuAction())
+
+    def _apply_collection_snapshot(self, editor: SketchEditorDialog, snapshot: object) -> None:
+        from mycad.core.drawing_collection_state import DrawingCollectionSnapshot
+
+        if not isinstance(snapshot, DrawingCollectionSnapshot):
+            return
+        if (
+            snapshot.layers != editor.layer_table
+            or snapshot.dimension_layer != editor.dimension_layer
+        ):
+            editor.set_document_layers(snapshot.layers, snapshot.dimension_layer)
+        editor.canvas.drawing_dimension_styles = snapshot.dimension_styles
+        if editor.dimensions.drawing_style_active:
+            editor.dimensions.set_drawing_style(snapshot.dimension_styles.current)
+        editor.set_context_sketches(
+            tuple(
+                sketch for sketch in snapshot.sketches if sketch.sketch_id != editor.draft_sketch_id
+            )
+        )
+        editor.canvas.set_drawing_rasters(snapshot.rasters)
+        if editor.canvas.text_tools is not None:
+            editor.canvas.text_tools.sync(snapshot.texts, snapshot.text_styles)
+        editor.canvas.set_drawing_blocks(
+            snapshot.block_definitions, snapshot.block_instances, snapshot.text_styles
+        )
+        if editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.sync(
+                snapshot.frames, snapshot.datums, snapshot.reference_dimensions
+            )
+
+    def _bind_drawing_text_tools(self, editor: SketchEditorDialog) -> None:
+
+        loaded, services = self._loaded, self._services
+        if loaded is None or services is None:
+            return
+        tools = DrawingTextTools(editor.canvas, editor)
+        tools.sync(services.kernel.drawing_texts, services.kernel.drawing_text_styles)
+        editor.canvas.set_drawing_blocks(
+            services.kernel.drawing_block_definitions,
+            services.kernel.drawing_block_instances,
+            services.kernel.drawing_text_styles,
+        )
+        editor.parameter_tabs.addTab(tools.panel, "文字")
+
+        def sync_collection(snapshot: object) -> None:
+            self._apply_collection_snapshot(editor, snapshot)
+
+        editor.canvas.collection_snapshot_changed.connect(sync_collection)
+
+        def execute(command: str, params: dict[str, object]) -> bool:
+            unit = self.execution_unit
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；文字未修改。")
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后修改文字。")
+            changed_ids: set[str] = set()
+            identity = params.get("text_id")
+            if command in {"drawing.text.update", "drawing.text.remove"} and isinstance(
+                identity, str
+            ):
+                changed_ids.add(identity)
+            if command == "drawing.text.batch":
+                raw_updates = params.get("update", ())
+                raw_removals = params.get("remove", ())
+                if isinstance(raw_updates, list | tuple):
+                    for raw in cast("Sequence[object]", raw_updates):
+                        if isinstance(raw, Mapping):
+                            value = cast("Mapping[str, object]", raw).get("text_id")
+                            if isinstance(value, str):
+                                changed_ids.add(value)
+                if isinstance(raw_removals, list | tuple):
+                    changed_ids.update(
+                        item
+                        for item in cast("Sequence[object]", raw_removals)
+                        if isinstance(item, str)
+                    )
+            self._reject_group_member_edit(editor, {("text", item) for item in changed_ids})
+            if editor.canvas.collection_session is not None:
+                operation = ReplayAppend(
+                    command, services.registry.get(command).version, params, "local"
+                )
+                if not editor.canvas.stage_collection_operation(operation):
+                    raise ValueError(editor.canvas.message)
+                return True
+            try:
+                if command == "drawing.text_styles.set":
+                    updated_styles = TextStyleTable.from_mapping(params)
+                    original_styles = services.kernel.drawing_text_styles
+                    datum_tools = editor.canvas.geometric_tolerance_tools
+                    updates: list[dict[str, object]] = []
+                    for datum in services.kernel.drawing_datum_identifiers:
+                        if datum.box_size_mm is None or datum.text_style_id is None:
+                            continue
+                        before = original_styles.get(datum.text_style_id)
+                        after = updated_styles.get(datum.text_style_id)
+                        if text_style_geometry_signature(before) != text_style_geometry_signature(
+                            after
+                        ):
+                            if datum_tools is None:
+                                raise ValueError("当前图纸无法更新基准框。")
+                            updates.append(
+                                datum_tools.relayout_recorded_datum(
+                                    datum, updated_styles
+                                ).to_mapping()
+                            )
+                    if updates:
+                        params = {**params, "datum_updates": updates}
+                loaded.bus.execute(command, params, "local")
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            self._sync_drawing_clipboard_actions()
+            return True
+
+        tools.execute = execute
+
+        def paste_commit(
+            sketch: Sketch,
+            texts: tuple[DrawingText, ...],
+            styles: TextStyleTable,
+            images: tuple[DrawingRaster, ...],
+            dimension_styles: DimensionStyleTable | None,
+        ) -> bool:
+            unit = self.execution_unit
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+            ):
+                raise ValueError("图纸已切换；剪贴板对象未提交。")
+            if unit is not None and (unit.is_busy or unit.is_notifying_result):
+                raise ValueError("应用正在执行命令；请稍后粘贴。")
+            if editor.canvas.collection_session is not None:
+                raise ValueError("请先完成或取消当前暂存，再粘贴混合对象。")
+            try:
+                mycad_app.commit_new_sketch(
+                    services,
+                    loaded,
+                    sketch,
+                    session_identity=self._session_id,
+                    imported_styles=dimension_styles,
+                    imported_texts=texts,
+                    imported_text_styles=styles,
+                    imported_rasters=images,
+                    persistent_batch=True,
+                )
+            except MycadError as exc:
+                raise ValueError(str(exc)) from exc
+            editor.layer_history_boundaries[loaded.document.command_count] = (
+                editor.canvas.history_position
+            )
+            editor.layer_history_redo.clear()
+            editor.canvas.discard_redo_history()
+            self._sync_drawing_layers()
+            self._refresh_document_choice()
+            self._sync_drawing_clipboard_actions()
+            return True
+
+        tools.paste_commit = paste_commit
+        for label, kind in (("单行文字", "text"), ("多行文字", "mtext"), ("文字样式", "style")):
+            action = editor.drawing_toolbar.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=kind: self._start_drawing_text(value)
+            )
+
+    def _start_drawing_text(self, kind: str) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is None or editor.canvas.text_tools is None:
+            return
+        tools = editor.canvas.text_tools
+        editor.parameter_tabs.setCurrentWidget(tools.panel)
+        if kind == "style":
+            tools.open_styles()
+        else:
+            tools.begin("mtext" if kind == "mtext" else "text")
 
     def _show_drawing_dimension_styles(self) -> None:
         editor = self.active_sketch_dialog()
         if editor is not None:
             editor.dimensions.open_format_presets()
+
+    def _start_geometric_tolerance(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.begin_mechanical_frame()
+
+    def _start_datum_label(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.begin_mechanical_datum()
+
+    def _edit_datum_text_style(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.edit_datum_text_style()
+
+    def _edit_datum_symbol_style(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.edit_datum_symbol_style()
+
+    def _set_default_datum_style(self, style: str) -> None:
+        if style not in ("rectangle", "circle"):
+            return
+        QSettings(ORG_NAME, APP_NAME).setValue(DATUM_SYMBOL_STYLE_KEY, style)
+        self._sync_default_datum_style()
+
+    def _sync_default_datum_style(self) -> None:
+        style = default_datum_symbol_style(QSettings(ORG_NAME, APP_NAME))
+        self.act_default_datum_rectangle.setChecked(style == "rectangle")
+        self.act_default_datum_circle.setChecked(style == "circle")
+
+    def _edit_datum_arrow_style(self) -> None:
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            editor.canvas.geometric_tolerance_tools.edit_datum_arrow_style()
 
     def _open_drawing_dimension_styles(self, editor: SketchEditorDialog) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
@@ -2901,7 +3912,9 @@ class MainWindow(QMainWindow):
             initial = DimensionStyleTable(
                 (DimensionStyle("标准", scale=DEFAULT_NEW_DRAWING_DIMENSION_SCALE),), "标准"
             )
-        style_dialog = DrawingDimensionStylesDialog(initial, used, editor)
+        style_dialog = DrawingDimensionStylesDialog(
+            initial, used, editor, text_styles=services.kernel.drawing_text_styles
+        )
 
         def open_local_presets() -> None:
             style_dialog.reject()
@@ -2935,7 +3948,10 @@ class MainWindow(QMainWindow):
                             (),
                             (
                                 ReplayAppend(
-                                    "drawing.dimension_styles.set", 8, table.to_mapping(), "local"
+                                    "drawing.dimension_styles.set",
+                                    10,
+                                    table.to_mapping(),
+                                    "local",
                                 ),
                             ),
                             False,
@@ -3062,7 +4078,20 @@ class MainWindow(QMainWindow):
                 "drawing.array.resize",
                 {"array": resized.to_mapping()},
                 confirmed_by="local",
-                version=15
+                version=16
+                if mycad_app.revisions_require_attachment_protection(
+                    services,
+                    tuple(
+                        {"sketch_id": ref.sketch_id}
+                        for ref in (
+                            *array.sources,
+                            *(member.target for member in array.members),
+                            *(member.target for member in resized.members),
+                            *(output.target for output in array.extra_outputs),
+                        )
+                    ),
+                )
+                else 15
                 if any(output.rotation_deg != 0 for output in resized.extra_outputs)
                 else 14
                 if any(output.offset_mm != (0, 0) for output in resized.extra_outputs)
@@ -3193,6 +4222,1964 @@ class MainWindow(QMainWindow):
         ):
             editor.canvas.finish_array_spacing_commit(token, "几何工作线程忙碌，请重试。")
 
+    def _sync_drawing_group_menu(self) -> None:
+        editor = self._sketch_dialog
+        enabled = editor is not None and editor.canvas.select_committed_entities
+        self.drawing_group_menu.setEnabled(enabled)
+        self.drawing_block_menu.setEnabled(enabled)
+
+    @staticmethod
+    def _require_collection_action_ready(editor: SketchEditorDialog) -> None:
+        canvas = editor.canvas
+        if (
+            canvas.has_pending_geometry
+            or canvas.has_active_edit_gesture
+            or (canvas.text_tools is not None and canvas.text_tools.pending)
+            or (
+                canvas.geometric_tolerance_tools is not None
+                and canvas.geometric_tolerance_tools.pending
+            )
+        ):
+            raise ValidationError("请先完成或取消当前绘图、文字或标注操作。")
+
+    def _run_drawing_block_menu(self, action: str) -> None:
+        editor = self._sketch_dialog
+        if editor is None or not editor.canvas.select_committed_entities:
+            return
+        if action == "create":
+            self._create_drawing_block(editor)
+        elif action == "insert":
+            self._insert_drawing_block(editor)
+        elif action == "explode":
+            self._explode_drawing_block(editor)
+        elif action == "edit":
+            self._edit_drawing_block(editor)
+        elif action == "manage":
+            self._manage_drawing_blocks(editor)
+        elif action == "library":
+            editor.drawing_command_bar.remember_collection_command("blocklib")
+            self._open_block_library(editor)
+        elif action == "write":
+            editor.drawing_command_bar.remember_collection_command("wblock")
+            selected = editor.canvas.selected_block_instance_ids
+            if len(selected) == 1:
+                view = self._collection_view(editor)
+                instance = next(
+                    (item for item in view.block_instances if item.instance_id in selected), None
+                )
+                if instance is not None:
+                    self._save_definition_to_library(editor, instance.definition_id)
+                    return
+            self._manage_drawing_blocks(editor)
+
+    def _manage_drawing_blocks(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.drawing_blocks import validate_block_definition_edit
+        from mycad.ui.drawing_block_dialogs import BlockManagerDialog
+
+        def remove(identity: str) -> None:
+            self._require_collection_action_ready(editor)
+            view = self._collection_view(editor)
+            if any(item.definition_id == identity for item in view.block_instances):
+                raise ValidationError("块定义仍被实例引用，无法删除。")
+            definition = next(
+                (item for item in view.block_definitions if item.definition_id == identity), None
+            )
+            if definition is None:
+                raise ValidationError("块定义已变化，请重新选择。")
+            validate_block_definition_edit(definition, (), view.layers, view.text_styles)
+            session = self._ensure_collection_session(editor)
+            current = session.snapshot
+            if definition not in current.block_definitions or any(
+                item.definition_id == identity for item in current.block_instances
+            ):
+                raise ValidationError("块定义或实例已变化，请重新选择。")
+            validate_block_definition_edit(definition, (), current.layers, current.text_styles)
+            if not editor.canvas.stage_collection_operation(
+                ReplayAppend("drawing.block.remove", 1, {"definition_id": identity}, "local")
+            ):
+                raise ValidationError(editor.canvas.message)
+
+        def rename(identity: str, name: str) -> None:
+            self._require_collection_action_ready(editor)
+            view = self._collection_view(editor)
+            definition = next(
+                (item for item in view.block_definitions if item.definition_id == identity), None
+            )
+            if definition is None:
+                raise ValidationError("块定义已变化，请重新选择。")
+            if not name:
+                raise ValidationError("请输入块定义名称。")
+            if any(
+                item.definition_id != identity and item.name.casefold() == name.casefold()
+                for item in view.block_definitions
+            ):
+                raise ValidationError("块定义名称已存在。")
+            if definition.name == name:
+                raise ValidationError("块定义名称没有变化。")
+            updated = replace(definition, name=name)
+            affected = tuple(
+                item for item in view.block_instances if item.definition_id == identity
+            )
+            validate_block_definition_edit(definition, affected, view.layers, view.text_styles)
+            validate_block_definition_edit(updated, affected, view.layers, view.text_styles)
+            session = self._ensure_collection_session(editor)
+            current = session.snapshot
+            if definition not in current.block_definitions:
+                raise ValidationError("块定义已变化，请重新选择。")
+            affected = tuple(
+                item for item in current.block_instances if item.definition_id == identity
+            )
+            validate_block_definition_edit(
+                definition, affected, current.layers, current.text_styles
+            )
+            validate_block_definition_edit(updated, affected, current.layers, current.text_styles)
+            if not editor.canvas.stage_collection_operation(
+                ReplayAppend("drawing.block.update", 1, updated.to_mapping(), "local")
+            ):
+                raise ValidationError(editor.canvas.message)
+
+        try:
+            self._require_collection_action_ready(editor)
+            BlockManagerDialog(
+                lambda: self._collection_view(editor),
+                remove,
+                rename,
+                editor,
+                save_to_library=lambda identity: self._save_definition_to_library(editor, identity),
+            ).exec()
+        except ValidationError as exc:
+            editor.status_label.setText(str(exc))
+
+    def _block_library_store(self):
+        """Build configured roots without putting filesystem paths into documents."""
+        from mycad.libraries.block_store import BlockLibraryStore
+        from mycad.ui.block_library_settings import library_roots
+
+        root_path = (
+            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+            / "block-library"
+        )
+        root_path.mkdir(parents=True, exist_ok=True)
+        cache = (
+            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation))
+            / "block-library"
+        )
+        roots = library_roots(QSettings(ORG_NAME, APP_NAME), root_path)
+        return BlockLibraryStore(roots, cache), roots
+
+    def _save_definition_to_library(self, editor: SketchEditorDialog, identity: str) -> None:
+        from mycad.core.block_library import AssetMetadata, capture_block_asset
+        from mycad.ui.block_library_dialog import BlockLibrarySaveDialog
+
+        view = self._collection_view(editor)
+        definition = next(
+            (item for item in view.block_definitions if item.definition_id == identity), None
+        )
+        if definition is None:
+            raise ValidationError("块定义已变化，请重新选择。")
+        loaded, session_id = self._loaded, self._session_id
+        store, roots = self._block_library_store()
+        local = next((root for root in roots if not root.read_only), None)
+        if local is None:
+            raise ValidationError("没有可写入的本地块库。")
+
+        def save(name: str, description: str, tags: tuple[str, ...], category: str) -> str:
+            self._require_collection_action_ready(editor)
+            if (
+                self._loaded is not loaded
+                or self._session_id != session_id
+                or self._collection_view(editor) != view
+            ):
+                raise ValidationError("图纸已变化，请重新选择块。")
+            asset = capture_block_asset(
+                view, identity, AssetMetadata(name, description, tags), asset_id=uuid4().hex
+            )
+            receipt = store.save(local.root_id, category, asset, expected_digest=None)
+            return str(local.path / receipt.relative_path)
+
+        preview_asset = capture_block_asset(
+            view, identity, AssetMetadata(definition.name, "", ()), asset_id=uuid4().hex
+        )
+        dialog = BlockLibrarySaveDialog(definition.name, save, editor, preview_asset=preview_asset)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _open_block_library(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.block_library_import import AssetIssue, BlockPlacement
+        from mycad.ui.block_library_controller import BlockLibraryController
+        from mycad.ui.block_library_dialog import (
+            IMPORT_DEFINITION,
+            INSERT_BLOCK,
+            BlockLibraryDialog,
+        )
+        from mycad.ui.drawing_block_dialogs import PICK_POINT, BlockInsertDialog
+
+        try:
+            self._require_collection_action_ready(editor)
+            session = self._ensure_collection_session(editor)
+            store, roots = self._block_library_store()
+
+            def stage(operation: ReplayAppend) -> None:
+                if not editor.canvas.stage_collection_operation(operation):
+                    raise ValidationError(editor.canvas.message)
+
+            def configure_shared(add: bool, path: Path):
+                from mycad.ui.block_library_settings import (
+                    add_shared_directory,
+                    remove_shared_directory,
+                )
+
+                settings = QSettings(ORG_NAME, APP_NAME)
+                (add_shared_directory if add else remove_shared_directory)(settings, path)
+                return self._block_library_store()
+
+            dialog = BlockLibraryDialog(store, roots, editor, configure_shared=configure_shared)
+            choice = dialog.exec()
+            selected_store = dialog.store
+            entry = dialog.selected_entry()
+            dialog.deleteLater()
+            if choice not in (IMPORT_DEFINITION, INSERT_BLOCK) or entry is None:
+                return
+            controller = BlockLibraryController(
+                selected_store,
+                lambda: session.snapshot,
+                session.checkpoint,
+                stage,
+                session.preview_operation,
+            )
+
+            def proceed() -> None:
+                try:
+                    if self._sketch_dialog is not editor:
+                        raise ValidationError("图纸已切换，请重新选择块。")
+
+                    def accept_issues(issues: tuple[AssetIssue, ...]) -> bool:
+                        if not issues:
+                            return True
+                        result = QMessageBox.question(
+                            editor,
+                            "块库导入提示",
+                            "\n".join(issue.message for issue in issues) + "\n是否继续？",
+                            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                            QMessageBox.StandardButton.Cancel,
+                        )
+                        return result == QMessageBox.StandardButton.Ok
+
+                    if choice == IMPORT_DEFINITION:
+                        preview = controller.prepare_import(entry, None)
+                        if not accept_issues(preview.prepared.issues):
+                            controller.cancel_import()
+                            return
+                        controller.confirm_import(preview)
+                        editor.canvas.message = (
+                            "块定义已存在，可使用插入块。"
+                            if preview.prepared.operation is None
+                            else "已导入块定义；可撤销或完成草稿提交。"
+                        )
+                        editor.status_label.setText(editor.canvas.message)
+                        return
+                    placement = BlockInsertDialog(
+                        (entry.asset.definition,), editor, allow_library=False
+                    )
+
+                    def show_placement() -> None:
+                        result = placement.exec()
+                        if result == PICK_POINT:
+                            from mycad.core.drawing_collection_preview import (
+                                collection_preview_payload,
+                            )
+
+                            frame = self._block_point_frame(editor)
+                            rotation, scale = (
+                                placement.rotation_field.value(),
+                                placement.scale_field.precise_value(),
+                            )
+                            layer = editor.canvas.active_layer_name
+                            initial = (placement.x_field.value(), placement.y_field.value())
+                            preview = controller.prepare_import(
+                                entry, BlockPlacement(initial, rotation, scale, layer)
+                            )
+                            if not accept_issues(preview.prepared.issues):
+                                controller.cancel_import()
+                                return
+                            position = initial
+
+                            def update_preview(point: tuple[float, float]):
+                                nonlocal preview, position
+                                if editor.current_frame() != frame:
+                                    raise ValidationError("工作平面已变化，请重新拾取块插入点。")
+                                drawing_point = WorkPlaneFrame.xy().world_to_local(
+                                    frame.local_to_world(point)
+                                )
+                                if drawing_point != position:
+                                    preview = controller.reposition_preview(
+                                        preview,
+                                        BlockPlacement(drawing_point, rotation, scale, layer),
+                                    )
+                                    position = drawing_point
+                                return collection_preview_payload(
+                                    preview.snapshot, preview.candidate
+                                )
+
+                            def pick(point: tuple[float, float]) -> None:
+                                try:
+                                    update_preview(point)
+                                    controller.confirm_import(preview)
+                                    editor.canvas.message = "已插入块；可撤销或完成草稿提交。"
+                                    editor.status_label.setText(editor.canvas.message)
+                                except (KeyError, ValueError, ValidationError) as exc:
+                                    editor.canvas.message = str(exc)
+                                    editor.status_label.setText(editor.canvas.message)
+
+                            editor.canvas.begin_block_point_capture(
+                                pick,
+                                "指定块插入点；单击、Enter 或右键确认，Esc 取消。",
+                                preview=update_preview,
+                                cancel=controller.cancel_import,
+                            )
+                            return
+                        if result != QDialog.DialogCode.Accepted:
+                            controller.cancel_import()
+                            return
+                        selected = BlockPlacement(
+                            (placement.x_field.value(), placement.y_field.value()),
+                            placement.rotation_field.value(),
+                            placement.scale_field.precise_value(),
+                            editor.canvas.active_layer_name,
+                        )
+                        preview = controller.prepare_import(entry, selected)
+                        if not accept_issues(preview.prepared.issues):
+                            controller.cancel_import()
+                            return
+                        controller.confirm_import(preview)
+                        editor.canvas.message = "已插入块；可撤销或完成草稿提交。"
+                        editor.status_label.setText(editor.canvas.message)
+
+                    show_placement()
+                except (OSError, KeyError, ValueError, ValidationError) as exc:
+                    if isValid(editor):
+                        editor.canvas.message = str(exc)
+                        editor.status_label.setText(editor.canvas.message)
+
+            QTimer.singleShot(0, proceed)
+        except (OSError, KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(editor.canvas.message)
+
+    def active_block_editor(self) -> DrawingBlockEditorDialog | None:
+        return self._block_editor if self._block_editor and self._block_editor.isVisible() else None
+
+    def _close_block_editor(self, loaded: LoadedDocument | None = None) -> bool:
+        editor = self.active_block_editor()
+        if editor is None or (loaded is not None and not editor.session.belongs_to(loaded)):
+            return True
+        return editor.close()
+
+    def _edit_drawing_block(self, editor: SketchEditorDialog) -> None:
+        from mycad.ui.drawing_block_editor import (
+            DrawingBlockEditorDialog,
+            DrawingBlockEditorSession,
+        )
+
+        editor.drawing_command_bar.remember_collection_command("bedit")
+
+        loaded, services = self._loaded, self._services
+        if loaded is None or services is None or editor is not self._sketch_dialog:
+            return
+        unit = self.execution_unit
+
+        def worker_available() -> bool:
+            return unit is None or not (
+                unit.is_busy or unit.is_notifying_idle or unit.is_notifying_result
+            )
+
+        if not worker_available():
+            editor.status_label.setText("几何工作线程忙碌，请稍后编辑块定义。")
+            return
+        if self.active_block_editor() is not None:
+            editor.status_label.setText("已有打开的块编辑会话。")
+            return
+        canvas = editor.canvas
+
+        def draft_in_progress() -> bool:
+            current = self._sketch_dialog
+            if current is None:
+                return False
+            canvas = current.canvas
+            return bool(
+                canvas.collection_session is not None
+                or canvas.mixed_move is not None
+                or canvas.entities
+                or canvas.constraints
+                or canvas.pending_cross_tangencies
+                or canvas.pending_associative_arrays
+                or canvas.has_pending_geometry
+                or canvas.has_active_edit_gesture
+                or (canvas.text_tools is not None and canvas.text_tools.pending)
+                or (
+                    canvas.geometric_tolerance_tools is not None
+                    and canvas.geometric_tolerance_tools.pending
+                )
+            )
+
+        if draft_in_progress():
+            editor.status_label.setText("请先完成或取消当前草稿，再编辑块定义。")
+            return
+        identity = self._session_id
+        selected = canvas.selected_block_instance_ids
+        if len(selected) > 1:
+            editor.status_label.setText("请只选择一个块实例，或取消选择后按名称选择定义。")
+            return
+        if selected:
+            instance = next(
+                (
+                    item
+                    for item in services.kernel.drawing_block_instances
+                    if item.instance_id in selected
+                ),
+                None,
+            )
+            if instance is None:
+                editor.status_label.setText("所选块实例不存在。")
+                return
+            definition_id = instance.definition_id
+        else:
+            definitions = services.kernel.drawing_block_definitions
+            if not definitions:
+                editor.status_label.setText("当前图纸没有块定义。")
+                return
+            names = [item.name for item in definitions]
+            chosen, accepted = QInputDialog.getItem(
+                editor, "编辑块定义", "选择要编辑的块：", names, 0, False
+            )
+            if not accepted:
+                return
+            if chosen not in names:
+                editor.status_label.setText("所选块定义已变化。")
+                return
+            definition = definitions[names.index(chosen)]
+            if (
+                self._loaded is not loaded
+                or self._services is not services
+                or self._sketch_dialog is not editor
+                or self._session_id != identity
+                or definition not in services.kernel.drawing_block_definitions
+            ):
+                editor.status_label.setText("图纸或所选块定义已变化，请重新选择。")
+                return
+            if self.active_block_editor() is not None:
+                editor.status_label.setText("已有打开的块编辑会话。")
+                return
+            if draft_in_progress():
+                editor.status_label.setText("请先完成或取消当前草稿，再编辑块定义。")
+                return
+            definition_id = definition.definition_id
+        if not worker_available():
+            editor.status_label.setText("几何工作线程忙碌，请稍后编辑块定义。")
+            return
+        session = DrawingBlockEditorSession(
+            services,
+            loaded,
+            definition_id,
+            is_current_document=lambda: (
+                self._loaded is loaded
+                and self._services is services
+                and self._session_id == identity
+            ),
+            can_write=worker_available,
+            source_has_draft=draft_in_progress,
+        )
+        block_editor = DrawingBlockEditorDialog(
+            session, services.kernel.drawing_layers, services.kernel.drawing_text_styles, self
+        )
+        self._block_editor = block_editor
+
+        def saved() -> None:
+            if self._loaded is loaded and self._services is services:
+                current = self._sketch_dialog
+                if current is not None:
+                    current.canvas.set_source_context_revision(loaded.document.revision)
+                self._sync_drawing_layers()
+                self._refresh_document_choice()
+
+        block_editor.saved.connect(saved)
+
+        def closed(_result: int) -> None:
+            if self._block_editor is block_editor:
+                self._block_editor = None
+
+        block_editor.finished.connect(closed)
+        block_editor.show()
+
+    def _explode_drawing_block(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.drawing_block_transactions import prepare_block_explode
+
+        editor.drawing_command_bar.remember_collection_command("explode")
+        try:
+            self._require_collection_action_ready(editor)
+            selected = editor.canvas.selected_block_instance_ids
+            if len(selected) != 1:
+                raise ValidationError("请选中一个块实例进行分解。")
+            instance_id = next(iter(selected))
+            view = self._collection_view(editor)
+            operation = prepare_block_explode(view, instance_id)
+            session = self._ensure_collection_session(editor)
+            if session.snapshot != view:
+                operation = prepare_block_explode(session.snapshot, instance_id)
+            if not editor.canvas.stage_collection_operation(operation):
+                raise ValidationError(editor.canvas.message)
+            editor.canvas.selected_block_instance_ids.clear()
+            editor.canvas.message = "已暂存块分解；可撤销或完成草稿提交。"
+            editor.status_label.setText(editor.canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(editor.canvas.message)
+
+    @staticmethod
+    def _block_point_frame(editor: SketchEditorDialog) -> WorkPlaneFrame:
+        from mycad.core.cross_sketch_tangency import project_coplanar_rotation
+
+        frame = editor.current_frame()
+        try:
+            project_coplanar_rotation(0, frame, WorkPlaneFrame.xy())
+        except ValueError as exc:
+            raise ValidationError("画布拾取块位置要求工作平面与图纸平面共面。") from exc
+        return frame
+
+    def _create_drawing_block(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.drawing_block_transactions import prepare_block_create
+        from mycad.ui.drawing_block_dialogs import PICK_POINT, BlockCreateDialog
+
+        if not editor.canvas.select_committed_entities:
+            editor.status_label.setText("块仅支持独立二维草图文档。")
+            return
+        try:
+            self._require_collection_action_ready(editor)
+            editor.drawing_command_bar.remember_collection_command("block")
+            view = self._collection_view(editor)
+            seeds = self._selected_group_refs(editor, view)
+            if not seeds:
+                editor.drawing_command_bar.begin_block_selection()
+                editor.status_label.setText(editor.canvas.message)
+                return
+            dialog = BlockCreateDialog(editor)
+            loaded, identity, source_session = (
+                self._loaded,
+                self._session_id,
+                editor.canvas.collection_session,
+            )
+            creation_layer = editor.canvas.active_layer_name
+
+            def require_current_view() -> None:
+                self._require_collection_action_ready(editor)
+                if (
+                    self._loaded is not loaded
+                    or self._session_id != identity
+                    or self._sketch_dialog is not editor
+                    or editor.canvas.collection_session is not source_session
+                    or self._collection_view(editor) != view
+                    or self._selected_group_refs(editor, view) != seeds
+                    or editor.canvas.active_layer_name != creation_layer
+                ):
+                    raise ValidationError("图纸或块来源已变化，请重新选择。")
+
+            prepared: ReplayAppend | None = None
+
+            def validate_creation() -> str | None:
+                nonlocal prepared
+                prepared = None
+                try:
+                    require_current_view()
+                    prepared = prepare_block_create(
+                        view,
+                        seeds,
+                        dialog.name_field.text().strip(),
+                        (dialog.base_x.value(), dialog.base_y.value()),
+                        convert_sources=bool(dialog.source_mode.currentData()),
+                        layer_name=creation_layer,
+                    )
+                except (KeyError, ValueError, ValidationError) as exc:
+                    message = str(exc)
+                    if "块定义仅支持几何和文字" in message:
+                        message += " 请取消选择尺寸、公差、基准、图片或块实例后重试。"
+                        message += " 如果这些对象属于组，请先关闭组选择或调整组成员。"
+                    elif "尺寸或约束关联" in message:
+                        message += " 可选择“保留源对象”创建块。"
+                    return message
+                return None
+
+            dialog.validate_creation = validate_creation
+
+            def show_dialog() -> None:
+                try:
+                    result = dialog.exec()
+                    if result in (PICK_POINT, QDialog.DialogCode.Accepted):
+                        require_current_view()
+                    if result == PICK_POINT:
+                        point_frame = self._block_point_frame(editor)
+
+                        def accept_point(point: tuple[float, float]) -> None:
+                            try:
+                                require_current_view()
+                                if editor.current_frame() != point_frame:
+                                    raise ValidationError("工作平面已变化，请重新拾取块基点。")
+                                drawing_point = WorkPlaneFrame.xy().world_to_local(
+                                    point_frame.local_to_world(point)
+                                )
+                                dialog.base_x.setValue(drawing_point[0])
+                                dialog.base_y.setValue(drawing_point[1])
+                                show_dialog()
+                            except (KeyError, ValueError, ValidationError) as exc:
+                                editor.canvas.message = str(exc)
+                                editor.status_label.setText(editor.canvas.message)
+
+                        editor.canvas.begin_block_point_capture(
+                            accept_point, "请在画布指定块基点。"
+                        )
+                        return
+                    if result != QDialog.DialogCode.Accepted:
+                        editor.canvas.message = "BLOCK：已取消创建块。"
+                        editor.status_label.setText(editor.canvas.message)
+                        editor.drawing_command_bar.status.setText(editor.canvas.message)
+                        return
+                    convert = bool(dialog.source_mode.currentData())
+                    operation = prepared or prepare_block_create(
+                        view,
+                        seeds,
+                        dialog.name_field.text().strip(),
+                        (dialog.base_x.value(), dialog.base_y.value()),
+                        convert_sources=convert,
+                        layer_name=creation_layer,
+                    )
+                    session = self._ensure_collection_session(editor)
+                    before = session.snapshot
+                    if before != view:
+                        operation = prepare_block_create(
+                            before,
+                            seeds,
+                            dialog.name_field.text().strip(),
+                            (dialog.base_x.value(), dialog.base_y.value()),
+                            convert_sources=convert,
+                            layer_name=creation_layer,
+                        )
+                    if not editor.canvas.stage_collection_operation(operation):
+                        raise ValidationError(editor.canvas.message)
+                    if convert:
+                        existing = {item.instance_id for item in before.block_instances}
+                        created = [
+                            item
+                            for item in session.snapshot.block_instances
+                            if item.instance_id not in existing
+                        ]
+                        if len(created) == 1:
+                            editor.canvas.selected_entity_ids.clear()
+                            editor.canvas.selected_constraint_ids.clear()
+                            editor.canvas.selected_raster_ids.clear()
+                            if editor.canvas.text_tools is not None:
+                                editor.canvas.text_tools.selected_ids.clear()
+                            editor.canvas.selected_block_instance_ids = {created[0].instance_id}
+                    editor.canvas.message = "BLOCK：已暂存块定义；可撤销或完成草稿提交。"
+                    editor.status_label.setText(editor.canvas.message)
+                    editor.drawing_command_bar.status.setText(editor.canvas.message)
+                except (KeyError, ValueError, ValidationError) as exc:
+                    editor.canvas.message = str(exc)
+                    editor.status_label.setText(editor.canvas.message)
+                    editor.drawing_command_bar.status.setText(editor.canvas.message)
+
+            show_dialog()
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(editor.canvas.message)
+
+    def _insert_drawing_block(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.drawing_blocks import BlockInstance, validate_block_instance
+        from mycad.ui.drawing_block_dialogs import OPEN_BLOCK_LIBRARY, PICK_POINT, BlockInsertDialog
+
+        editor.drawing_command_bar.remember_collection_command("insert")
+        if not editor.canvas.select_committed_entities:
+            editor.status_label.setText("块仅支持独立二维草图文档。")
+            return
+        try:
+            self._require_collection_action_ready(editor)
+            view = self._collection_view(editor)
+            if not view.block_definitions:
+                self._open_block_library(editor)
+                return
+            dialog = BlockInsertDialog(view.block_definitions, editor)
+            loaded, identity, source_session = (
+                self._loaded,
+                self._session_id,
+                editor.canvas.collection_session,
+            )
+            insertion_layer = editor.canvas.active_layer_name
+
+            def require_current_view() -> None:
+                self._require_collection_action_ready(editor)
+                if (
+                    self._loaded is not loaded
+                    or self._session_id != identity
+                    or self._sketch_dialog is not editor
+                    or editor.canvas.collection_session is not source_session
+                    or self._collection_view(editor) != view
+                    or editor.canvas.active_layer_name != insertion_layer
+                ):
+                    raise ValidationError("图纸或块定义已变化，请重新选择。")
+
+            def show_dialog() -> None:
+                try:
+                    result = dialog.exec()
+                    if result == OPEN_BLOCK_LIBRARY:
+                        QTimer.singleShot(0, lambda: self._open_block_library(editor))
+                        return
+                    if result in (PICK_POINT, QDialog.DialogCode.Accepted):
+                        require_current_view()
+                    if result == PICK_POINT:
+                        point_frame = self._block_point_frame(editor)
+
+                        def accept_point(point: tuple[float, float]) -> None:
+                            try:
+                                require_current_view()
+                                if editor.current_frame() != point_frame:
+                                    raise ValidationError("工作平面已变化，请重新拾取块插入点。")
+                                drawing_point = WorkPlaneFrame.xy().world_to_local(
+                                    point_frame.local_to_world(point)
+                                )
+                                dialog.x_field.setValue(drawing_point[0])
+                                dialog.y_field.setValue(drawing_point[1])
+                                show_dialog()
+                            except (KeyError, ValueError, ValidationError) as exc:
+                                editor.canvas.message = str(exc)
+                                editor.status_label.setText(editor.canvas.message)
+
+                        editor.canvas.begin_block_point_capture(
+                            accept_point, "请在画布指定块插入点。"
+                        )
+                        return
+                    if result != QDialog.DialogCode.Accepted:
+                        return
+                    identity = dialog.definition_field.currentData()
+                    if not isinstance(identity, str):
+                        raise ValidationError("请选择块定义。")
+                    definition = next(
+                        (item for item in view.block_definitions if item.definition_id == identity),
+                        None,
+                    )
+                    if definition is None:
+                        raise ValidationError("块定义已变化，请重新选择。")
+                    instance = BlockInstance(
+                        uuid4().hex,
+                        identity,
+                        (dialog.x_field.value(), dialog.y_field.value()),
+                        dialog.rotation_field.value(),
+                        dialog.scale_field.precise_value(),
+                        insertion_layer,
+                    )
+                    validate_block_instance(definition, instance, view.layers, view.text_styles)
+                    session = self._ensure_collection_session(editor)
+                    current = session.snapshot
+                    if definition not in current.block_definitions:
+                        raise ValidationError("块定义已变化，请重新选择。")
+                    if current != view:
+                        validate_block_instance(
+                            definition, instance, current.layers, current.text_styles
+                        )
+                    if not editor.canvas.stage_collection_operation(
+                        ReplayAppend(
+                            "drawing.block_instance.insert", 1, instance.to_mapping(), "local"
+                        )
+                    ):
+                        raise ValidationError(editor.canvas.message)
+                    editor.canvas.message = "已暂存块实例；可撤销或完成草稿提交。"
+                    editor.status_label.setText(editor.canvas.message)
+                except (KeyError, ValueError, ValidationError) as exc:
+                    editor.canvas.message = str(exc)
+                    editor.status_label.setText(editor.canvas.message)
+
+            show_dialog()
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(editor.canvas.message)
+
+    def _run_drawing_group_menu(self, action: str) -> None:
+        editor = self._sketch_dialog
+        if editor is None or not editor.canvas.select_committed_entities:
+            return
+        if action == "group":
+            self._create_drawing_group(editor)
+        elif action == "ungroup":
+            self._remove_drawing_group(editor)
+        elif action == "edit":
+            self._edit_drawing_group(editor)
+
+    def _collection_view(self, editor: SketchEditorDialog) -> DrawingCollectionSnapshot:
+        services = self._services
+        if services is None or editor is not self._sketch_dialog:
+            raise ValidationError("当前二维文档不可用。")
+        if editor.canvas.collection_session is not None:
+            return editor.canvas.collection_session.snapshot
+        snapshot = mycad_app.drawing_collection_snapshot(services)
+        draft = Sketch(
+            editor.draft_sketch_id,
+            editor.current_frame(),
+            tuple(editor.canvas.entities),
+            tuple(editor.canvas.constraints),
+            editor.layer_table,
+        )
+        return replace(snapshot, sketches=(*snapshot.sketches, draft))
+
+    def _effective_group_selection(self, editor: SketchEditorDialog) -> frozenset[DrawingObjectRef]:
+        from mycad.core.drawing_groups import expand_group_selection
+
+        services = self._services
+        if services is None or editor is not self._sketch_dialog:
+            return frozenset()
+        try:
+            if editor.canvas.collection_session is None and not services.kernel.drawing_groups:
+                return frozenset()
+            snapshot = self._collection_view(editor)
+            if not snapshot.groups:
+                return frozenset()
+            return expand_group_selection(
+                self._selected_group_refs(editor, snapshot), snapshot.groups
+            )
+        except (KeyError, ValueError, ValidationError):
+            return frozenset()
+
+    def _group_clipboard_requires_support(self, editor: SketchEditorDialog) -> bool:
+        try:
+            if editor.canvas.selected_block_instance_ids:
+                return True
+            if (
+                editor.canvas.collection_session is None
+                and self._services is not None
+                and not self._services.kernel.drawing_groups
+            ):
+                return False
+            snapshot = self._collection_view(editor)
+            if not snapshot.groups:
+                return False
+            direct = frozenset(self._selected_group_refs(editor, snapshot))
+            return any(
+                bool(direct.intersection(group.members))
+                and (group.selectable or set(group.members).issubset(direct))
+                for group in snapshot.groups
+            )
+        except (KeyError, ValueError, ValidationError):
+            return True
+
+    def _capture_collection_clipboard(
+        self, editor: SketchEditorDialog, *, include_internal_dimensions: bool = False
+    ) -> tuple[bytes, bool]:
+        from mycad.core.drawing_collection_clipboard import (
+            capture_collection_clipboard,
+            encode_collection_clipboard,
+        )
+        from mycad.core.drawing_groups import DrawingObjectRef, expand_group_selection
+
+        snapshot = self._collection_view(editor)
+        seeds = self._selected_group_refs(editor, snapshot)
+        direct_selection = frozenset(seeds)
+        if include_internal_dimensions:
+            selected_geometry = {ref for ref in seeds if ref.kind == "geometry"}
+            extra = tuple(
+                DrawingObjectRef("dimension", constraint.constraint_id, sketch.sketch_id)
+                for sketch in snapshot.sketches
+                for constraint in sketch.constraints
+                if constraint.kind in DIMENSION_KINDS
+                and constraint.references
+                and all(
+                    DrawingObjectRef("geometry", ref.entity_id, sketch.sketch_id)
+                    in selected_geometry
+                    for ref in constraint.references
+                )
+            )
+            seeds = tuple(dict.fromkeys((*seeds, *extra)))
+        selected = (
+            frozenset(seeds)
+            if include_internal_dimensions
+            else expand_group_selection(seeds, snapshot.groups)
+        )
+        omitted = any(
+            sum(
+                DrawingObjectRef("geometry", ref.entity_id, ref.sketch_id) in selected
+                for ref in (relation.first, relation.second)
+            )
+            == 1
+            for relation in snapshot.cross_tangencies
+        ) or any(
+            any(
+                DrawingObjectRef("geometry", ref.entity_id, sketch.sketch_id) in selected
+                for ref in constraint.references
+            )
+            and (
+                not all(
+                    DrawingObjectRef("geometry", ref.entity_id, sketch.sketch_id) in selected
+                    for ref in constraint.references
+                )
+                or (
+                    constraint.kind in DIMENSION_KINDS
+                    and DrawingObjectRef("dimension", constraint.constraint_id, sketch.sketch_id)
+                    not in selected
+                )
+            )
+            for sketch in snapshot.sketches
+            for constraint in sketch.constraints
+        )
+        tools = editor.canvas.geometric_tolerance_tools
+        payload = capture_collection_clipboard(
+            snapshot,
+            seeds,
+            expand_selection=not include_internal_dimensions,
+            source_token=tools.clipboard_source if tools is not None else None,
+        )
+        if include_internal_dimensions:
+            payload = replace(
+                payload,
+                groups=tuple(
+                    group
+                    for group in payload.groups
+                    if set(group.members).issubset(direct_selection)
+                ),
+            )
+        return encode_collection_clipboard(payload), omitted
+
+    def _begin_collection_paste(self, editor: SketchEditorDialog) -> bool:
+        try:
+            self._ensure_collection_session(editor)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.status_label.setText(str(exc))
+            return False
+        return True
+
+    def _commit_collection_paste(
+        self,
+        editor: SketchEditorDialog,
+        payload: DrawingCollectionClipboard,
+        delta: tuple[float, float],
+    ) -> bool:
+        from mycad.core.cross_sketch_tangency import project_coplanar_vector
+        from mycad.core.drawing_collection_clipboard import prepare_collection_paste
+
+        session = editor.canvas.collection_session
+        if session is None:
+            return False
+        try:
+            drawing_delta = project_coplanar_vector(
+                delta, editor.current_frame(), WorkPlaneFrame.xy()
+            )
+            preview = editor.canvas.collection_paste_preview
+            if (
+                preview is not None
+                and preview.checkpoint == session.checkpoint()
+                and preview.frame == editor.current_frame()
+                and preview.displacement == delta
+                and preview.source == payload
+            ):
+                operation = preview.operation
+            else:
+                tools = editor.canvas.geometric_tolerance_tools
+                operation = prepare_collection_paste(
+                    payload,
+                    session.snapshot,
+                    drawing_delta,
+                    datum_relayout=tools.relayout_recorded_datum if tools is not None else None,
+                    preserve_external=bool(
+                        payload.source_token is not None
+                        and tools is not None
+                        and payload.source_token == tools.clipboard_source
+                    ),
+                )
+            if not editor.canvas.stage_collection_operation(operation):
+                raise ValidationError(editor.canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(str(exc))
+            return False
+        return True
+
+    def _preview_collection_paste(
+        self,
+        editor: SketchEditorDialog,
+        payload: DrawingCollectionClipboard,
+        delta: tuple[float, float],
+    ) -> DrawingCollectionPastePreview:
+        from mycad.core.cross_sketch_tangency import project_coplanar_vector
+        from mycad.core.drawing_collection_clipboard import prepare_collection_paste
+        from mycad.core.drawing_collection_preview import collection_preview_payload
+        from mycad.ui.drawing_collection_session import DrawingCollectionPastePreview
+
+        session = editor.canvas.collection_session
+        if session is None:
+            raise ValidationError("二维暂存会话不可用。")
+        before = session.snapshot
+        drawing_delta = project_coplanar_vector(delta, editor.current_frame(), WorkPlaneFrame.xy())
+        tools = editor.canvas.geometric_tolerance_tools
+        operation = prepare_collection_paste(
+            payload,
+            before,
+            drawing_delta,
+            datum_relayout=tools.relayout_recorded_datum if tools is not None else None,
+            preserve_external=bool(
+                payload.source_token is not None
+                and tools is not None
+                and payload.source_token == tools.clipboard_source
+            ),
+        )
+        return DrawingCollectionPastePreview(
+            session.checkpoint(),
+            editor.current_frame(),
+            delta,
+            payload,
+            operation,
+            collection_preview_payload(before, session.preview_operation(operation)),
+        )
+
+    def _reject_group_member_edit(
+        self, editor: SketchEditorDialog, changed: set[tuple[str, str]]
+    ) -> None:
+        if not changed:
+            return
+        session = editor.canvas.collection_session
+        if session is not None:
+            try:
+                groups = session.snapshot.groups
+            except ValidationError as exc:
+                raise ValueError(str(exc)) from exc
+        elif self._services is not None:
+            groups = self._services.kernel.drawing_groups
+        else:
+            return
+        if any(
+            group.selectable
+            and any((member.kind, member.object_id) in changed for member in group.members)
+            for group in groups
+        ):
+            raise ValueError("组选择已启用；请先关闭组选择再编辑单个成员。")
+
+    def _offset_group_member_allowed(
+        self, editor: SketchEditorDialog, identity: str | DrawingObjectRef
+    ) -> bool:
+        if not isinstance(identity, str):
+            session = editor.canvas.collection_session
+            try:
+                groups = (
+                    session.snapshot.groups
+                    if session is not None
+                    else self._services.kernel.drawing_groups
+                    if self._services is not None
+                    else ()
+                )
+            except ValidationError:
+                return False
+            return not any(group.selectable and identity in group.members for group in groups)
+        try:
+            self._reject_group_member_edit(editor, {("geometry", identity)})
+        except ValueError:
+            return False
+        return True
+
+    def _require_independent_dimension_edit(
+        self, editor: SketchEditorDialog, reference: DrawingObjectRef
+    ) -> None:
+        session = editor.canvas.collection_session
+        if session is not None:
+            groups = session.snapshot.groups
+        elif self._services is not None:
+            groups = self._services.kernel.drawing_groups
+        else:
+            raise ValidationError("当前二维文档不可用。")
+        if any(group.selectable and reference in group.members for group in groups):
+            raise ValidationError("组选择已启用；请先关闭组选择再编辑单个尺寸。")
+
+    def _ensure_group_operation(
+        self, editor: SketchEditorDialog, geometry_id: str | None = None
+    ) -> bool:
+        """Bring a saved selectable group's operation into the draft timeline."""
+        canvas = editor.canvas
+        services = self._services
+        if canvas.collection_session is not None or services is None:
+            return True
+        selections: dict[str, set[str]] = {
+            "geometry": canvas.selected_entity_ids | ({geometry_id} if geometry_id else set()),
+            "dimension": canvas.selected_constraint_ids,
+            "raster": canvas.selected_raster_ids,
+            "block_instance": canvas.selected_block_instance_ids,
+            "text": canvas.text_tools.selected_ids if canvas.text_tools is not None else set(),
+        }
+        annotations: set[str] = (
+            canvas.geometric_tolerance_tools.selected_ids
+            if canvas.geometric_tolerance_tools is not None
+            else set()
+        )
+        selections.update(dict.fromkeys(("tolerance", "datum", "reference_dimension"), annotations))
+        if not canvas.selected_block_instance_ids and not any(
+            group.selectable
+            and any(
+                member.object_id in selections.get(member.kind, set()) for member in group.members
+            )
+            for group in services.kernel.drawing_groups
+        ):
+            return True
+        try:
+            self._ensure_collection_session(editor)
+        except (KeyError, ValueError, ValidationError) as exc:
+            canvas.message = str(exc)
+            editor.status_label.setText(str(exc))
+            return False
+        return True
+
+    def _ensure_collection_session(
+        self, editor: SketchEditorDialog, *, allow_offset_completion: bool = False
+    ) -> DrawingCollectionSession:
+        from mycad.ui.drawing_collection_session import DrawingCollectionSession
+
+        canvas = editor.canvas
+        loaded, services = self._loaded, self._services
+        if loaded is None or services is None or editor is not self._sketch_dialog:
+            raise ValidationError("当前二维文档不可用。")
+        if canvas.has_pending_geometry or (
+            canvas.has_active_edit_gesture
+            and not (allow_offset_completion and canvas.active_transform == "offset")
+        ):
+            raise ValidationError("请先完成当前绘图或编辑操作。")
+        if (
+            canvas.collection_session is None
+            and canvas.source_context_revision is not None
+            and canvas.source_context_revision != loaded.document.revision
+        ):
+            raise ValidationError("文档已变化；请刷新后重新选择对象。")
+        session = canvas.collection_session
+        if session is not None:
+            return session
+        draft = Sketch(
+            editor.draft_sketch_id,
+            editor.current_frame(),
+            tuple(canvas.entities),
+            constraints=tuple(canvas.constraints),
+            layers=editor.layer_table,
+        )
+        session = DrawingCollectionSession(
+            services,
+            loaded,
+            ReplayAppend("sketch.create", 58, draft.to_state_mapping(), "local"),
+            session_identity=self._session_id,
+            session_identity_provider=lambda: self._session_id,
+        )
+        try:
+            canvas.attach_collection_session(session, editor.draft_sketch_id)
+        except Exception:
+            session.cancel()
+            raise
+        return session
+
+    @staticmethod
+    def _selected_group_refs(
+        editor: SketchEditorDialog,
+        snapshot: DrawingCollectionSnapshot,
+        *,
+        excluded_constraint_ids: frozenset[str] = frozenset(),
+    ) -> tuple[DrawingObjectRef, ...]:
+        from mycad.core.drawing_groups import DrawingObjectRef
+
+        canvas = editor.canvas
+        catalog = [
+            DrawingObjectRef("geometry", entity.entity_id, sketch.sketch_id)
+            for sketch in snapshot.sketches
+            for entity in sketch.entities
+        ]
+        catalog.extend(
+            DrawingObjectRef("dimension", constraint.constraint_id, sketch.sketch_id)
+            for sketch in snapshot.sketches
+            for constraint in sketch.constraints
+            if constraint.kind in DIMENSION_KINDS
+        )
+        catalog.extend(DrawingObjectRef("text", item.text_id) for item in snapshot.texts)
+        catalog.extend(DrawingObjectRef("raster", item.image_id) for item in snapshot.rasters)
+        catalog.extend(
+            DrawingObjectRef("block_instance", item.instance_id)
+            for item in snapshot.block_instances
+        )
+        catalog.extend(DrawingObjectRef("tolerance", item.frame_id) for item in snapshot.frames)
+        catalog.extend(DrawingObjectRef("datum", item.datum_id) for item in snapshot.datums)
+        catalog.extend(
+            DrawingObjectRef("reference_dimension", item.dimension_id)
+            for item in snapshot.reference_dimensions
+        )
+        requested = [
+            *(("geometry", identity) for identity in sorted(canvas.selected_entity_ids)),
+            *(
+                ("dimension", identity)
+                for identity in sorted(canvas.selected_constraint_ids - excluded_constraint_ids)
+            ),
+            *(("raster", identity) for identity in sorted(canvas.selected_raster_ids)),
+            *(
+                ("block_instance", identity)
+                for identity in sorted(canvas.selected_block_instance_ids)
+            ),
+            *(
+                ("text", identity)
+                for identity in sorted(
+                    canvas.text_tools.selected_ids if canvas.text_tools is not None else ()
+                )
+            ),
+        ]
+        annotation_ids = (
+            canvas.geometric_tolerance_tools.selected_ids
+            if canvas.geometric_tolerance_tools is not None
+            else ()
+        )
+        requested.extend(("annotation", identity) for identity in sorted(annotation_ids))
+        members: list[DrawingObjectRef] = []
+        for kind, identity in requested:
+            if kind in {"geometry", "dimension"}:
+                direct_refs = (
+                    canvas.selected_geometry_refs
+                    if kind == "geometry"
+                    else canvas.selected_dimension_refs
+                )
+                picked = {ref for ref in direct_refs if ref.object_id == identity}
+                if picked:
+                    if not picked.issubset(catalog):
+                        raise ValidationError("所选对象来源已变化；请重新选择。")
+                    members.extend(sorted(picked, key=lambda item: item.sketch_id or ""))
+                    continue
+            matches = [
+                item
+                for item in catalog
+                if item.object_id == identity
+                and (
+                    item.kind == kind
+                    or kind == "annotation"
+                    and item.kind in {"tolerance", "datum", "reference_dimension"}
+                )
+            ]
+            if len(matches) != 1:
+                raise ValidationError("所选对象不存在或身份不唯一。")
+            if matches[0] not in members:
+                members.append(matches[0])
+        return tuple(members)
+
+    def _create_drawing_group(self, editor: SketchEditorDialog) -> None:
+        """Start an anonymous group from the current direct selection."""
+        from mycad.core.drawing_groups import DrawingGroup
+        from mycad.core.drawing_object_refs import validate_new_group_array_members
+
+        canvas = editor.canvas
+        try:
+            self._require_collection_action_ready(editor)
+        except ValidationError as exc:
+            canvas.message = str(exc)
+            editor.status_label.setText(canvas.message)
+            return
+        editor.drawing_command_bar.remember_collection_command("group")
+        if not (
+            canvas.selected_entity_ids
+            or canvas.selected_constraint_ids
+            or canvas.selected_raster_ids
+            or canvas.selected_block_instance_ids
+            or (canvas.text_tools is not None and canvas.text_tools.selected_ids)
+            or (
+                canvas.geometric_tolerance_tools is not None
+                and canvas.geometric_tolerance_tools.selected_ids
+            )
+        ):
+            editor.drawing_command_bar.begin_group_selection()
+            editor.status_label.setText(canvas.message)
+            return
+        try:
+            view = self._collection_view(editor)
+            members = self._selected_group_refs(editor, view)
+            validate_new_group_array_members(members, view.associative_arrays)
+            session = self._ensure_collection_session(editor)
+            snapshot = session.snapshot
+            members = self._selected_group_refs(editor, snapshot)
+            validate_new_group_array_members(members, snapshot.associative_arrays)
+            group = DrawingGroup(uuid4().hex, tuple(members))
+            if not canvas.stage_collection_operation(
+                ReplayAppend("drawing.group.create", 1, group.to_mapping(), "local")
+            ):
+                raise ValidationError(canvas.message)
+            canvas.message = f"GROUP：已暂存匿名组（{len(members)} 个对象）；可撤销或完成草稿提交。"
+            editor.status_label.setText(canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            canvas.message = str(exc)
+            editor.status_label.setText(canvas.message)
+
+    def _edit_drawing_group(self, editor: SketchEditorDialog) -> None:
+        from mycad.core.drawing_groups import DrawingGroupTable, DrawingObjectRef
+        from mycad.core.drawing_object_refs import validate_new_group_array_members
+        from mycad.ui.drawing_collections import DrawingGroupEditor
+
+        editor.drawing_command_bar.remember_collection_command("groupedit")
+        try:
+            self._require_collection_action_ready(editor)
+            if (
+                editor.canvas.collection_session is None
+                and self._services is not None
+                and not self._services.kernel.drawing_groups
+            ):
+                raise ValidationError("当前图纸没有组。")
+            canvas = editor.canvas
+            session = canvas.collection_session
+            loaded = self._loaded
+            if loaded is None:
+                raise ValidationError("当前二维文档不可用。")
+            revision = loaded.document.revision
+            snapshot = self._collection_view(editor)
+            checkpoint = session.checkpoint() if session is not None else None
+
+            def validate_dialog_state() -> None:
+                self._require_collection_action_ready(editor)
+                if (
+                    self._loaded is not loaded
+                    or loaded.document.revision != revision
+                    or canvas.collection_session is not session
+                    or (
+                        session is not None
+                        and session.checkpoint() != checkpoint
+                        or session is None
+                        and self._collection_view(editor) != snapshot
+                    )
+                ):
+                    raise ValidationError("组暂存状态已变化，请重新编辑。")
+
+            groups = snapshot.groups
+            if not groups:
+                raise ValidationError("当前图纸没有组。")
+            target = groups[0]
+            if len(groups) > 1:
+                labels = [f"{group.name or '匿名组'} ({group.group_id})" for group in groups]
+                chosen, accepted = QInputDialog.getItem(
+                    editor, "组管理", "选择要编辑的组：", labels, 0, False
+                )
+                if not accepted:
+                    return
+                if chosen not in labels:
+                    raise ValidationError("所选组已变化。")
+                target = groups[labels.index(chosen)]
+            validate_dialog_state()
+            selection = self._selected_group_refs(editor, snapshot)
+            geometry_names = {
+                "PointEntity": "点",
+                "LineEntity": "直线",
+                "PolylineEntity": "多段线",
+                "CircleEntity": "圆",
+                "ArcEntity": "圆弧",
+                "EllipseEntity": "椭圆",
+                "RectangleEntity": "矩形",
+                "SplineEntity": "样条",
+            }
+            member_labels = {
+                DrawingObjectRef(
+                    "geometry", entity.entity_id, sketch.sketch_id
+                ): geometry_names.get(type(entity).__name__, "几何对象")
+                for sketch in snapshot.sketches
+                for entity in sketch.entities
+            }
+            dialog = DrawingGroupEditor(target, selection, editor, member_labels=member_labels)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            validate_dialog_state()
+            if frozenset(self._selected_group_refs(editor, snapshot)) != frozenset(selection):
+                raise ValidationError("组选择已变化，请重新编辑。")
+            updated = None
+            if dialog.has_members:
+                updated = dialog.updated_group()
+                if updated == target:
+                    return
+                DrawingGroupTable(groups).update(updated)
+                validate_new_group_array_members(
+                    tuple(member for member in updated.members if member not in target.members),
+                    snapshot.associative_arrays,
+                )
+                operation = ReplayAppend("drawing.group.update", 1, updated.to_mapping(), "local")
+            else:
+                operation = ReplayAppend(
+                    "drawing.group.remove", 1, {"group_id": target.group_id}, "local"
+                )
+            session = self._ensure_collection_session(editor)
+            if target not in session.snapshot.groups:
+                raise ValidationError("组暂存状态已变化，请重新编辑。")
+            if updated is not None:
+                DrawingGroupTable(session.snapshot.groups).update(updated)
+                validate_new_group_array_members(
+                    tuple(member for member in updated.members if member not in target.members),
+                    session.snapshot.associative_arrays,
+                )
+            if not editor.canvas.stage_collection_operation(operation):
+                raise ValidationError(editor.canvas.message)
+            editor.canvas.message = (
+                "已暂存组修改；可撤销或完成草稿提交。"
+                if dialog.has_members
+                else "组已无成员，已暂存解组；成员对象保留。"
+            )
+            editor.status_label.setText(editor.canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(editor.canvas.message)
+
+    def _remove_drawing_group(self, editor: SketchEditorDialog) -> None:
+        """Remove an unambiguous directly selected group in the active session."""
+        editor.drawing_command_bar.remember_collection_command("ungroup")
+        canvas = editor.canvas
+        try:
+            self._require_collection_action_ready(editor)
+            if (
+                canvas.collection_session is None
+                and self._services is not None
+                and not self._services.kernel.drawing_groups
+            ):
+                raise ValidationError("当前图纸没有组。")
+            session = canvas.collection_session
+            loaded = self._loaded
+            if loaded is None:
+                raise ValidationError("当前二维文档不可用。")
+            revision = loaded.document.revision
+            snapshot = self._collection_view(editor)
+            checkpoint = session.checkpoint() if session is not None else None
+            selected = frozenset(self._selected_group_refs(editor, snapshot))
+            groups = tuple(
+                group for group in snapshot.groups if selected.intersection(group.members)
+            )
+            if not groups:
+                raise ValidationError("所选对象不属于任何组。")
+            target = groups[0]
+            if len(groups) > 1:
+                labels = [f"{group.name or '匿名组'} ({group.group_id})" for group in groups]
+                chosen, accepted = QInputDialog.getItem(
+                    editor, "解组", "选择要解散的组：", labels, 0, False
+                )
+                if not accepted:
+                    return
+                if chosen not in labels:
+                    raise ValidationError("所选组已变化。")
+                target = groups[labels.index(chosen)]
+            if (
+                self._loaded is not loaded
+                or loaded.document.revision != revision
+                or canvas.collection_session is not session
+                or (
+                    session is not None
+                    and session.checkpoint() != checkpoint
+                    or session is None
+                    and self._collection_view(editor) != snapshot
+                )
+                or frozenset(self._selected_group_refs(editor, snapshot)) != selected
+            ):
+                raise ValidationError("组暂存状态已变化，请重新选择。")
+            self._require_collection_action_ready(editor)
+            session = self._ensure_collection_session(editor)
+            if target not in session.snapshot.groups:
+                raise ValidationError("组暂存状态已变化，请重新选择。")
+            if not canvas.stage_collection_operation(
+                ReplayAppend("drawing.group.remove", 1, {"group_id": target.group_id}, "local")
+            ):
+                raise ValidationError(canvas.message)
+            canvas.message = "已暂存解组；成员对象保留。"
+            editor.status_label.setText(canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            canvas.message = str(exc)
+            editor.status_label.setText(canvas.message)
+
+    def _affine_collection_selection(
+        self,
+        editor: SketchEditorDialog,
+        center: tuple[float, float],
+        *,
+        angle: float | None = None,
+        factor: float | None = None,
+        mirror_end: tuple[float, float] | None = None,
+        copy_source: bool = False,
+    ) -> bool:
+        from mycad.core.drawing_transactions import (
+            prepare_collection_mirror,
+            prepare_collection_mirror_copy,
+            prepare_collection_rotation,
+            prepare_collection_scale,
+        )
+        from mycad.ui.drawing_collection_session import (
+            DrawingCollectionAffinePreview,
+            DrawingCollectionMirrorPreview,
+        )
+
+        session = editor.canvas.collection_session
+        if session is None:
+            return False
+        try:
+            snapshot = session.snapshot
+            seeds = self._selected_group_refs(editor, snapshot)
+            if mirror_end is not None:
+                cached = editor.canvas.collection_commit_preview
+                if (
+                    isinstance(cached, DrawingCollectionMirrorPreview)
+                    and cached.checkpoint == session.checkpoint()
+                    and cached.seeds == frozenset(seeds)
+                    and cached.frame == editor.current_frame()
+                    and cached.start == center
+                    and cached.end == mirror_end
+                    and cached.copy_source == copy_source
+                ):
+                    operation = cached.operation
+                else:
+                    prepare_mirror = (
+                        prepare_collection_mirror_copy if copy_source else prepare_collection_mirror
+                    )
+                    operation = prepare_mirror(
+                        snapshot, seeds, editor.current_frame(), center, mirror_end
+                    )
+            else:
+                if angle is not None:
+                    kind, value = "rotate", angle
+                elif factor is not None:
+                    kind, value = "scale", factor
+                else:
+                    raise ValidationError("缺少组变换参数。")
+                cached = editor.canvas.collection_commit_preview
+                if (
+                    isinstance(cached, DrawingCollectionAffinePreview)
+                    and cached.checkpoint == session.checkpoint()
+                    and cached.seeds == frozenset(seeds)
+                    and cached.frame == editor.current_frame()
+                    and cached.kind == kind
+                    and cached.center == center
+                    and cached.value == value
+                    and cached.copy_source == copy_source
+                ):
+                    operation = cached.operation
+                elif copy_source:
+                    operation = session.prepare_affine_copy(
+                        seeds, editor.current_frame(), center, kind, value
+                    )
+                elif kind == "rotate":
+                    operation = prepare_collection_rotation(
+                        snapshot, seeds, editor.current_frame(), center, value
+                    )
+                else:
+                    operation = prepare_collection_scale(
+                        snapshot, seeds, editor.current_frame(), center, value
+                    )
+            if not editor.canvas.stage_collection_operation(operation):
+                raise ValidationError(editor.canvas.message)
+            previous_inferred = {
+                (sketch.sketch_id, constraint.constraint_id)
+                for sketch in snapshot.sketches
+                for constraint in sketch.constraints
+                if constraint.source == "inferred"
+            }
+            remaining_inferred = {
+                (sketch.sketch_id, constraint.constraint_id)
+                for sketch in session.snapshot.sketches
+                for constraint in sketch.constraints
+                if constraint.source == "inferred"
+            }
+            removed_inferred = len(previous_inferred - remaining_inferred)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(str(exc))
+            return False
+        message = "已暂存组变换；可一次撤销。"
+        if removed_inferred:
+            message += f" 已移除 {removed_inferred} 条失效的自动关系。"
+        editor.canvas.message = message
+        editor.status_label.setText(editor.canvas.message)
+        return True
+
+    def _delete_collection_selection(self, editor: SketchEditorDialog) -> bool:
+        from mycad.core.drawing_transactions import prepare_collection_delete
+
+        session = editor.canvas.collection_session
+        if session is None:
+            return False
+        try:
+            snapshot = session.snapshot
+            extra_constraints: list[tuple[str, str]] = []
+            for identity in editor.canvas.selected_constraint_ids:
+                dimension_refs = {
+                    ref
+                    for ref in editor.canvas.selected_dimension_refs
+                    if ref.object_id == identity
+                }
+                if dimension_refs:
+                    for ref in dimension_refs:
+                        if not any(
+                            sketch.sketch_id == ref.sketch_id
+                            and any(
+                                constraint.constraint_id == ref.object_id
+                                and constraint.kind in DIMENSION_KINDS
+                                for constraint in sketch.constraints
+                            )
+                            for sketch in snapshot.sketches
+                        ):
+                            raise ValidationError("所选尺寸不存在或身份已变化。")
+                    continue
+                matches = [
+                    (sketch, constraint)
+                    for sketch in snapshot.sketches
+                    for constraint in sketch.constraints
+                    if constraint.constraint_id == identity
+                ]
+                if len(matches) != 1:
+                    raise ValidationError("所选约束不存在或身份不唯一。")
+                sketch, constraint = matches[0]
+                if constraint.kind not in DIMENSION_KINDS:
+                    if sketch.sketch_id != editor.draft_sketch_id and constraint.kind != "tangent":
+                        raise ValidationError("已保存草图中的此类约束暂不支持删除。")
+                    extra_constraints.append((sketch.sketch_id, identity))
+            seeds = self._selected_group_refs(
+                editor,
+                snapshot,
+                excluded_constraint_ids=frozenset(identity for _, identity in extra_constraints),
+            )
+            operation = prepare_collection_delete(
+                snapshot, seeds, extra_constraints=tuple(sorted(extra_constraints))
+            )
+            if not editor.canvas.stage_collection_operation(operation):
+                raise ValidationError(editor.canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            editor.canvas.message = str(exc)
+            editor.status_label.setText(str(exc))
+            return False
+        editor.status_label.setText("已暂存组删除；可一次撤销。")
+        return True
+
+    def _preview_collection_mirror(
+        self,
+        editor: SketchEditorDialog,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        *,
+        copy_source: bool,
+    ) -> DrawingCollectionMirrorPreview:
+        from mycad.core.drawing_collection_preview import collection_preview_payload
+        from mycad.core.drawing_transactions import (
+            prepare_collection_mirror,
+            prepare_collection_mirror_copy,
+        )
+        from mycad.ui.drawing_collection_session import DrawingCollectionMirrorPreview
+
+        session = editor.canvas.collection_session
+        if session is None:
+            raise ValidationError("二维暂存会话不可用。")
+        before = session.snapshot
+        seeds = self._selected_group_refs(editor, before)
+        prepare = prepare_collection_mirror_copy if copy_source else prepare_collection_mirror
+        operation = prepare(before, seeds, editor.current_frame(), start, end)
+        return DrawingCollectionMirrorPreview(
+            session.checkpoint(),
+            frozenset(seeds),
+            editor.current_frame(),
+            start,
+            end,
+            copy_source,
+            operation,
+            collection_preview_payload(before, session.preview_operation(operation)),
+        )
+
+    def _preview_collection_affine(
+        self,
+        editor: SketchEditorDialog,
+        kind: str,
+        center: tuple[float, float],
+        value: float,
+        *,
+        copy_source: bool = False,
+    ) -> DrawingCollectionAffinePreview:
+        from mycad.core.drawing_collection_preview import collection_preview_payload
+        from mycad.core.drawing_transactions import (
+            prepare_collection_rotation,
+            prepare_collection_scale,
+        )
+        from mycad.ui.drawing_collection_session import DrawingCollectionAffinePreview
+
+        session = editor.canvas.collection_session
+        if session is None:
+            raise ValidationError("二维暂存会话不可用。")
+        before = session.snapshot
+        seeds = self._selected_group_refs(editor, before)
+        if copy_source:
+            operation = session.prepare_affine_copy(
+                seeds, editor.current_frame(), center, kind, value
+            )
+        elif kind == "rotate":
+            operation = prepare_collection_rotation(
+                before, seeds, editor.current_frame(), center, value
+            )
+        elif kind == "scale":
+            operation = prepare_collection_scale(
+                before, seeds, editor.current_frame(), center, value
+            )
+        else:
+            raise ValidationError("不支持的组预览变换。")
+        return DrawingCollectionAffinePreview(
+            session.checkpoint(),
+            frozenset(seeds),
+            editor.current_frame(),
+            kind,
+            center,
+            value,
+            copy_source,
+            operation,
+            collection_preview_payload(before, session.preview_operation(operation)),
+        )
+
+    def _preview_collection_transform(
+        self,
+        editor: SketchEditorDialog,
+        displacement: tuple[float, float],
+        *,
+        copy_source: bool,
+    ) -> DrawingCollectionTransformPreview:
+        from mycad.core.drawing_collection_preview import collection_preview_payload
+        from mycad.core.drawing_transactions import (
+            prepare_collection_copy,
+            prepare_collection_translation,
+        )
+        from mycad.ui.drawing_collection_session import DrawingCollectionTransformPreview
+
+        canvas = editor.canvas
+        session = canvas.collection_session
+        if session is None:
+            raise ValidationError("二维暂存会话不可用。")
+        before = session.snapshot
+        seeds = self._selected_group_refs(editor, before)
+        has_attached = any(
+            item.leader_attachment is not None or item.leader_annotation_attachment is not None
+            for item in before.frames
+        ) or any(
+            item.attachment is not None or item.annotation_attachment is not None
+            for item in before.datums
+        )
+        if has_attached and not copy_source:
+            operation = session.prepare_attached_move(seeds, editor.current_frame(), displacement)
+        elif copy_source:
+            tools = canvas.geometric_tolerance_tools
+            operation = prepare_collection_copy(
+                before,
+                seeds,
+                editor.current_frame(),
+                displacement,
+                datum_relayout=(
+                    (lambda datum: tools.relayout_recorded_datum(datum, before.text_styles))
+                    if tools is not None
+                    else None
+                ),
+            )
+        else:
+            operation = prepare_collection_translation(
+                before, seeds, editor.current_frame(), displacement
+            )
+        payload = collection_preview_payload(before, session.preview_operation(operation))
+        return DrawingCollectionTransformPreview(
+            session.checkpoint(),
+            frozenset(seeds),
+            editor.current_frame(),
+            displacement,
+            copy_source,
+            operation,
+            payload,
+        )
+
+    def _move_collection_geometry(
+        self,
+        editor: SketchEditorDialog,
+        identities: tuple[str, ...],
+        displacement: tuple[float, float],
+        *,
+        copy_source: bool = False,
+        annotation_seeds: tuple[tuple[str, str], ...] = (),
+    ) -> bool:
+        from mycad.core.drawing_groups import DrawingObjectRef, expand_group_selection
+        from mycad.core.drawing_transactions import (
+            prepare_collection_copy,
+            prepare_collection_translation,
+        )
+        from mycad.ui.drawing_collection_session import DrawingCollectionTransformPreview
+
+        canvas = editor.canvas
+        session = canvas.collection_session
+        if session is None:
+            return False
+        copy_omits_constraints = False
+        try:
+            snapshot = session.snapshot
+            if not annotation_seeds:
+                annotation_seeds = tuple(
+                    (item.kind, item.object_id)
+                    for item in self._selected_group_refs(editor, snapshot)
+                    if item.kind in {"tolerance", "datum", "reference_dimension"}
+                )
+            catalog = [
+                DrawingObjectRef("geometry", entity.entity_id, sketch.sketch_id)
+                for sketch in snapshot.sketches
+                for entity in sketch.entities
+            ]
+            catalog.extend(
+                DrawingObjectRef("dimension", constraint.constraint_id, sketch.sketch_id)
+                for sketch in snapshot.sketches
+                for constraint in sketch.constraints
+                if constraint.kind in DIMENSION_KINDS
+            )
+            catalog.extend(DrawingObjectRef("text", item.text_id) for item in snapshot.texts)
+            catalog.extend(DrawingObjectRef("raster", item.image_id) for item in snapshot.rasters)
+            catalog.extend(
+                DrawingObjectRef("block_instance", item.instance_id)
+                for item in snapshot.block_instances
+            )
+            catalog.extend(DrawingObjectRef("tolerance", item.frame_id) for item in snapshot.frames)
+            catalog.extend(DrawingObjectRef("datum", item.datum_id) for item in snapshot.datums)
+            catalog.extend(
+                DrawingObjectRef("reference_dimension", item.dimension_id)
+                for item in snapshot.reference_dimensions
+            )
+            seeds: list[DrawingObjectRef] = []
+            for identity in dict.fromkeys(identities):
+                picked = {
+                    item
+                    for item in canvas.selected_geometry_refs
+                    if item.object_id == identity and item in catalog
+                }
+                if picked:
+                    seeds.extend(sorted(picked, key=lambda item: item.sketch_id or ""))
+                    continue
+                matches = [
+                    item
+                    for item in catalog
+                    if item.kind == "geometry" and item.object_id == identity
+                ]
+                if len(matches) != 1:
+                    raise ValidationError("选择的对象身份不存在或不唯一。")
+                seeds.append(matches[0])
+            for identity in canvas.selected_constraint_ids:
+                picked = {
+                    item
+                    for item in canvas.selected_dimension_refs
+                    if item.object_id == identity and item in catalog
+                }
+                if picked:
+                    seeds.extend(sorted(picked, key=lambda item: item.sketch_id or ""))
+                    continue
+                matches = [
+                    item
+                    for item in catalog
+                    if item.kind == "dimension" and item.object_id == identity
+                ]
+                if len(matches) != 1:
+                    raise ValidationError("选择的尺寸不存在或身份不唯一。")
+                seeds.append(matches[0])
+            extra = (
+                *(DrawingObjectRef("raster", identity) for identity in canvas.selected_raster_ids),
+                *(
+                    DrawingObjectRef("block_instance", identity)
+                    for identity in canvas.selected_block_instance_ids
+                ),
+                *(
+                    DrawingObjectRef("text", identity)
+                    for identity in (
+                        canvas.text_tools.selected_ids if canvas.text_tools is not None else ()
+                    )
+                ),
+                *(DrawingObjectRef(kind, identity) for kind, identity in annotation_seeds),
+            )
+            if any(catalog.count(item) != 1 for item in extra):
+                raise ValidationError("选择的文字、图片或标注已变化。")
+            seeds.extend(extra)
+            if copy_source:
+                effective = expand_group_selection(seeds, snapshot.groups)
+                geometry = {
+                    (item.sketch_id, item.object_id)
+                    for item in effective
+                    if item.kind == "geometry"
+                }
+                dimensions = {
+                    (item.sketch_id, item.object_id)
+                    for item in effective
+                    if item.kind == "dimension"
+                }
+                copy_omits_constraints = any(
+                    (sketch.sketch_id, constraint.constraint_id) not in dimensions
+                    and any(
+                        (sketch.sketch_id, ref.entity_id) in geometry
+                        for ref in constraint.references
+                    )
+                    for sketch in snapshot.sketches
+                    for constraint in sketch.constraints
+                ) or any(
+                    sum(
+                        (ref.sketch_id, ref.entity_id) in geometry
+                        for ref in (relation.first, relation.second)
+                    )
+                    == 1
+                    for relation in snapshot.cross_tangencies
+                )
+            has_attached = any(
+                item.leader_attachment is not None or item.leader_annotation_attachment is not None
+                for item in snapshot.frames
+            ) or any(
+                item.attachment is not None or item.annotation_attachment is not None
+                for item in snapshot.datums
+            )
+            cached = canvas.collection_commit_preview
+            if (
+                isinstance(cached, DrawingCollectionTransformPreview)
+                and cached.checkpoint == session.checkpoint()
+                and cached.seeds == frozenset(seeds)
+                and cached.frame == editor.current_frame()
+                and cached.displacement == displacement
+                and cached.copy_source == copy_source
+            ):
+                operation = cached.operation
+            elif has_attached and not copy_source:
+                operation = session.prepare_attached_move(
+                    tuple(seeds), editor.current_frame(), displacement
+                )
+            elif copy_source:
+                tools = canvas.geometric_tolerance_tools
+                operation = prepare_collection_copy(
+                    snapshot,
+                    tuple(seeds),
+                    editor.current_frame(),
+                    displacement,
+                    datum_relayout=(
+                        (lambda datum: tools.relayout_recorded_datum(datum, snapshot.text_styles))
+                        if tools is not None
+                        else None
+                    ),
+                )
+            else:
+                operation = prepare_collection_translation(
+                    snapshot, tuple(seeds), editor.current_frame(), displacement
+                )
+            previous_position = canvas.history_position
+            if not canvas.stage_collection_operation(operation):
+                raise ValidationError(canvas.message)
+        except (KeyError, ValueError, ValidationError) as exc:
+            if copy_source:
+                canvas.finish_collection_copy(None)
+            canvas.message = str(exc) + (
+                "；可以重新指定目标点。"
+                if copy_source and canvas.active_transform == "copy"
+                else ""
+            )
+            editor.status_label.setText(canvas.message)
+            return False
+        if copy_source:
+            canvas.finish_collection_copy(previous_position)
+        message = "已暂存组移动；可逐步撤销。"
+        if copy_source:
+            if canvas.active_transform == "copy":
+                message = canvas.message
+                if copy_omits_constraints:
+                    message += " 部分约束未复制。"
+            else:
+                message = (
+                    "已暂存组复制；部分约束未复制，可逐步撤销。"
+                    if copy_omits_constraints
+                    else "已暂存组复制；可逐步撤销。"
+                )
+        canvas.message = message
+        editor.status_label.setText(canvas.message)
+        return True
+
     def _on_drawing_move(
         self,
         editor: SketchEditorDialog,
@@ -3217,7 +6204,9 @@ class MainWindow(QMainWindow):
             self._sync_drawing_layers()
             editor.status_label.setText("文档已变化；所选对象未修改。")
             return
-        if angle is not None and abs((angle + 180.0) % 360.0 - 180.0) <= 1e-10:
+        if angle is not None and (
+            not isfinite(angle) or (not copy_source and remainder(angle, 360.0) == 0.0)
+        ):
             editor.status_label.setText("旋转角度为零；图元未修改。")
             return
         if not isinstance(ids, tuple) or not isinstance(delta, tuple):
@@ -3232,6 +6221,140 @@ class MainWindow(QMainWindow):
             return
         selected = cast("tuple[str, ...]", raw_ids)
         displacement = cast("tuple[float, float]", raw_delta)
+        if editor.canvas.collection_session is not None:
+            if mirror_end is not None:
+                self._affine_collection_selection(
+                    editor, displacement, mirror_end=mirror_end, copy_source=copy_source
+                )
+                return
+            if angle is not None:
+                self._affine_collection_selection(
+                    editor, displacement, angle=angle, copy_source=copy_source
+                )
+                return
+            if scale is not None:
+                self._affine_collection_selection(
+                    editor, displacement, factor=scale, copy_source=copy_source
+                )
+                return
+            if (
+                angle is not None
+                or scale is not None
+                or mirror_end is not None
+                or erase
+                or (copy_source and copy_count != 2)
+            ):
+                if copy_source:
+                    editor.canvas.finish_collection_copy(None)
+                editor.status_label.setText("该暂存变换尚未接入，请先完成或取消暂存。")
+                return
+            self._move_collection_geometry(editor, selected, displacement, copy_source=copy_source)
+            return
+        annotation_appends: tuple[ReplayAppend, ...] = ()
+        tolerance_tools = editor.canvas.geometric_tolerance_tools
+        if erase and tolerance_tools is not None and tolerance_tools.selected_id is not None:
+            identities = tolerance_tools.selected_ids
+            if tolerance_tools.selected_id not in identities:
+                editor.status_label.setText("所选标注已变化；对象未删除。")
+                return
+            frames = [
+                item.frame_id for item in tolerance_tools.frames if item.frame_id in identities
+            ]
+            datums = [
+                item.datum_id for item in tolerance_tools.datums if item.datum_id in identities
+            ]
+            references = [
+                item.dimension_id
+                for item in tolerance_tools.reference_dimensions
+                if item.dimension_id in identities
+            ]
+            if len(frames) + len(datums) + len(references) != len(identities):
+                editor.status_label.setText("所选标注已变化；对象未删除。")
+                return
+            if any(
+                frame.frame_id not in identities
+                and any(
+                    reference.datum_id in datums
+                    for row in frame.rows
+                    for reference in row.datums
+                    if reference.datum_id is not None
+                )
+                for frame in services.kernel.drawing_tolerance_frames
+            ):
+                editor.status_label.setText("基准仍被公差框引用；请先解除引用或同时删除该公差框。")
+                return
+            for annotation in (
+                *services.kernel.drawing_tolerance_frames,
+                *services.kernel.drawing_datum_identifiers,
+            ):
+                if isinstance(annotation, FeatureControlFrame):
+                    identity, attachment = (
+                        annotation.frame_id,
+                        annotation.leader_annotation_attachment,
+                    )
+                else:
+                    identity, attachment = annotation.datum_id, annotation.annotation_attachment
+                if (
+                    identity not in identities
+                    and attachment is not None
+                    and attachment.kind == "frame"
+                    and attachment.object_id in frames
+                ):
+                    editor.status_label.setText(
+                        "公差框仍被标注附着；请先解除附着或同时删除该标注。"
+                    )
+                    return
+                if (
+                    identity not in identities
+                    and attachment is not None
+                    and attachment.kind == "reference_dimension"
+                    and attachment.object_id in references
+                ):
+                    editor.status_label.setText(
+                        "参考尺寸仍被标注附着；请先解除附着或同时删除该标注。"
+                    )
+                    return
+            if frames or datums:
+                annotation_appends += (
+                    ReplayAppend(
+                        "drawing.tolerance.batch",
+                        services.registry.get("drawing.tolerance.batch").version,
+                        {"remove_frames": frames, "remove_datums": datums},
+                        "local",
+                    ),
+                )
+            if references:
+                annotation_appends += (
+                    ReplayAppend(
+                        "drawing.reference_dimensions.batch",
+                        services.registry.get("drawing.reference_dimensions.batch").version,
+                        {"remove": references},
+                        "local",
+                    ),
+                )
+        if erase:
+            removed_dimensions = set(editor.canvas.selected_constraint_ids)
+            removed_dimensions.update(
+                constraint.constraint_id
+                for sketch in services.kernel.sketches
+                for constraint in sketch.constraints
+                if constraint.kind in DIMENSION_KINDS
+                and any(reference.entity_id in selected for reference in constraint.references)
+            )
+            selected_annotations: set[str] = (
+                tolerance_tools.selected_ids
+                if tolerance_tools is not None and tolerance_tools.selected_id is not None
+                else set()
+            )
+            if _dimensions_have_unselected_tolerance_attachment(
+                services.kernel.sketches,
+                services.kernel.drawing_tolerance_frames,
+                services.kernel.drawing_datum_identifiers,
+                removed_dimensions,
+                selected_annotations,
+            ):
+                editor.status_label.setText("草图尺寸仍被标注附着；请先解除附着或同时删除该标注。")
+                return
         image_ids: frozenset[str] = frozenset(editor.canvas.selected_raster_ids)
         images: tuple[DrawingRaster, ...] = ()
         if image_ids:
@@ -3265,9 +6388,67 @@ class MainWindow(QMainWindow):
             if angle is not None
             else "移动"
         )
+        text_tools = editor.canvas.text_tools
+        selected_texts = text_tools.selected() if text_tools is not None else ()
+        if text_tools is not None and text_tools.selection_error():
+            editor.status_label.setText(text_tools.selection_error())
+            return
+        if selected_texts and (
+            editor.canvas.mixed_move is not None
+            or (
+                (editor.canvas.pending_cross_tangencies or editor.canvas.pending_associative_arrays)
+                and not erase
+            )
+        ):
+            editor.status_label.setText("请先完成关联草稿，再变换文字与图形。")
+            return
+        text_batch: dict[str, object] | None = None
+        if selected_texts:
+            changed_texts: list[DrawingText] = []
+            try:
+                if not erase:
+                    for text in selected_texts:
+                        if mirror_end is not None:
+                            changed_texts.append(mirror_text(text, displacement, mirror_end))
+                        elif angle is not None:
+                            changed_texts.append(rotate_text(text, angle, displacement))
+                        elif scale is not None:
+                            changed_texts.append(
+                                scale_text(
+                                    text, scale, displacement, services.kernel.drawing_text_styles
+                                )
+                            )
+                        else:
+                            for index in range(1, copy_count if copy_source else 2):
+                                changed_texts.append(
+                                    move_text(
+                                        text, (displacement[0] * index, displacement[1] * index)
+                                    )
+                                )
+                if copy_source:
+                    changed_texts = [replace(text, text_id=uuid4().hex) for text in changed_texts]
+                text_batch = {
+                    "add": [text.to_mapping() for text in changed_texts] if copy_source else [],
+                    "update": [] if copy_source else [text.to_mapping() for text in changed_texts],
+                    "remove": [text.text_id for text in selected_texts] if erase else [],
+                }
+            except ValueError as exc:
+                editor.status_label.setText(str(exc))
+                return
         draft_ids = tuple(
             entity.entity_id for entity in editor.canvas.entities if entity.entity_id in selected
         )
+        if annotation_appends and editor.canvas.mixed_move is not None:
+            editor.status_label.setText("请先完成暂存变换，再同时删除图元和标注。")
+            return
+        if (
+            annotation_appends
+            and draft_ids
+            and (editor.canvas.pending_cross_tangencies or editor.canvas.pending_associative_arrays)
+            and not erase
+        ):
+            editor.status_label.setText("请先完成暂存关联，再同时删除图元和标注。")
+            return
         draft_copy_omits_constraints = (
             copy_source and bool(draft_ids) and editor.canvas.selected_draft_constraints_exist()
         )
@@ -3275,6 +6456,7 @@ class MainWindow(QMainWindow):
             editor.canvas.selected_pending_copy_omissions() if copy_source else (False, False)
         )
         draft_candidate: tuple[SketchEntity, ...] | None = None
+        draft_pending_arrays: tuple[AssociativeRectArray, ...] | None = None
         draft_remove_constraint_ids: frozenset[str] = frozenset()
         if (
             image_ids
@@ -3376,12 +6558,13 @@ class MainWindow(QMainWindow):
             or (scale is not None and pending_source_ids.intersection(selected))
         ):
             can_transform_three = bool(
-                image_ids
+                (image_ids or selected_texts or annotation_appends)
                 and draft_ids
                 and editor.canvas.mixed_move is None
                 and (
                     copy_source
                     or preserve_pending_transform
+                    or erase
                     or not (
                         editor.canvas.pending_cross_tangencies
                         or editor.canvas.pending_associative_arrays
@@ -3434,11 +6617,55 @@ class MainWindow(QMainWindow):
                     draft_remove_constraint_ids = frozenset(c.constraint_id for c in affected)
                 try:
                     if erase:
-                        draft_candidate = tuple(
-                            entity
-                            for entity in editor.canvas.entities
-                            if entity.entity_id not in draft_ids
-                        )
+                        if editor.canvas.pending_associative_arrays:
+                            member_ids = {
+                                member.target.entity_id
+                                for array in editor.canvas.pending_associative_arrays
+                                for member in array.members
+                                if member.erased_index is None
+                            } | {
+                                output.target.entity_id
+                                for array in editor.canvas.pending_associative_arrays
+                                for output in array.extra_outputs
+                            }
+                            if any(
+                                draft_tangent_reference(target).entity_id
+                                in set(draft_ids) & member_ids
+                                and draft_tangent_reference(source).entity_id not in selected
+                                for source, target in editor.canvas.pending_cross_tangencies
+                            ):
+                                raise ValueError("阵列成员仍有对象相切关系；图元未修改。")
+                            states = editor.dimension_sources()
+                            targets = tuple(
+                                ArrayEntityRef(states[0].sketch_id, identity)
+                                for identity in draft_ids
+                            )
+                            requested = replace(
+                                states[0],
+                                constraints=tuple(
+                                    item
+                                    for item in states[0].constraints
+                                    if item.constraint_id
+                                    not in editor.canvas.selected_constraint_ids
+                                ),
+                            )
+                            stripped = strip_erased_member_dimensions(
+                                states, (requested, *states[1:]), targets
+                            )
+                            proposed, draft_pending_arrays = erase_drawing_entities(
+                                stripped,
+                                tuple(editor.canvas.pending_associative_arrays),
+                                targets,
+                            )
+                            if proposed[1:] != states[1:]:
+                                raise ValueError("暂存阵列删除会修改其他草图；对象未删除。")
+                            draft_candidate = proposed[0].entities
+                        else:
+                            draft_candidate = tuple(
+                                entity
+                                for entity in editor.canvas.entities
+                                if entity.entity_id not in draft_ids
+                            )
                     elif mirror_end is not None:
                         source = tuple(editor.canvas.entities)
                         if copy_source:
@@ -3498,7 +6725,7 @@ class MainWindow(QMainWindow):
                     editor.canvas.validate_draft_constraint_edits(
                         draft_candidate, removed_constraint_ids=draft_remove_constraint_ids
                     )
-                except ValueError as exc:
+                except (IndexError, KeyError, ValueError) as exc:
                     editor.status_label.setText(str(exc))
                     return
                 if draft_candidate == tuple(editor.canvas.entities):
@@ -3585,7 +6812,7 @@ class MainWindow(QMainWindow):
                 for constraint in sketch.constraints
             )
         )
-        if not sketches or not committed_ids.issubset(
+        if (not sketches and committed_ids) or not committed_ids.issubset(
             entity.entity_id for sketch in sketches for entity in sketch.entities
         ):
             editor.status_label.setText("选择的图元已变化；所选对象保持不变。")
@@ -3618,7 +6845,21 @@ class MainWindow(QMainWindow):
             ]
             owning = [(array, refs) for array, refs in owning if refs]
             if owning:
-                if image_ids:
+                if annotation_appends and selected_constraints and draft_pending_arrays is None:
+                    self._on_delete_drawing_dimensions(
+                        editor,
+                        session_id,
+                        tuple(sorted(selected_constraints)),
+                        annotation_appends=annotation_appends,
+                        text_batch=text_batch,
+                        draft_candidate=draft_candidate,
+                        draft_remove_constraint_ids=draft_remove_constraint_ids,
+                    )
+                    return
+                if selected_texts and not annotation_appends:
+                    editor.status_label.setText("请先单独删除阵列成员，再删除文字。")
+                    return
+                if image_ids and not annotation_appends:
                     editor.status_label.setText("图片与阵列成员暂不能同时删除；对象未修改。")
                     return
                 mixed = len(owning) != 1 or {ref.entity_id for ref in owning[0][1]} != committed_ids
@@ -3633,6 +6874,53 @@ class MainWindow(QMainWindow):
                     for entity in sketch.entities
                     if entity.entity_id in committed_ids
                 )
+                if draft_pending_arrays is not None:
+                    params: dict[str, object] = {"targets": [ref.to_mapping() for ref in refs]}
+                    if not mixed and not includes_extra:
+                        params["array_id"] = owning[0][0].array_id
+                    dimension_revisions: list[dict[str, object]] = []
+                    for sketch in sketches:
+                        remaining = tuple(
+                            item
+                            for item in sketch.constraints
+                            if item.constraint_id not in selected_constraints
+                        )
+                        if remaining != sketch.constraints:
+                            state = replace(sketch, constraints=remaining).to_state_mapping()
+                            dimension_revisions.append(
+                                {
+                                    "sketch_id": sketch.sketch_id,
+                                    "base_state_sha256": sketch.local_state_digest(),
+                                    "entities": state["entities"],
+                                    "constraints": state["constraints"],
+                                }
+                            )
+                    self._submit_drawing_revisions(
+                        editor,
+                        session_id,
+                        dimension_revisions,
+                        any(
+                            isinstance(entity, PointEntity)
+                            for sketch in sketches
+                            for entity in sketch.entities
+                        ),
+                        "删除",
+                        raster_remove_ids=tuple(sorted(image_ids)),
+                        draft_candidate=draft_candidate,
+                        draft_pending_arrays=draft_pending_arrays,
+                        draft_remove_constraint_ids=draft_remove_constraint_ids,
+                        text_batch=text_batch,
+                        annotation_appends=annotation_appends,
+                        extra_appends=(
+                            ReplayAppend(
+                                "drawing.array.erase",
+                                4 if includes_extra else 3 if mixed else 2,
+                                params,
+                                "local",
+                            ),
+                        ),
+                    )
+                    return
                 revision = loaded.document.revision
                 editor.setEnabled(False)
 
@@ -3649,11 +6937,50 @@ class MainWindow(QMainWindow):
                     params: dict[str, object] = {"targets": [ref.to_mapping() for ref in refs]}
                     if not mixed and not includes_extra:
                         params["array_id"] = owning[0][0].array_id
-                    return loaded.bus.execute(
-                        "drawing.array.erase",
-                        params,
-                        "local",
-                        version=4 if includes_extra else 3 if mixed else 2,
+                    version = 4 if includes_extra else 3 if mixed else 2
+                    if not annotation_appends:
+                        return loaded.bus.execute(
+                            "drawing.array.erase", params, "local", version=version
+                        )
+                    candidate = mycad_app.create_replay_candidate(
+                        services, loaded, session_identity=session_id
+                    )
+                    candidate.stage(
+                        ReplayChangeSet(
+                            (),
+                            (
+                                ReplayAppend("drawing.array.erase", version, params, "local"),
+                                *annotation_appends,
+                                *(
+                                    (ReplayAppend("drawing.text.batch", 1, text_batch, "local"),)
+                                    if text_batch is not None
+                                    else ()
+                                ),
+                                *(
+                                    (
+                                        ReplayAppend(
+                                            "drawing.raster.batch",
+                                            2,
+                                            {"action": "remove", "image_ids": sorted(image_ids)},
+                                            "local",
+                                        ),
+                                    )
+                                    if image_ids
+                                    else ()
+                                ),
+                            ),
+                            False,
+                        ),
+                        current_session_identity=session_id,
+                    )
+                    preview = candidate.preview(current_session_identity=session_id)
+                    if preview.state != "succeeded":
+                        raise ValidationError(
+                            preview.failure.reason if preview.failure else "混合删除预览失败。"
+                        )
+                    return candidate.commit(
+                        candidate.authorize_commit(current_session_identity=session_id),
+                        current_session_identity=session_id,
                     )
 
                 def finish_erase(result: ExecutionResult) -> None:
@@ -3669,6 +6996,7 @@ class MainWindow(QMainWindow):
                         editor.status_label.setText(f"删除失败：{result.error}")
                         return
                     editor.canvas.selected_entity_ids.difference_update(committed_ids)
+                    editor.canvas.selected_raster_ids.difference_update(image_ids)
                     editor.layer_history_boundaries[len(loaded.document.commands)] = (
                         editor.canvas.history_position
                     )
@@ -3795,7 +7123,7 @@ class MainWindow(QMainWindow):
                     "constraints": frozen["constraints"],
                 }
             )
-        if not revisions:
+        if not revisions and text_batch is None and not annotation_appends:
             editor.status_label.setText(f"{action}未改变图元。")
             return
         relations = services.kernel.cross_sketch_tangencies
@@ -4092,10 +7420,13 @@ class MainWindow(QMainWindow):
             raster_updates=() if copy_source else tuple(raster_updates),
             raster_additions=tuple(raster_updates) if copy_source else (),
             draft_candidate=draft_candidate,
+            draft_pending_arrays=draft_pending_arrays,
+            text_batch=text_batch,
             draft_remove_constraint_ids=draft_remove_constraint_ids,
             preserve_pending_tangencies=preserve_pending_transform,
             copy_omitted_constraints=copied_without_constraints,
             copy_omitted_array=copied_without_array,
+            annotation_appends=annotation_appends,
         )
 
     def _on_saved_handle_preview(
@@ -4133,10 +7464,22 @@ class MainWindow(QMainWindow):
         frame = editor.current_frame()
         commands = tuple(loaded.document.commands)
         canvas = editor.canvas
+        collection = canvas.collection_session
+        collection_snapshot = None
+        collection_checkpoint = None
+        if collection is not None:
+            try:
+                collection_snapshot = collection.snapshot
+                collection_checkpoint = collection.checkpoint()
+            except ValidationError as exc:
+                canvas.complete_saved_handle_preview(token, point, None, str(exc))
+                return
         previous = canvas.mixed_move
         pairs = tuple(canvas.pending_cross_tangencies)
         mixed: _MixedHandleContext | None = None
-        if previous is not None or pairs or canvas.pending_associative_arrays:
+        if collection is None and (
+            previous is not None or pairs or canvas.pending_associative_arrays
+        ):
             if previous is not None and (
                 previous.source_revision != revision or previous.original_draft.frame != frame
             ):
@@ -4181,6 +7524,8 @@ class MainWindow(QMainWindow):
                 for sketch in (
                     (*mixed.current_saved, mixed.draft)
                     if mixed is not None
+                    else collection_snapshot.sketches
+                    if collection_snapshot is not None
                     else services.kernel.sketches
                 )
                 if any(entity.entity_id == reference.entity_id for entity in sketch.entities)
@@ -4201,9 +7546,22 @@ class MainWindow(QMainWindow):
                     revision,
                     session_id,
                 )
-            original, solved, anchors = mycad_app.prepare_cross_sketch_drag(
-                services, source.sketch_id, reference, local_point
-            )
+            if collection_snapshot is not None:
+                original, solved, anchors = mycad_app.prepare_cross_sketch_drag_from_state(
+                    services,
+                    collection_snapshot.sketches,
+                    collection_snapshot.cross_tangencies,
+                    source.sketch_id,
+                    reference,
+                    local_point,
+                )
+                from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+                require_independent_geometry_edits(collection_snapshot.groups, original, solved)
+            else:
+                original, solved, anchors = mycad_app.prepare_cross_sketch_drag(
+                    services, source.sketch_id, reference, local_point
+                )
             before = {sketch.sketch_id: sketch for sketch in original}
             overlay: list[tuple[SketchEntity, SketchLayer]] = []
             for sketch in solved:
@@ -4214,7 +7572,9 @@ class MainWindow(QMainWindow):
                         continue
                     if isinstance(entity, PolylineEntity):
                         view_entity = project_polyline_entity(entity, sketch.frame, frame)
-                    elif isinstance(entity, RectangleEntity | PointEntity | SplineEntity):
+                    elif isinstance(
+                        entity, RectangleEntity | PointEntity | SplineEntity | EllipseEntity
+                    ):
                         view_entity = project_coplanar_entity(entity, sketch.frame, frame)
                     else:
                         view_entity = project_tangent_entity(entity, sketch.frame, frame)
@@ -4224,7 +7584,13 @@ class MainWindow(QMainWindow):
                             sketch.layers.get(entity.layer_name),
                         )
                     )
-            return SavedHandlePreview(original, solved, anchors, tuple(overlay))
+            return SavedHandlePreview(
+                original,
+                solved,
+                anchors,
+                tuple(overlay),
+                collection_checkpoint=collection_checkpoint,
+            )
 
         def finish(result: ExecutionResult) -> None:
             if (
@@ -4233,6 +7599,16 @@ class MainWindow(QMainWindow):
                 or self._session_id != session_id
             ):
                 return
+            if collection is not None:
+                try:
+                    if (
+                        canvas.collection_session is not collection
+                        or collection.checkpoint() != collection_checkpoint
+                    ):
+                        raise ValidationError("暂存内容已变化，请重新拖动。")
+                except ValidationError as exc:
+                    canvas.cancel_saved_handle_drag(str(exc), token=token)
+                    return
             preview = result.value if isinstance(result.value, SavedHandlePreview) else None
             editor.canvas.complete_saved_handle_preview(token, point, preview, result.error)
 
@@ -4289,7 +7665,9 @@ class MainWindow(QMainWindow):
                     continue
                 if isinstance(entity, PolylineEntity):
                     view_entity = project_polyline_entity(entity, sketch.frame, frame)
-                elif isinstance(entity, RectangleEntity | PointEntity | SplineEntity):
+                elif isinstance(
+                    entity, RectangleEntity | PointEntity | SplineEntity | EllipseEntity
+                ):
                     view_entity = project_coplanar_entity(entity, sketch.frame, frame)
                 else:
                     view_entity = project_tangent_entity(entity, sketch.frame, frame)
@@ -4375,6 +7753,29 @@ class MainWindow(QMainWindow):
                 and self._session_id == session_id
                 and editor.canvas.saved_handle_commit_is_current(token, revision)
             )
+
+        if preview.collection_checkpoint is not None:
+            canvas = editor.canvas
+            collection = canvas.collection_session
+            try:
+                if (
+                    not still_current()
+                    or collection is None
+                    or collection.checkpoint() != preview.collection_checkpoint
+                ):
+                    raise ValidationError("暂存内容已变化，请重新拖动。")
+                revisions = mycad_app.build_tangency_revisions(preview.original, preview.solved)
+                if not canvas.stage_collection_operation(
+                    ReplayAppend(
+                        "drawing.sketch.revise", 79, {"revisions": list(revisions)}, "local"
+                    )
+                ):
+                    raise ValidationError(canvas.message)
+            except (ValidationError, ValueError) as exc:
+                canvas.finish_saved_handle_commit(token, str(exc))
+                return
+            canvas.finish_saved_handle_commit(token, None)
+            return
 
         if preview.mixed_state is not None:
             before = preview.draft_before
@@ -4601,6 +8002,15 @@ class MainWindow(QMainWindow):
         edited: object,
     ) -> None:
         services, loaded = self._services, self._loaded
+        source_sketch_id: str | None = None
+        if isinstance(identity, tuple):
+            raw_identity = cast("tuple[object, ...]", identity)
+            if (
+                len(raw_identity) == 2
+                and isinstance(raw_identity[0], str)
+                and isinstance(raw_identity[1], str)
+            ):
+                identity, source_sketch_id = raw_identity[0], raw_identity[1]
         if (
             services is None
             or loaded is None
@@ -4614,15 +8024,25 @@ class MainWindow(QMainWindow):
         canvas = editor.canvas
 
         def reject(message: str) -> None:
+            canvas.message = message
             if mode == "单点打断":
-                canvas.message = message
                 self.status_command.setText(message)
             editor.status_label.setText(message)
 
         previous = canvas.mixed_move
+        session = canvas.collection_session
+        saved = (
+            tuple(
+                sketch
+                for sketch in session.snapshot.sketches
+                if sketch.sketch_id != editor.draft_sketch_id
+            )
+            if session is not None
+            else services.kernel.sketches
+        )
         if previous is None and (
             canvas.source_context_revision != loaded.document.revision
-            or tuple(editor.dimension_sources()[1:]) != services.kernel.sketches
+            or tuple(editor.dimension_sources()[1:]) != saved
         ):
             self._sync_drawing_layers()
             reject("文档已变化；图元未修改。")
@@ -4634,10 +8054,11 @@ class MainWindow(QMainWindow):
         ):
             reject("文档或工作平面已变化；暂存修改未应用。")
             return
-        current_saved = previous.current_saved if previous else services.kernel.sketches
+        current_saved = previous.current_saved if previous else saved
         candidates = [
             sketch
             for sketch in current_saved
+            if source_sketch_id is None or sketch.sketch_id == source_sketch_id
             if any(entity.entity_id == identity for entity in sketch.entities)
         ]
         if len(candidates) != 1:
@@ -4673,7 +8094,12 @@ class MainWindow(QMainWindow):
             updated_saved = tuple(
                 revised if item.sketch_id == sketch.sketch_id else item for item in current_saved
             )
-            for relation in services.kernel.cross_sketch_tangencies:
+            relations = (
+                session.snapshot.cross_tangencies
+                if session is not None
+                else services.kernel.cross_sketch_tangencies
+            )
+            for relation in relations:
                 for ref in (relation.first, relation.second):
                     if (
                         ref.sketch_id == sketch.sketch_id
@@ -4700,6 +8126,51 @@ class MainWindow(QMainWindow):
         if revised == sketch:
             reject(f"{mode}未改变图元。")
             return
+        if mode in {"单点打断", "分割", "修剪", "延伸"}:
+            from mycad.core.drawing_groups import DrawingObjectRef
+            from mycad.core.drawing_transactions import prepare_grouped_sketch_replacements
+
+            ref = DrawingObjectRef("geometry", identity, sketch.sketch_id)
+            group_snapshot = (
+                canvas.collection_session.snapshot.groups
+                if canvas.collection_session is not None
+                else services.kernel.drawing_groups
+            )
+            grouped = any(ref in group.members for group in group_snapshot)
+            if grouped or canvas.collection_session is not None:
+                if any(group.selectable and ref in group.members for group in group_snapshot):
+                    reject("组选择已启用；请先关闭组选择再编辑单个成员。")
+                    return
+                try:
+                    session = self._ensure_collection_session(editor)
+                    source = next(
+                        item
+                        for item in session.snapshot.sketches
+                        if item.sketch_id == sketch.sketch_id
+                    )
+                    if source != sketch:
+                        raise ValidationError("来源草图已变化，请重新选择。")
+                    replacements = tuple(
+                        DrawingObjectRef("geometry", item.entity_id, sketch.sketch_id)
+                        for item in fragments
+                    )
+                    operation = prepare_grouped_sketch_replacements(
+                        (sketch,),
+                        (revised,),
+                        group_snapshot,
+                        {ref: replacements} if grouped else {},
+                    )
+                    if not canvas.stage_collection_operation(operation):
+                        reject(canvas.message)
+                        return
+                except (ValidationError, ValueError, StopIteration) as exc:
+                    reject(f"{mode}未应用：{exc}")
+                    return
+                canvas.message = (
+                    f"{mode}完成；组成员已更新，可撤销。" if grouped else f"{mode}完成，可撤销。"
+                )
+                editor.status_label.setText(canvas.message)
+                return
         if canvas.entities or previous is not None:
             original_draft = (
                 previous.original_draft
@@ -4772,7 +8243,15 @@ class MainWindow(QMainWindow):
         )
 
     def _on_delete_drawing_dimensions(
-        self, editor: SketchEditorDialog, session_id: int, raw_ids: object
+        self,
+        editor: SketchEditorDialog,
+        session_id: int,
+        raw_ids: object,
+        *,
+        annotation_appends: tuple[ReplayAppend, ...] = (),
+        text_batch: dict[str, object] | None = None,
+        draft_candidate: tuple[SketchEntity, ...] | None = None,
+        draft_remove_constraint_ids: frozenset[str] = frozenset(),
     ) -> None:
         loaded, services = self._loaded, self._services
         if (
@@ -4788,6 +8267,14 @@ class MainWindow(QMainWindow):
         ids = set(cast("tuple[str, ...]", raw_values))
         canvas = editor.canvas
         previous = canvas.mixed_move
+        if annotation_appends and (
+            previous is not None
+            or canvas.pending_cross_tangencies
+            or canvas.pending_associative_arrays
+            or (draft_candidate is None and any(c.constraint_id in ids for c in canvas.constraints))
+        ):
+            editor.status_label.setText("请先完成草稿与暂存关联，再删除阵列尺寸和标注。")
+            return
         image_ids = set(canvas.selected_raster_ids)
         images = tuple(image for image in canvas.drawing_rasters if image.image_id in image_ids)
         if image_ids and (
@@ -4815,7 +8302,27 @@ class MainWindow(QMainWindow):
             editor.status_label.setText("文档已变化；所选对象未删除。")
             return
         originals = previous.current_saved if previous else services.kernel.sketches
+        tools = canvas.geometric_tolerance_tools
+        selected_annotations: set[str] = (
+            tools.selected_ids if tools is not None and annotation_appends else set()
+        )
         entity_ids = set(canvas.selected_entity_ids)
+        removed_dimensions = ids | {
+            constraint.constraint_id
+            for sketch in originals
+            for constraint in sketch.constraints
+            if constraint.kind in DIMENSION_KINDS
+            and any(reference.entity_id in entity_ids for reference in constraint.references)
+        }
+        if _dimensions_have_unselected_tolerance_attachment(
+            originals,
+            services.kernel.drawing_tolerance_frames,
+            services.kernel.drawing_datum_identifiers,
+            removed_dimensions,
+            selected_annotations,
+        ):
+            editor.status_label.setText("草图尺寸仍被标注附着；请先解除附着或同时删除该标注。")
+            return
         if image_ids and any(
             constraint.constraint_id in ids
             or any(ref.entity_id in entity_ids for ref in constraint.references)
@@ -4920,7 +8427,11 @@ class MainWindow(QMainWindow):
             )
             for sketch in originals
         )
-        if (canvas.entities or canvas.constraints or previous is not None) and not image_ids:
+        if (
+            (canvas.entities or canvas.constraints or previous is not None)
+            and not image_ids
+            and not annotation_appends
+        ):
             original_draft = (
                 previous.original_draft
                 if previous
@@ -5034,6 +8545,10 @@ class MainWindow(QMainWindow):
                     if ref.entity_id in entity_ids
                 ),
                 raster_remove_ids=tuple(sorted(image_ids)),
+                annotation_appends=annotation_appends,
+                text_batch=text_batch,
+                draft_candidate=draft_candidate,
+                draft_remove_constraint_ids=draft_remove_constraint_ids,
             )
 
     def _on_saved_drag_trim(
@@ -5083,17 +8598,47 @@ class MainWindow(QMainWindow):
             self._sync_drawing_layers()
             editor.status_label.setText(f"文档或工作平面已变化；{action}未应用。")
             return
-        original = previous.current_saved if previous else services.kernel.sketches
+        original = (
+            previous.current_saved
+            if previous is not None
+            else tuple(
+                sketch
+                for sketch in canvas.collection_session.snapshot.sketches
+                if sketch.sketch_id != editor.draft_sketch_id
+            )
+            if canvas.collection_session is not None
+            else services.kernel.sketches
+        )
         if previous is None and tuple(editor.dimension_sources()[1:]) != original:
             self._sync_drawing_layers()
             editor.status_label.setText(f"文档已变化；{action}未应用。")
             return
-        events = cast("tuple[tuple[str, tuple[SketchEntity, ...]], ...]", raw_events)
+        raw_pairs = cast("tuple[tuple[object, tuple[SketchEntity, ...]], ...]", raw_events)
+        events: list[tuple[str, tuple[SketchEntity, ...]]] = []
+        event_sources: list[str | None] = []
+        for raw_identity, fragments in raw_pairs:
+            if isinstance(raw_identity, str):
+                events.append((raw_identity, fragments))
+                event_sources.append(None)
+            elif isinstance(raw_identity, tuple):
+                parts = cast("tuple[object, ...]", raw_identity)
+                if len(parts) != 2 or not all(isinstance(item, str) for item in parts):
+                    editor.status_label.setText(f"目标身份无效；{action}未应用。")
+                    return
+                identity, owner = parts
+                if not isinstance(identity, str) or not isinstance(owner, str):
+                    return
+                events.append((identity, fragments))
+                event_sources.append(owner)
+            else:
+                editor.status_label.setText(f"目标身份无效；{action}未应用。")
+                return
         current = list(original)
-        for identity, projected in events:
+        for (identity, projected), owner in zip(events, event_sources, strict=True):
             owners = [
                 (index, sketch)
                 for index, sketch in enumerate(current)
+                if owner is None or sketch.sketch_id == owner
                 if any(entity.entity_id == identity for entity in sketch.entities)
             ]
             if len(owners) != 1:
@@ -5141,6 +8686,151 @@ class MainWindow(QMainWindow):
                     editor.status_label.setText(f"{action}无法保留约束；图元未修改：{exc}")
                     return
             current[index] = revised
+        if action in {"拖动修剪", "围栏延伸", "二维倒角", "直线圆角", "偏移删除源"}:
+            from mycad.core.drawing_groups import DrawingObjectRef
+            from mycad.core.drawing_transactions import prepare_grouped_sketch_replacements
+
+            groups = (
+                canvas.collection_session.snapshot.groups
+                if canvas.collection_session is not None
+                else services.kernel.drawing_groups
+            )
+            saved_events = tuple(
+                (identity, tuple(fragment.entity_id for fragment in fragments))
+                for identity, fragments in events
+            )
+            draft_events = canvas.collection_trim_draft_events
+            changed_refs = {
+                member
+                for group in groups
+                for member in group.members
+                if member.kind == "geometry"
+                and (
+                    member.sketch_id == editor.draft_sketch_id
+                    and any(identity == member.object_id for identity, _ in draft_events)
+                    or any(
+                        member.sketch_id == sketch.sketch_id
+                        and any(entity.entity_id == member.object_id for entity in sketch.entities)
+                        for sketch in original
+                    )
+                    and any(
+                        identity == member.object_id
+                        and (owner is None or owner == member.sketch_id)
+                        for (identity, _), owner in zip(saved_events, event_sources, strict=True)
+                    )
+                )
+            }
+            if changed_refs or canvas.collection_session is not None:
+                if any(
+                    group.selectable and changed_refs.intersection(group.members)
+                    for group in groups
+                ):
+                    if action in {"二维倒角", "直线圆角"}:
+                        canvas.finish_fillet_candidate(success=False)
+                    if action == "偏移删除源":
+                        canvas.finish_collection_offset(success=False)
+                    canvas.message = "组选择已启用；请先关闭组选择再编辑单个成员。"
+                    editor.status_label.setText(canvas.message)
+                    return
+                try:
+                    session = canvas.collection_session or self._ensure_collection_session(
+                        editor, allow_offset_completion=action == "偏移删除源"
+                    )
+                    mapping: dict[DrawingObjectRef, tuple[DrawingObjectRef, ...]] = {}
+                    for ref in changed_refs:
+                        if action == "偏移删除源":
+                            existing = {item.entity_id for item in canvas.entities}
+                            added = tuple(
+                                DrawingObjectRef("geometry", item.entity_id, editor.draft_sketch_id)
+                                for item in cast("tuple[SketchEntity, ...]", raw_draft)
+                                if item.entity_id not in existing
+                            )
+                            if len(events) != 1 or not added:
+                                raise ValidationError("无法确定偏移结果的组成员映射。")
+                            mapping[ref] = added
+                            continue
+                        identities = (ref.object_id,)
+                        relevant_events = (
+                            draft_events
+                            if ref.sketch_id == editor.draft_sketch_id
+                            else tuple(
+                                event
+                                for event, owner in zip(saved_events, event_sources, strict=True)
+                                if owner is None or owner == ref.sketch_id
+                            )
+                        )
+                        for identity, fragments in relevant_events:
+                            identities = tuple(
+                                result
+                                for item in identities
+                                for result in (fragments if item == identity else (item,))
+                            )
+                        mapped_refs = tuple(
+                            replace(ref, object_id=item) for item in dict.fromkeys(identities)
+                        )
+                        mapping[ref] = mapped_refs
+                    collection_before: list[Sketch] = []
+                    collection_after: list[Sketch] = []
+                    for before, after in zip(original, current, strict=True):
+                        if before == after:
+                            continue
+                        source = next(
+                            item
+                            for item in session.snapshot.sketches
+                            if item.sketch_id == before.sketch_id
+                        )
+                        if source != before:
+                            raise ValidationError("来源草图已变化，请重新选择。")
+                        collection_before.append(before)
+                        collection_after.append(after)
+                    draft_source = next(
+                        item
+                        for item in session.snapshot.sketches
+                        if item.sketch_id == editor.draft_sketch_id
+                    )
+                    draft_after = replace(
+                        draft_source,
+                        entities=cast("tuple[SketchEntity, ...]", raw_draft),
+                        constraints=cast("tuple[SketchConstraint, ...]", raw_constraints),
+                    )
+                    if draft_after != draft_source:
+                        collection_before.append(draft_source)
+                        collection_after.append(draft_after)
+                    cross_tangencies = (
+                        mycad_app.draft_cross_relations(
+                            current, draft_after, canvas.fillet_pending_cross_tangencies
+                        )
+                        if action == "直线圆角"
+                        else ()
+                    )
+                    operation = prepare_grouped_sketch_replacements(
+                        tuple(collection_before),
+                        tuple(collection_after),
+                        groups,
+                        mapping,
+                        cross_tangencies=cross_tangencies,
+                    )
+                    if not canvas.stage_collection_operation(operation):
+                        raise ValidationError(canvas.message)
+                except (ValidationError, ValueError, StopIteration) as exc:
+                    if action in {"二维倒角", "直线圆角"}:
+                        canvas.finish_fillet_candidate(success=False)
+                    if action == "偏移删除源":
+                        canvas.finish_collection_offset(success=False)
+                    canvas.message = f"{action}未应用：{exc}"
+                    editor.status_label.setText(canvas.message)
+                    return
+                if action in {"二维倒角", "直线圆角"}:
+                    canvas.finish_fillet_candidate(success=True)
+                if action == "偏移删除源":
+                    canvas.finish_collection_offset(success=True)
+                canvas.message = (
+                    f"{action}完成；组成员已更新，可撤销。"
+                    if changed_refs
+                    else f"{action}完成，可撤销。"
+                )
+                editor.status_label.setText(canvas.message)
+                return
         if canvas.entities or raw_draft or previous is not None:
             original_draft = (
                 previous.original_draft
@@ -5218,32 +8908,54 @@ class MainWindow(QMainWindow):
         raster_updates: tuple[DrawingRaster, ...] = (),
         raster_additions: tuple[DrawingRaster, ...] = (),
         draft_candidate: tuple[SketchEntity, ...] | None = None,
+        draft_pending_arrays: tuple[AssociativeRectArray, ...] | None = None,
         draft_constraint_candidate: tuple[SketchConstraint, ...] | None = None,
         dimension_layer_updates: bool = False,
         draft_remove_constraint_ids: frozenset[str] = frozenset(),
         preserve_pending_tangencies: bool = False,
         copy_omitted_constraints: bool = False,
         copy_omitted_array: bool = False,
+        text_batch: dict[str, object] | None = None,
+        annotation_appends: tuple[ReplayAppend, ...] = (),
+        extra_appends: tuple[ReplayAppend, ...] = (),
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
             return
         source_revision = loaded.document.revision
+        annotations_first = bool(extra_appends) or action == "删除"
         has_curves = mycad_app.revisions_include_curved_polylines(revisions)
         has_local_endpoints = mycad_app.revisions_include_local_endpoint_constraints(revisions)
         has_projection_axes = mycad_app.revisions_include_projection_axes(revisions)
         has_dimension_text = mycad_app.revisions_include_dimension_text(revisions)
         has_dimension_styles = mycad_app.revisions_include_dimension_styles(revisions)
+        has_dimension_tolerances = mycad_app.revisions_include_dimension_tolerances(revisions)
         draft_before = editor.canvas.history_position
         draft_entities_before = tuple(editor.canvas.entities)
         draft_constraints_before = tuple(editor.canvas.constraints)
+        draft_tangencies_before = tuple(editor.canvas.pending_cross_tangencies)
+        draft_arrays_before = tuple(editor.canvas.pending_associative_arrays)
         checkpoint = loaded.bus.create_save_checkpoint() if draft_candidate is not None else None
         committed_revision: int | None = None
         editor.setEnabled(False)
 
         def update() -> object:
             nonlocal committed_revision
-            if not revisions and raster_updates:
+            if extra_appends and loaded.document.revision != source_revision:
+                raise ValueError("文档已变化，请重新选择后删除。")
+            text_appends = (
+                (ReplayAppend("drawing.text.batch", 1, text_batch, "local"),)
+                if text_batch is not None
+                else ()
+            )
+            if not revisions and (
+                raster_updates
+                or raster_additions
+                or raster_remove_ids
+                or text_batch is not None
+                or annotation_appends
+                or extra_appends
+            ):
                 candidate = mycad_app.create_replay_candidate(
                     services, loaded, session_identity=session_id
                 )
@@ -5251,17 +8963,30 @@ class MainWindow(QMainWindow):
                     ReplayChangeSet(
                         (),
                         (
-                            ReplayAppend(
-                                "drawing.raster.batch",
-                                1,
-                                {
-                                    "action": "update",
-                                    "images": [
-                                        image.to_mapping(version=2) for image in raster_updates
-                                    ],
-                                },
-                                "local",
+                            *(annotation_appends if annotations_first else ()),
+                            *extra_appends,
+                            *(
+                                (
+                                    ReplayAppend(
+                                        "drawing.raster.batch",
+                                        2,
+                                        {"action": "remove", "image_ids": list(raster_remove_ids)}
+                                        if raster_remove_ids
+                                        else {
+                                            "action": "add" if raster_additions else "update",
+                                            "images": [
+                                                image.to_mapping(version=2)
+                                                for image in (raster_additions or raster_updates)
+                                            ],
+                                        },
+                                        "local",
+                                    ),
+                                )
+                                if raster_remove_ids or raster_additions or raster_updates
+                                else ()
                             ),
+                            *text_appends,
+                            *(annotation_appends if not annotations_first else ()),
                         ),
                         False,
                         8 if loaded.document.archive_version < 8 else None,
@@ -5289,14 +9014,76 @@ class MainWindow(QMainWindow):
                 state["entities"] = revision["entities"]
                 state["constraints"] = revision["constraints"]
                 updated.append(Sketch.from_mapping(state))
+            topology_maps, base_rebind, array_proof_version = (
+                mycad_app.exact_attached_polyline_reorder_maps(services, original, updated)
+                if not (
+                    removed_relations
+                    or erased_members
+                    or raster_remove_ids
+                    or raster_updates
+                    or raster_additions
+                    or dimension_layer_updates
+                    or draft_candidate is not None
+                    or text_batch is not None
+                    or annotation_appends
+                )
+                else ((), False, 0)
+            )
             existing = tuple(
                 relation
                 for relation in services.kernel.cross_sketch_tangencies
                 if relation.relation_id not in removed_relations
             )
-            rebound, rebind_version = rebind_committed_tangencies_for_edit(
-                original, tuple(updated), existing
+            special_relations = ()
+            if array_proof_version >= 79:
+                from mycad.core.geometric_tolerance_topology import (
+                    PolylineTopologyMap,
+                    rebind_proven_array_tangencies,
+                )
+
+                mapped = {
+                    (cast("str", item["sketch_id"]), mapping.entity_id): mapping
+                    for item in topology_maps
+                    for mapping in (PolylineTopologyMap.from_mapping(item["mapping"]),)
+                }
+                members = {
+                    (ref.sketch_id, ref.entity_id)
+                    for array in services.kernel.associative_arrays
+                    for ref in (
+                        *(member.target for member in array.members),
+                        *(output.target for output in array.extra_outputs),
+                    )
+                }
+                special_relations = tuple(
+                    relation
+                    for relation in existing
+                    if any(
+                        (ref.sketch_id, ref.entity_id) in mapped
+                        for ref in (relation.first, relation.second)
+                    )
+                    and any(
+                        (ref.sketch_id, ref.entity_id) in members
+                        for ref in (relation.first, relation.second)
+                    )
+                )
+                special_rebound = rebind_proven_array_tangencies(
+                    original,
+                    tuple(updated),
+                    special_relations,
+                    mapped,
+                    allow_reversed_segments=True,
+                )
+                special_by_id = {item.relation_id: item for item in special_rebound}
+            else:
+                special_by_id = {}
+            ordinary = tuple(item for item in existing if item.relation_id not in special_by_id)
+            ordinary_rebound, rebind_version = rebind_committed_tangencies_for_edit(
+                original, tuple(updated), ordinary
             )
+            rebound_by_id = {
+                item.relation_id: item for item in (*ordinary_rebound, *special_by_id.values())
+            }
+            rebound = tuple(rebound_by_id[item.relation_id] for item in existing)
             replacements = tuple(
                 after for before, after in zip(existing, rebound, strict=True) if before != after
             )
@@ -5375,6 +9162,12 @@ class MainWindow(QMainWindow):
                 for before in sketch.constraints
                 for after in updated_by_id[sketch.sketch_id].constraints
             )
+            has_curve_point_ids = any(
+                isinstance(entity, PolylineEntity | SplineEntity) and entity.point_ids
+                for sketch in updated
+                if sketch.sketch_id in revisions_by_id
+                for entity in sketch.entities
+            )
             batch = (
                 dimension_layer_updates
                 or bool(raster_remove_ids or raster_updates or raster_additions)
@@ -5386,8 +9179,17 @@ class MainWindow(QMainWindow):
                 or bool(replacements)
                 or bool(erased_members)
                 or has_inferred_rebind
+                or bool(topology_maps)
+                or has_curve_point_ids
+                or bool(extra_appends)
             )
+            preserve_normal_side = mycad_app.revisions_require_normal_side_preservation(
+                services, revisions
+            )
+            batch = batch or preserve_normal_side
             params: dict[str, object] = {"revisions": revisions} if batch else dict(revisions[0])
+            if topology_maps:
+                params["polyline_topology_maps"] = list(topology_maps)
             if raster_remove_ids:
                 params["raster_batch"] = {"action": "remove", "image_ids": list(raster_remove_ids)}
             elif raster_updates:
@@ -5427,7 +9229,21 @@ class MainWindow(QMainWindow):
                 for constraint in sketch.constraints
             )
             version = (
-                52
+                max(64, array_proof_version)
+                if has_curve_point_ids
+                else 63
+                if raster_remove_ids or raster_updates or raster_additions
+                else array_proof_version
+                if array_proof_version
+                else 58
+                if base_rebind
+                else 57
+                if topology_maps
+                else 56
+                if preserve_normal_side
+                else (53 if batch else 9)
+                if has_dimension_tolerances
+                else 52
                 if dimension_layer_updates
                 else 51
                 if has_dimension_styles
@@ -5493,12 +9309,16 @@ class MainWindow(QMainWindow):
                 ReplayChangeSet(
                     (),
                     (
+                        *(annotation_appends if annotations_first else ()),
                         ReplayAppend(
                             "drawing.sketch.revise" if batch else "sketch.revise",
                             version,
                             params,
                             "local",
                         ),
+                        *extra_appends,
+                        *text_appends,
+                        *(annotation_appends if not annotations_first else ()),
                     ),
                     False,
                     8
@@ -5507,6 +9327,8 @@ class MainWindow(QMainWindow):
                         or raster_remove_ids
                         or raster_updates
                         or raster_additions
+                        or version >= 64
+                        or extra_appends
                     )
                     and loaded.document.archive_version < 8
                     else 6
@@ -5538,9 +9360,12 @@ class MainWindow(QMainWindow):
                 return
             if checkpoint is not None:
                 if result.error is not None:
-                    loaded.bus.restore_save_checkpoint(
-                        checkpoint, expected_revision=source_revision
-                    )
+                    if loaded.document.revision == source_revision:
+                        loaded.bus.restore_save_checkpoint(
+                            checkpoint, expected_revision=source_revision
+                        )
+                    else:
+                        loaded.bus.release_save_checkpoint(checkpoint)
                 else:
                     previous_layer_redo = list(editor.layer_history_redo)
                     try:
@@ -5550,6 +9375,10 @@ class MainWindow(QMainWindow):
                             editor.canvas.history_position == draft_before
                             and tuple(editor.canvas.entities) == draft_entities_before
                             and tuple(editor.canvas.constraints) == draft_constraints_before
+                            and tuple(editor.canvas.pending_cross_tangencies)
+                            == draft_tangencies_before
+                            and tuple(editor.canvas.pending_associative_arrays)
+                            == draft_arrays_before
                             and draft_candidate is not None
                         )
                         if draft_unchanged and draft_constraint_candidate is not None:
@@ -5571,6 +9400,7 @@ class MainWindow(QMainWindow):
                                     remove_dependent_constraints=action == "删除",
                                     remove_constraint_ids=draft_remove_constraint_ids,
                                     preserve_pending_tangencies=preserve_pending_tangencies,
+                                    pending_arrays=draft_pending_arrays,
                                 )
                             )
                     except Exception as exc:
@@ -6230,7 +10060,7 @@ class MainWindow(QMainWindow):
                         "images": [item.to_mapping(version=2) for item in raster_updates],
                     },
                     "local",
-                    version=1,
+                    version=2,
                 )
                 new_revision = loaded.document.revision
                 canvas.rebind_restored_source(old_revision, new_revision)
@@ -6288,6 +10118,7 @@ class MainWindow(QMainWindow):
             canvas.mixed_move
             or canvas.pending_cross_tangencies
             or canvas.pending_associative_arrays
+            or canvas.collection_session is not None
         ):
             editor.status_label.setText("请先完成或撤销当前暂存关联编辑，再更改构造几何。")
             return
@@ -6392,6 +10223,7 @@ class MainWindow(QMainWindow):
             canvas.mixed_move
             or canvas.pending_cross_tangencies
             or canvas.pending_associative_arrays
+            or canvas.collection_session is not None
         ):
             editor.status_label.setText("请先完成或撤销当前暂存关联编辑，再更改图层。")
             return
@@ -6574,6 +10406,9 @@ class MainWindow(QMainWindow):
         params = data.get("params")
         if not isinstance(params, dict):
             return
+        if editor.canvas.collection_session is not None:
+            editor.status_label.setText("请先完成或取消当前暂存，再修改图层。")
+            return
         params = cast("dict[str, object]", params)
         migrate_draft = data.get("migrate_draft") is True
         commands = tuple(loaded.document.commands)
@@ -6625,6 +10460,61 @@ class MainWindow(QMainWindow):
             self._sync_drawing_layers()
             editor.status_label.setText("几何工作线程忙碌，请稍后修改图层。")
 
+    def _prepare_collection_dimension(
+        self,
+        snapshot: DrawingCollectionSnapshot,
+        sketch: Sketch,
+        constraint: SketchConstraint,
+    ) -> tuple[ReplayAppend, SketchConstraintSolveResult, tuple[Sketch, ...]]:
+        services = self._services
+        if services is None:
+            raise ValidationError("图纸不可用。")
+        if (
+            next((item for item in snapshot.sketches if item.sketch_id == sketch.sketch_id), None)
+            != sketch
+        ):
+            raise ValidationError("暂存草图已变化，请重新拾取尺寸。")
+        linked = any(
+            sketch.sketch_id in (item.first.sketch_id, item.second.sketch_id)
+            for item in snapshot.cross_tangencies
+        )
+        if linked:
+            params, solved, changes = mycad_app.prepare_cross_sketch_dimension_from_state(
+                snapshot.sketches, snapshot.cross_tangencies, sketch.sketch_id, constraint
+            )
+            from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+            require_independent_geometry_edits(snapshot.groups, snapshot.sketches, solved)
+            target = next(item for item in solved if item.sketch_id == sketch.sketch_id)
+            return (
+                ReplayAppend("drawing.sketch.revise", 79, params, "local"),
+                SketchConstraintSolveResult("success", target, None, branch_changes=changes),
+                tuple(item for item in solved if item.sketch_id != sketch.sketch_id),
+            )
+        updating = any(
+            item.constraint_id == constraint.constraint_id for item in sketch.constraints
+        )
+        result = (
+            services.kernel.preview_sketch_constraint_update(sketch, constraint)
+            if updating
+            else services.kernel.preview_sketch_constraint(sketch, constraint)
+        )
+        if result.status != "success" or result.sketch is None:
+            raise ValidationError(result.message or "尺寸求解失败。")
+        from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+        require_independent_geometry_edits(snapshot.groups, (sketch,), (result.sketch,))
+        return (
+            ReplayAppend(
+                "sketch.constraint.update" if updating else "sketch.constraint.add",
+                9 if updating else 11,
+                result.command_params(sketch, constraint, local_frame=True),
+                "local",
+            ),
+            result,
+            (),
+        )
+
     def _on_canvas_dimension_preview(
         self,
         editor: SketchEditorDialog,
@@ -6636,6 +10526,80 @@ class MainWindow(QMainWindow):
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None or session_id != self._session_id:
             return
+        collection = editor.canvas.collection_session
+        if collection is not None:
+            try:
+                checkpoint = collection.checkpoint()
+                collection_state = collection.snapshot
+            except ValidationError as exc:
+                editor.dimensions.complete_preview(
+                    generation,
+                    sketch,
+                    constraint,
+                    SketchConstraintSolveResult("failed", None, None, message=str(exc)),
+                )
+                return
+
+            def solve_collection() -> _SketchConstraintPreview:
+                operation, result, linked = self._prepare_collection_dimension(
+                    collection_state, sketch, constraint
+                )
+                projected = collection.preview_operation(operation)
+                expected = {
+                    item.sketch_id: item for item in (result.sketch, *linked) if item is not None
+                }
+                if any(
+                    next(
+                        (item for item in projected.sketches if item.sketch_id == identity),
+                        None,
+                    )
+                    != target
+                    for identity, target in expected.items()
+                ):
+                    raise ValidationError("尺寸求解结果与暂存候选不一致。")
+                return _SketchConstraintPreview(
+                    result,
+                    linked_sketches=linked,
+                )
+
+            def finish_collection(value: ExecutionResult) -> None:
+                if (
+                    self._sketch_dialog is not editor
+                    or editor.canvas.collection_session is not collection
+                ):
+                    return
+                try:
+                    if collection.checkpoint() != checkpoint:
+                        raise ValidationError("暂存内容已变化，请重新预览尺寸。")
+                    preview = value.value
+                    if value.error is not None or not isinstance(preview, _SketchConstraintPreview):
+                        raise ValidationError(str(value.error or "尺寸预览失败。"))
+                    result = preview.solve_result
+                except (ValidationError, ValueError) as exc:
+                    preview = None
+                    result = SketchConstraintSolveResult("failed", None, None, message=str(exc))
+                editor.dimensions.complete_preview(generation, sketch, constraint, result)
+                if (
+                    preview is not None
+                    and editor.dimensions.accepted_preview(sketch, constraint) is result
+                ):
+                    editor.show_linked_dimension_previews(preview.linked_sketches)
+
+            if not unit.submit(
+                solve_collection,
+                operation="collection-dimension-preview",
+                session_id=session_id,
+                on_complete=finish_collection,
+            ):
+                editor.dimensions.complete_preview(
+                    generation,
+                    sketch,
+                    constraint,
+                    SketchConstraintSolveResult(
+                        "failed", None, None, message="几何工作线程忙碌，请重新预览"
+                    ),
+                )
+            return
         commands = tuple(loaded.document.commands)
         source_archive_version = loaded.document.archive_version
         updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
@@ -6645,9 +10609,14 @@ class MainWindow(QMainWindow):
         )
 
         def solve() -> _SketchConstraintPreview:
+            from mycad.core.drawing_transactions import require_independent_geometry_edits
+
             if linked:
                 params, solved, branch_changes = mycad_app.prepare_cross_sketch_dimension(
                     services, sketch.sketch_id, constraint
+                )
+                require_independent_geometry_edits(
+                    services.kernel.drawing_groups, services.kernel.sketches, solved
                 )
                 target = next(item for item in solved if item.sketch_id == sketch.sketch_id)
                 snapshot, previews = mycad_app.preview_command_with_sketches(
@@ -6662,7 +10631,19 @@ class MainWindow(QMainWindow):
                     source_drawing_chamfer_angle_baseline=(
                         loaded.document.drawing_chamfer_angle_baseline
                     ),
-                    command_version=50
+                    command_version=64
+                    if mycad_app.revisions_include_curve_point_ids(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 56
+                    if mycad_app.revisions_require_normal_side_preservation(
+                        services, cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 53
+                    if mycad_app.revisions_include_dimension_tolerances(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 50
                     if mycad_app.revisions_include_dimension_styles(
                         cast("Sequence[Mapping[str, object]]", params["revisions"])
                     )
@@ -6679,6 +10660,12 @@ class MainWindow(QMainWindow):
                         cast("Sequence[Mapping[str, object]]", params["revisions"])
                     )
                     else 4,
+                    target_archive_version=8
+                    if source_archive_version < 8
+                    and mycad_app.revisions_include_curve_point_ids(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else None,
                 )
                 return _SketchConstraintPreview(
                     SketchConstraintSolveResult(
@@ -6695,6 +10682,13 @@ class MainWindow(QMainWindow):
             )
             if result.status != "success":
                 return _SketchConstraintPreview(result)
+            if result.sketch is not None:
+                require_independent_geometry_edits(
+                    services.kernel.drawing_groups, (sketch,), (result.sketch,)
+                )
+            preserve_normal_side = mycad_app.revisions_require_attachment_protection(
+                services, ({"sketch_id": sketch.sketch_id},)
+            )
             snapshot, sketches = mycad_app.preview_command_with_sketches(
                 services,
                 commands,
@@ -6706,6 +10700,9 @@ class MainWindow(QMainWindow):
                         constraint.projection_axis is not None
                         or constraint.text_override is not None
                         or constraint.style_name is not None
+                        or constraint.tolerance is not None
+                        or preserve_normal_side
+                        or mycad_app.sketch_has_curve_point_ids(sketch)
                     ),
                 ),
                 source_archive_version=source_archive_version,
@@ -6715,7 +10712,13 @@ class MainWindow(QMainWindow):
                 source_drawing_chamfer_angle_baseline=(
                     loaded.document.drawing_chamfer_angle_baseline
                 ),
-                command_version=(6 if updating else 8)
+                command_version=(9 if updating else 11)
+                if mycad_app.sketch_has_curve_point_ids(sketch)
+                else (8 if updating else 10)
+                if preserve_normal_side
+                else (7 if updating else 9)
+                if constraint.tolerance is not None
+                else (6 if updating else 8)
                 if constraint.style_name is not None
                 else (5 if updating else 7)
                 if constraint.text_override is not None
@@ -6727,6 +10730,9 @@ class MainWindow(QMainWindow):
                     constraint.projection_axis is not None
                     or constraint.text_override is not None
                     or constraint.style_name is not None
+                    or constraint.tolerance is not None
+                    or preserve_normal_side
+                    or mycad_app.sketch_has_curve_point_ids(sketch)
                 )
                 and source_archive_version < 6
                 else None,
@@ -6786,6 +10792,110 @@ class MainWindow(QMainWindow):
                 SketchConstraintSolveResult("failed", None, None, message="草图所属文档已切换"),
             )
             return
+        collection = editor.canvas.collection_session
+        if collection is not None:
+            try:
+                checkpoint = collection.checkpoint()
+                state = collection.snapshot
+                accepted = editor.dimensions.accepted_preview(sketch, constraint)
+                presentation_only = editor.dimensions.presentation_only
+                if presentation_only and accepted is None:
+                    original_dimension = next(
+                        (
+                            item
+                            for item in sketch.constraints
+                            if item.constraint_id == constraint.constraint_id
+                        ),
+                        None,
+                    )
+                    if (
+                        original_dimension is None
+                        or replace(
+                            original_dimension,
+                            position_mm=constraint.position_mm,
+                            text_position_mm=constraint.text_position_mm,
+                        )
+                        != constraint
+                    ):
+                        raise ValidationError("尺寸拖动仅能改变标注位置。")
+                    expected = {item.sketch_id: item for item in state.sketches}
+                    expected[sketch.sketch_id] = replace(
+                        sketch,
+                        constraints=tuple(
+                            constraint if item.constraint_id == constraint.constraint_id else item
+                            for item in sketch.constraints
+                        ),
+                    )
+                else:
+                    if accepted is None or accepted.status != "success" or accepted.sketch is None:
+                        raise ValidationError("请重新预览跨草图尺寸。")
+                    expected = {
+                        item.sketch_id: item
+                        for item in (accepted.sketch, *editor.canvas.dimension_linked_sources)
+                    }
+            except (ValidationError, ValueError) as exc:
+                editor.dimensions.complete_commit(
+                    sketch,
+                    constraint,
+                    SketchConstraintSolveResult("failed", None, None, message=str(exc)),
+                )
+                return
+
+            def solve_collection() -> tuple[
+                ReplayAppend, SketchConstraintSolveResult, tuple[Sketch, ...]
+            ]:
+                return self._prepare_collection_dimension(state, sketch, constraint)
+
+            def finish_collection(value: ExecutionResult) -> None:
+                if (
+                    self._sketch_dialog is not editor
+                    or editor.canvas.collection_session is not collection
+                ):
+                    return
+                try:
+                    if (
+                        collection.checkpoint() != checkpoint
+                        or editor.dimensions.candidate != constraint
+                    ):
+                        raise ValidationError("暂存内容或尺寸已变化，请重新预览。")
+                    if value.error is not None or not isinstance(value.value, tuple):
+                        raise ValidationError(str(value.error or "尺寸求解失败。"))
+                    operation, solved, linked = cast(
+                        "tuple[ReplayAppend, SketchConstraintSolveResult, tuple[Sketch, ...]]",
+                        value.value,
+                    )
+                    actual = (
+                        {item.sketch_id: item for item in (solved.sketch, *linked)}
+                        if solved.sketch is not None
+                        else {}
+                    )
+                    if solved.sketch is None or (
+                        any(expected.get(identity) != item for identity, item in actual.items())
+                        if presentation_only and accepted is None
+                        else actual != expected
+                    ):
+                        raise ValidationError("求解结果与预览不一致，请重新预览。")
+                    if not editor.canvas.stage_collection_operation(operation):
+                        raise ValidationError(editor.canvas.message)
+                    result = solved
+                except (ValidationError, ValueError, StopIteration) as exc:
+                    result = SketchConstraintSolveResult("failed", None, None, message=str(exc))
+                editor.dimensions.complete_commit(sketch, constraint, result)
+
+            if not unit.submit(
+                solve_collection,
+                operation="collection-dimension-commit",
+                session_id=session_id,
+                on_complete=finish_collection,
+            ):
+                editor.dimensions.complete_commit(
+                    sketch,
+                    constraint,
+                    SketchConstraintSolveResult(
+                        "failed", None, None, message="几何工作线程忙碌，请重试。"
+                    ),
+                )
+            return
         commands = tuple(loaded.document.commands)
         updating = any(c.constraint_id == constraint.constraint_id for c in sketch.constraints)
         linked = any(
@@ -6800,6 +10910,8 @@ class MainWindow(QMainWindow):
         )
 
         def submit() -> SketchConstraintSolveResult:
+            from mycad.core.drawing_transactions import require_independent_geometry_edits
+
             if (
                 session_id != self._session_id
                 or loaded is not self._loaded
@@ -6818,6 +10930,9 @@ class MainWindow(QMainWindow):
                     return SketchConstraintSolveResult(
                         "failed", None, None, message="请重新预览跨草图尺寸"
                     )
+                require_independent_geometry_edits(
+                    services.kernel.drawing_groups, services.kernel.sketches, expected_sketches
+                )
 
                 def still_current() -> bool:
                     return (
@@ -6847,6 +10962,10 @@ class MainWindow(QMainWindow):
             )
             if result.status != "success":
                 return result
+            if result.sketch is not None:
+                require_independent_geometry_edits(
+                    services.kernel.drawing_groups, (sketch,), (result.sketch,)
+                )
             if (
                 session_id != self._session_id
                 or loaded is not self._loaded
@@ -6858,10 +10977,16 @@ class MainWindow(QMainWindow):
                 )
             # An explicit placement/apply gesture authorizes this one replayable command.
             command_id = "sketch.constraint.update" if updating else "sketch.constraint.add"
+            preserve_normal_side = mycad_app.revisions_require_attachment_protection(
+                services, ({"sketch_id": sketch.sketch_id},)
+            )
             if (
                 constraint.projection_axis is not None
                 or constraint.text_override is not None
                 or constraint.style_name is not None
+                or constraint.tolerance is not None
+                or preserve_normal_side
+                or mycad_app.sketch_has_curve_point_ids(sketch)
             ):
                 candidate = mycad_app.create_replay_candidate(
                     services, loaded, session_identity=session_id
@@ -6872,7 +10997,13 @@ class MainWindow(QMainWindow):
                         (
                             ReplayAppend(
                                 command_id,
-                                (6 if updating else 8)
+                                (9 if updating else 11)
+                                if mycad_app.sketch_has_curve_point_ids(sketch)
+                                else (8 if updating else 10)
+                                if preserve_normal_side
+                                else (7 if updating else 9)
+                                if constraint.tolerance is not None
+                                else (6 if updating else 8)
                                 if constraint.style_name is not None
                                 else (5 if updating else 7)
                                 if constraint.text_override is not None
@@ -6971,11 +11102,26 @@ class MainWindow(QMainWindow):
             canvas.begin_object_tangency_selection()
             canvas.setFocus()
             return
-        saved = (
-            canvas.mixed_move.current_saved
-            if canvas is not None and canvas.mixed_move
-            else services.kernel.sketches
-        )
+        try:
+            collection_snapshot = (
+                canvas.collection_session.snapshot
+                if canvas is not None and canvas.collection_session is not None
+                else None
+            )
+            saved = (
+                tuple(
+                    sketch
+                    for sketch in collection_snapshot.sketches
+                    if editor is None or sketch.sketch_id != editor.draft_sketch_id
+                )
+                if collection_snapshot is not None
+                else canvas.mixed_move.current_saved
+                if canvas is not None and canvas.mixed_move
+                else services.kernel.sketches
+            )
+        except ValidationError as exc:
+            self.status_command.setText(str(exc))
+            return
         draft = (
             Sketch(
                 editor.draft_sketch_id,
@@ -7007,7 +11153,11 @@ class MainWindow(QMainWindow):
                 )
                 for entity in selected
             ):
-                if canvas.mixed_move or canvas.pending_cross_tangencies:
+                linked_draft = collection_snapshot is not None and any(
+                    draft.sketch_id in (item.first.sketch_id, item.second.sketch_id)
+                    for item in collection_snapshot.cross_tangencies
+                )
+                if canvas.mixed_move or canvas.pending_cross_tangencies or linked_draft:
                     constraint = SketchConstraint(
                         uuid4().hex,
                         "tangent",
@@ -7068,11 +11218,15 @@ class MainWindow(QMainWindow):
                             result.error or getattr(solved, "message", None) or "无法建立相切。"
                         )
                         return
-                    if canvas.apply_constraint_solution(draft, solved.sketch):
+                    if canvas.apply_constraint_solution(
+                        draft, solved.sketch, confirmed_constraint=constraint, solve_result=solved
+                    ):
                         canvas.message = "相切约束已建立，可撤销。"
                         canvas.changed.emit()
                     else:
-                        self.status_command.setText("图形已改变，请重新选择对象。")
+                        self.status_command.setText(
+                            canvas.message or "图形已改变，请重新选择对象。"
+                        )
 
                 if not unit.submit(
                     lambda: services.kernel.preview_sketch_constraint(draft, constraint),
@@ -7129,6 +11283,45 @@ class MainWindow(QMainWindow):
                             for entity in selected
                         ),
                     )
+                    collection = canvas.collection_session
+                    if collection is not None:
+                        try:
+                            checkpoint = collection.checkpoint()
+                            snapshot = collection.snapshot
+                        except ValidationError as exc:
+                            self.status_command.setText(str(exc))
+                            return
+
+                        def finish_collection_tangency(value: ExecutionResult) -> None:
+                            if (
+                                self._sketch_dialog is not editor
+                                or canvas.collection_session is not collection
+                            ):
+                                return
+                            try:
+                                if collection.checkpoint() != checkpoint:
+                                    raise ValidationError("暂存内容已变化，请重新选择对象。")
+                                if value.error is not None or not isinstance(value.value, tuple):
+                                    raise ValidationError(str(value.error or "对象相切求解失败。"))
+                                operation, _solved, _linked = cast(
+                                    "tuple[ReplayAppend, SketchConstraintSolveResult, tuple[Sketch, ...]]",
+                                    value.value,
+                                )
+                                if not canvas.stage_collection_operation(operation):
+                                    raise ValidationError(canvas.message)
+                            except (ValidationError, ValueError) as exc:
+                                self.status_command.setText(f"对象相切未暂存：{exc}")
+                                return
+                            self.status_command.setText("对象相切已暂存，可撤销。")
+
+                        if not unit.submit(
+                            lambda: self._prepare_collection_dimension(snapshot, owner, constraint),
+                            operation="collection-saved-tangency",
+                            session_id=self._session_id,
+                            on_complete=finish_collection_tangency,
+                        ):
+                            self.status_command.setText("几何工作线程忙碌，请重试。")
+                        return
                     session_id = self._session_id
                     commands = tuple(loaded.document.commands)
                     linked = any(
@@ -7137,6 +11330,10 @@ class MainWindow(QMainWindow):
                     )
 
                     def submit_saved_tangency() -> SketchConstraintSolveResult:
+                        from mycad.core.drawing_transactions import (
+                            require_independent_geometry_edits,
+                        )
+
                         if linked:
 
                             def still_current() -> bool:
@@ -7150,6 +11347,12 @@ class MainWindow(QMainWindow):
                                 return SketchConstraintSolveResult(
                                     "failed", None, None, message="图纸已改变，请重新选择对象。"
                                 )
+                            _params, expected, _changes = mycad_app.prepare_cross_sketch_dimension(
+                                services, owner.sketch_id, constraint
+                            )
+                            require_independent_geometry_edits(
+                                services.kernel.drawing_groups, services.kernel.sketches, expected
+                            )
                             mycad_app.commit_cross_sketch_dimension(
                                 services,
                                 loaded,
@@ -7157,6 +11360,7 @@ class MainWindow(QMainWindow):
                                 constraint,
                                 session_identity=session_id,
                                 still_current=still_current,
+                                expected_sketches=expected,
                             )
                             updated = next(
                                 sketch
@@ -7167,6 +11371,10 @@ class MainWindow(QMainWindow):
                         result = services.kernel.preview_sketch_constraint(owner, constraint)
                         if result.status != "success":
                             return result
+                        if result.sketch is not None:
+                            require_independent_geometry_edits(
+                                services.kernel.drawing_groups, (owner,), (result.sketch,)
+                            )
                         if (
                             self._loaded is not loaded
                             or self._session_id != session_id
@@ -7184,10 +11392,16 @@ class MainWindow(QMainWindow):
                             return SketchConstraintSolveResult(
                                 "failed", None, None, message="图纸已改变，请重新选择对象。"
                             )
+                        preserve_normal_side = mycad_app.revisions_require_attachment_protection(
+                            services, ({"sketch_id": owner.sketch_id},)
+                        )
                         loaded.bus.execute(
                             "sketch.constraint.add",
-                            result.command_params(owner, constraint),
+                            result.command_params(
+                                owner, constraint, local_frame=preserve_normal_side
+                            ),
                             confirmed_by="local",
+                            version=10 if preserve_normal_side else None,
                         )
                         return result
 
@@ -7224,7 +11438,9 @@ class MainWindow(QMainWindow):
             return
         try:
             committed_relations = (
-                _staged_committed_tangencies(
+                canvas.collection_session.snapshot.cross_tangencies
+                if canvas is not None and canvas.collection_session is not None
+                else _staged_committed_tangencies(
                     canvas.mixed_move.original_saved,
                     services.kernel.cross_sketch_tangencies,
                     tuple(
@@ -7239,7 +11455,7 @@ class MainWindow(QMainWindow):
                 mycad_app.draft_cross_relations(
                     saved, draft, tuple(canvas.pending_cross_tangencies)
                 )
-                if draft is not None and canvas is not None
+                if draft is not None and canvas is not None and canvas.collection_session is None
                 else ()
             )
         except (ValueError, ValidationError) as exc:
@@ -7303,6 +11519,65 @@ class MainWindow(QMainWindow):
             self.status_command.setText("图纸或几何工作线程不可用。")
             return
         canvas = editor.canvas
+        collection = canvas.collection_session
+        if collection is not None:
+            try:
+                checkpoint = collection.checkpoint()
+                snapshot = collection.snapshot
+            except ValidationError as exc:
+                self.status_command.setText(str(exc))
+                return
+            session_id = self._session_id
+
+            def finish_collection(result: ExecutionResult) -> None:
+                if (
+                    self._loaded is not loaded
+                    or self._session_id != session_id
+                    or self._sketch_dialog is not editor
+                    or canvas.collection_session is not collection
+                ):
+                    return
+                try:
+                    if collection.checkpoint() != checkpoint:
+                        raise ValidationError("暂存内容已变化，请重新选择对象。")
+                    value = result.value
+                    if (
+                        result.error is not None
+                        or not isinstance(value, tuple)
+                        or len(cast("tuple[object, ...]", value)) != 3
+                    ):
+                        raise ValidationError(str(result.error or "对象相切求解失败。"))
+                    params, solved, _changes = cast("tuple[object, ...]", value)
+                    if not isinstance(params, dict) or not isinstance(solved, tuple):
+                        raise ValidationError("对象相切求解结果无效。")
+                    from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+                    require_independent_geometry_edits(
+                        snapshot.groups, snapshot.sketches, cast("tuple[Sketch, ...]", solved)
+                    )
+                    operation = ReplayAppend(
+                        "drawing.sketch.revise", 79, cast("dict[str, object]", params), "local"
+                    )
+                    if not canvas.stage_collection_operation(operation):
+                        raise ValidationError(canvas.message)
+                except (ValidationError, ValueError) as exc:
+                    self.status_command.setText(f"对象相切未暂存：{exc}")
+                    return
+                canvas.message = "对象相切已暂存，可撤销。"
+                self.status_command.setText(canvas.message)
+                canvas.changed.emit()
+                canvas.update()
+
+            if not unit.submit(
+                lambda: mycad_app.prepare_cross_sketch_dimension_from_state(
+                    snapshot.sketches, snapshot.cross_tangencies, draft.sketch_id, constraint
+                ),
+                operation="collection-local-tangency",
+                session_id=session_id,
+                on_complete=finish_collection,
+            ):
+                self.status_command.setText("几何工作线程忙碌，请重试。")
+            return
         previous = canvas.mixed_move
         revision, session_id = loaded.document.revision, self._session_id
         if previous is not None and (
@@ -7442,6 +11717,65 @@ class MainWindow(QMainWindow):
         commands = tuple(loaded.document.commands)
         self._cross_tangency_preview = None
         editor = self._sketch_dialog
+        collection = editor.canvas.collection_session if editor is not None else None
+        if collection is not None:
+            try:
+                checkpoint = collection.checkpoint()
+                snapshot = collection.snapshot
+            except ValidationError as exc:
+                dialog.complete_preview(relation, str(exc), success=False)
+                return
+
+            def solve_collection() -> tuple[ReplayAppend, tuple[Sketch, ...], tuple[Sketch, ...]]:
+                from mycad.core.drawing_transactions import require_independent_geometry_edits
+
+                original, solved = mycad_app.prepare_cross_sketch_tangency_from_state(
+                    snapshot.sketches, snapshot.cross_tangencies, relation
+                )
+                require_independent_geometry_edits(snapshot.groups, original, solved)
+                revisions = mycad_app.build_tangency_revisions(original, solved)
+                operation = ReplayAppend(
+                    "drawing.tangency.add",
+                    13 if mycad_app.revisions_include_curve_point_ids(revisions) else 12,
+                    {"relation": relation.to_mapping(), "revisions": list(revisions)},
+                    "local",
+                )
+                collection.preview_operation(operation)
+                return operation, original, solved
+
+            def finish_collection(value: ExecutionResult) -> None:
+                if (
+                    self._cross_tangency_dialog is not dialog
+                    or self._sketch_dialog is not editor
+                    or editor is None
+                    or editor.canvas.collection_session is not collection
+                ):
+                    return
+                try:
+                    if collection.checkpoint() != checkpoint:
+                        raise ValidationError("暂存内容已变化，请重新预览。")
+                    if value.error is not None or not isinstance(value.value, tuple):
+                        raise ValidationError(str(value.error or "相切预览失败。"))
+                    operation, original, solved = cast(
+                        "tuple[ReplayAppend, tuple[Sketch, ...], tuple[Sketch, ...]]", value.value
+                    )
+                    self._cross_tangency_preview = _CollectionTangencyPreview(
+                        relation, collection, checkpoint, operation
+                    )
+                    dialog.complete_preview(
+                        relation, tangent_preview_summary(relation, original, solved), success=True
+                    )
+                except (ValidationError, ValueError) as exc:
+                    dialog.complete_preview(relation, str(exc), success=False)
+
+            if not unit.submit(
+                solve_collection,
+                operation="collection-cross-tangency-preview",
+                session_id=session_id,
+                on_complete=finish_collection,
+            ):
+                dialog.complete_preview(relation, "几何工作线程忙碌，请重试。", success=False)
+            return
         is_draft = editor is not None and editor.draft_sketch_id in (
             relation.first.sketch_id,
             relation.second.sketch_id,
@@ -7661,6 +11995,25 @@ class MainWindow(QMainWindow):
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         preview = self._cross_tangency_preview
+        if isinstance(preview, _CollectionTangencyPreview):
+            editor = self._sketch_dialog
+            try:
+                if (
+                    editor is None
+                    or editor.canvas.collection_session is not preview.session
+                    or preview.relation != relation
+                    or session_id != self._session_id
+                    or preview.session.checkpoint() != preview.checkpoint
+                ):
+                    raise ValidationError("暂存内容已变化，请重新预览。")
+                if not editor.canvas.stage_collection_operation(preview.operation):
+                    raise ValidationError(editor.canvas.message)
+            except (ValidationError, ValueError) as exc:
+                dialog.submission_failed(str(exc))
+                return
+            self.status_command.setText("对象相切已暂存，可撤销。")
+            dialog.accept()
+            return
         if isinstance(preview, _DraftTangencyPreview):
             editor = self._sketch_dialog
             if (
@@ -7783,6 +12136,9 @@ class MainWindow(QMainWindow):
         if loaded is None or services is None or unit is None or editor is None:
             return
         canvas = editor.canvas
+        if canvas.collection_session is not None:
+            self.status_command.setText("请先完成或取消当前草稿，再修改关联阵列。")
+            return
         if (
             canvas.has_active_edit_gesture
             or canvas.has_pending_geometry
@@ -7838,10 +12194,17 @@ class MainWindow(QMainWindow):
         if maximum < 1:
             self.status_command.setText("没有可用的替换来源。")
             return
+
+        def collection_started() -> bool:
+            if canvas.collection_session is None:
+                return False
+            self.status_command.setText("暂存内容已变化，请先完成或取消草稿。")
+            return True
+
         count, accepted = QInputDialog.getInt(
             self, "替换阵列单元", "替换来源图元数量", min(len(members), maximum), 1, maximum
         )
-        if not accepted:
+        if not accepted or collection_started():
             return
         if not 1 <= count <= maximum:
             self.status_command.setText("替换来源图元数量无效。")
@@ -7864,7 +12227,7 @@ class MainWindow(QMainWindow):
             chosen, accepted = QInputDialog.getItem(
                 self, "替换阵列单元", f"选择第 {index + 1} 个副本的替换来源", labels, 0, False
             )
-            if not accepted or chosen not in labels:
+            if not accepted or collection_started() or chosen not in labels:
                 return
             chosen_sources.append(available[labels.index(chosen)])
         first_sketch, first_entity = chosen_sources[0]
@@ -7875,7 +12238,7 @@ class MainWindow(QMainWindow):
         value, accepted = QInputDialog.getText(
             self, "替换阵列单元", "替换来源共同基点 U,V", text=f"{default[0]!r},{default[1]!r}"
         )
-        if not accepted:
+        if not accepted or collection_started():
             return
         try:
             point = tuple(float(part.strip()) for part in value.split(","))
@@ -7913,6 +12276,9 @@ class MainWindow(QMainWindow):
         except (KeyError, IndexError, ValueError):
             self.status_command.setText("替换基点或源图元无效。")
             return
+        if canvas.collection_session is not None:
+            self.status_command.setText("暂存内容已变化，请先完成或取消草稿。")
+            return
         revision, session_id = loaded.document.revision, self._session_id
         editor.setEnabled(False)
 
@@ -7921,6 +12287,7 @@ class MainWindow(QMainWindow):
                 self._loaded is not loaded
                 or self._session_id != session_id
                 or loaded.document.revision != revision
+                or canvas.collection_session is not None
                 or array not in services.kernel.associative_arrays
                 or self._sketch_dialog is not editor
                 or frozenset(canvas.selected_entity_ids) != selected
@@ -7941,7 +12308,16 @@ class MainWindow(QMainWindow):
                 "drawing.array.replace",
                 params,
                 "local",
-                version=6 if extras else 5 if erased_members else 4,
+                version=9
+                if mycad_app.revisions_require_attachment_protection(
+                    services,
+                    tuple({"sketch_id": ref.sketch_id} for ref in changes),
+                )
+                else 6
+                if extras
+                else 5
+                if erased_members
+                else 4,
             )
 
         def finish(result: ExecutionResult) -> None:
@@ -7982,6 +12358,16 @@ class MainWindow(QMainWindow):
             self.status_command.setText("请先打开独立二维草稿并选择阵列源或副本。")
             return
         canvas = editor.canvas
+        if canvas.collection_session is not None:
+            self.status_command.setText("请先完成或取消当前草稿，再修改关联阵列。")
+            return
+
+        def collection_started() -> bool:
+            if canvas.collection_session is None:
+                return False
+            self.status_command.setText("暂存内容已变化，请先完成或取消草稿。")
+            return True
+
         if (
             canvas.has_active_edit_gesture
             or canvas.has_pending_geometry
@@ -8393,10 +12779,10 @@ class MainWindow(QMainWindow):
                 return
         if mode == "resize":
             rows, accepted = QInputDialog.getInt(self, "修改矩形阵列", "行数", rows, 1, 1000)
-            if not accepted:
+            if not accepted or collection_started():
                 return
             columns, accepted = QInputDialog.getInt(self, "修改矩形阵列", "列数", columns, 1, 1000)
-            if not accepted:
+            if not accepted or collection_started():
                 return
             if not 2 <= rows * columns <= 1000 or (rows * columns - 1) * len(array.sources) > 10000:
                 self.status_command.setText("阵列位置须为 2 到 1000 个，副本不能超过 10000 个。")
@@ -8407,7 +12793,7 @@ class MainWindow(QMainWindow):
 
         def request_spacing(label: str, current: float) -> float | None:
             value, accepted = QInputDialog.getText(self, "修改矩形阵列", label, text=repr(current))
-            if not accepted:
+            if not accepted or collection_started():
                 return None
             try:
                 result = float(value.strip())
@@ -8476,11 +12862,16 @@ class MainWindow(QMainWindow):
                 self.status_command.setText(str(exc))
                 return
 
+        if canvas.collection_session is not None:
+            self.status_command.setText("暂存内容已变化，请先完成或取消草稿。")
+            return
+
         def remove() -> object:
             if (
                 self._loaded is not loaded
                 or self._session_id != session_id
                 or loaded.document.revision != revision
+                or canvas.collection_session is not None
                 or any(owner not in services.kernel.associative_arrays for owner in arrays)
                 or (
                     mode
@@ -8512,7 +12903,20 @@ class MainWindow(QMainWindow):
                     "drawing.array.resize",
                     {"array": resized.to_mapping()},
                     confirmed_by="local",
-                    version=15
+                    version=16
+                    if mycad_app.revisions_require_attachment_protection(
+                        services,
+                        tuple(
+                            {"sketch_id": ref.sketch_id}
+                            for ref in (
+                                *array.sources,
+                                *(member.target for member in array.members),
+                                *(member.target for member in resized.members),
+                                *(output.target for output in array.extra_outputs),
+                            )
+                        ),
+                    )
+                    else 15
                     if any(output.rotation_deg != 0 for output in resized.extra_outputs)
                     else 14
                     if any(output.offset_mm != (0, 0) for output in resized.extra_outputs)
@@ -8620,7 +13024,12 @@ class MainWindow(QMainWindow):
                         "groups": groups,
                     },
                     confirmed_by="local",
-                    version=1,
+                    version=2
+                    if mycad_app.revisions_require_attachment_protection(
+                        services,
+                        tuple({"sketch_id": item.target.sketch_id} for item in selected_offsets),
+                    )
+                    else 1,
                 )
             if mode == "member_offset":
                 assert selected_offsets and member_offset is not None
@@ -8657,7 +13066,12 @@ class MainWindow(QMainWindow):
                         ],
                     },
                     confirmed_by="local",
-                    version=2
+                    version=3
+                    if mycad_app.revisions_require_attachment_protection(
+                        services,
+                        tuple({"sketch_id": item.target.sketch_id} for item in selected_offsets),
+                    )
+                    else 2
                     if any(isinstance(item, ArrayExtraOutput) for item in selected_offsets)
                     else 1,
                 )
@@ -8688,7 +13102,11 @@ class MainWindow(QMainWindow):
                         ],
                     },
                     confirmed_by="local",
-                    version=3
+                    version=9
+                    if mycad_app.revisions_require_attachment_protection(
+                        services, ({"sketch_id": selected_member.target.sketch_id},)
+                    )
+                    else 3
                     if has_interleaved_array_dependencies(candidate_arrays)
                     else 2
                     if has_internal_replacements(array)
@@ -8705,11 +13123,21 @@ class MainWindow(QMainWindow):
                     else 1,
                 )
             if mode == "reset_overrides":
+                reset_sketches = tuple(
+                    {"sketch_id": ref.sketch_id}
+                    for ref in (
+                        *array.sources,
+                        *(member.target for member in array.members),
+                        *(output.target for output in array.extra_outputs),
+                    )
+                )
                 return loaded.bus.execute(
                     "drawing.array.reset",
                     {"array_id": array.array_id},
                     confirmed_by="local",
-                    version=4
+                    version=5
+                    if mycad_app.revisions_require_attachment_protection(services, reset_sketches)
+                    else 4
                     if array.extra_outputs
                     else 3
                     if any(member.replacement is not None for member in array.members)
@@ -8758,6 +13186,40 @@ class MainWindow(QMainWindow):
     ) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         editor = self._sketch_dialog
+        collection = editor.canvas.collection_session if editor is not None else None
+        if editor is not None and collection is not None:
+            canvas = editor.canvas
+            try:
+                snapshot = collection.snapshot
+                relation = next(
+                    (item for item in snapshot.cross_tangencies if item.relation_id == identity),
+                    None,
+                )
+                if relation is None or dialog.relations_by_id.get(identity) != relation:
+                    raise ValidationError("暂存相切关系已变化，请重新打开。")
+                draft = next(
+                    item for item in snapshot.sketches if item.sketch_id == editor.draft_sketch_id
+                )
+                saved = tuple(
+                    item for item in snapshot.sketches if item.sketch_id != draft.sketch_id
+                )
+                pairs = tuple(canvas.pending_cross_tangencies)
+                pending_relations = mycad_app.draft_cross_relations(saved, draft, pairs)
+                retained = [
+                    pair
+                    for pending, pair in zip(pending_relations, pairs, strict=True)
+                    if pending.relation_id != identity
+                ]
+                if not canvas.stage_collection_operation(
+                    ReplayAppend("drawing.tangency.remove", 1, {"relation_id": identity}, "local")
+                ):
+                    raise ValidationError(canvas.message)
+                canvas.pending_cross_tangencies = retained
+                self.status_command.setText("对象相切关系已暂存移除，可撤销。")
+                dialog.accept()
+            except (ValidationError, ValueError, StopIteration) as exc:
+                dialog.submission_failed(str(exc))
+            return
         if loaded is not None and services is not None and editor is not None:
             canvas = editor.canvas
             mixed = canvas.mixed_move
@@ -8935,7 +13397,9 @@ class MainWindow(QMainWindow):
                     sketch,
                     constraint,
                     local_frame=(
-                        constraint.text_override is not None or constraint.style_name is not None
+                        constraint.text_override is not None
+                        or constraint.style_name is not None
+                        or mycad_app.sketch_has_curve_point_ids(sketch)
                     ),
                 ),
                 source_archive_version=source_archive_version,
@@ -8945,13 +13409,19 @@ class MainWindow(QMainWindow):
                 source_drawing_chamfer_angle_baseline=(
                     loaded.document.drawing_chamfer_angle_baseline
                 ),
-                command_version=(6 if updating else 8)
+                command_version=(9 if updating else 11)
+                if mycad_app.sketch_has_curve_point_ids(sketch)
+                else (6 if updating else 8)
                 if constraint.style_name is not None
                 else (5 if updating else 7)
                 if constraint.text_override is not None
                 else None,
                 target_archive_version=6
-                if (constraint.text_override is not None or constraint.style_name is not None)
+                if (
+                    constraint.text_override is not None
+                    or constraint.style_name is not None
+                    or mycad_app.sketch_has_curve_point_ids(sketch)
+                )
                 and source_archive_version < 6
                 else None,
             )
@@ -9048,7 +13518,11 @@ class MainWindow(QMainWindow):
             updating = any(
                 item.constraint_id == constraint.constraint_id for item in sketch.constraints
             )
-            if constraint.text_override is not None or constraint.style_name is not None:
+            if (
+                constraint.text_override is not None
+                or constraint.style_name is not None
+                or mycad_app.sketch_has_curve_point_ids(sketch)
+            ):
                 assert self._services is not None
                 candidate = mycad_app.create_replay_candidate(
                     self._services, loaded, session_identity=session_id
@@ -9059,7 +13533,9 @@ class MainWindow(QMainWindow):
                         (
                             ReplayAppend(
                                 "sketch.constraint.update" if updating else "sketch.constraint.add",
-                                (6 if updating else 8)
+                                (9 if updating else 11)
+                                if mycad_app.sketch_has_curve_point_ids(sketch)
+                                else (6 if updating else 8)
                                 if constraint.style_name is not None
                                 else (5 if updating else 7),
                                 result.command_params(sketch, constraint, local_frame=True),
@@ -9109,6 +13585,7 @@ class MainWindow(QMainWindow):
         if dialog is not self._sketch_dialog:
             return
         mixed = dialog.canvas.mixed_move
+        collection_session = dialog.canvas.collection_session
         mixed_valid = dialog.canvas.mixed_move_is_valid
         cross_timeline = (
             dialog.canvas.mixed_move_timeline_with_transforms()
@@ -9139,6 +13616,8 @@ class MainWindow(QMainWindow):
         self._hide_sketch_workbench(dialog)
         sketch = dialog.result_sketch
         if result != QDialog.DialogCode.Accepted or sketch is None:
+            if collection_session is not None:
+                collection_session.cancel()
             self.status_command.setText("草图已取消；文档历史未改变。")
             return
         loaded = self._loaded
@@ -9148,6 +13627,7 @@ class MainWindow(QMainWindow):
             self.status_command.setText("草图所属文档已切换，草图未提交。")
             return
         preparation = self._prepared_sketch_save
+        source_revision = loaded.document.revision
 
         def submit_sketch() -> object:
             if (
@@ -9163,6 +13643,10 @@ class MainWindow(QMainWindow):
                     preparation.prepared_revision = loaded.document.revision
 
         def commit_sketch() -> object:
+            if collection_session is not None:
+                if mixed is not None:
+                    raise ValueError("草稿存在不兼容的混合暂存操作，请先撤销或取消。")
+                return collection_session.commit()
             if mixed is not None:
                 if not mixed_valid:
                     raise ValueError("暂存变换已失效，请先撤销或取消。")
@@ -9202,6 +13686,22 @@ class MainWindow(QMainWindow):
         def finish_submission(result_value: ExecutionResult) -> None:
             if result_value.error is not None:
                 self.status_command.setText(f"草图提交失败：{result_value.error}")
+                recovery_error = ""
+                if (
+                    collection_session is not None
+                    and (preparation is None or preparation.draft is not dialog)
+                    and loaded.document.revision != source_revision
+                ):
+                    try:
+                        collection_session.rebind_after_failed_commit(source_revision, session_id)
+                        dialog.canvas.rebind_restored_source(
+                            source_revision, loaded.document.revision
+                        )
+                        collection_session.complete_failed_commit_canvas_rebind(
+                            (source_revision, loaded.document.revision)
+                        )
+                    except Exception as exc:
+                        recovery_error = f"；暂存恢复失败：{exc}，可再次完成草稿以重试"
                 if self._loaded is loaded and self._session_id == session_id:
                     self._sketch_dialog = dialog
                     dialog.result_sketch = None
@@ -9209,14 +13709,19 @@ class MainWindow(QMainWindow):
                     self._show_sketch_workbench(dialog)
                     self._sync_drawing_layers()
                     dialog.status_label.setText(
-                        f"草图提交失败：{result_value.error}。草稿已保留，可修正后重试或取消。"
+                        f"草图提交失败：{result_value.error}{recovery_error}。"
+                        "草稿已保留，可修正后重试或取消。"
                     )
                 if after_failure is not None:
                     after_failure()
                 return
             if self.viewport is not None:
                 self.viewport.refresh()
-            self.status_command.setText("草图已提交为一条命令；可撤销、重做和保存重放。")
+            self.status_command.setText(
+                "草稿及暂存操作已提交；可撤销、重做和保存重放。"
+                if collection_session is not None
+                else "草图已提交为一条命令；可撤销、重做和保存重放。"
+            )
             saving = self._prepared_sketch_save
             if loaded.document.document_type == "drawing2d" and not (
                 saving is not None and saving.draft is dialog
@@ -11463,6 +15968,8 @@ class MainWindow(QMainWindow):
             return
         if self.document_session is None or self._services is None:
             return
+        if self._pending_drawing_text_blocks_navigation():
+            return
         if (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -11519,6 +16026,8 @@ class MainWindow(QMainWindow):
         ):
             self.status_command.setText("操作完成前无法关闭文档。")
             return
+        if not self._close_block_editor(entry.loaded):
+            return
         if self._has_unsubmitted_geometry(include_sketch=False):
             return
         if not entry.needs_save:
@@ -11546,6 +16055,9 @@ class MainWindow(QMainWindow):
             # may already have consumed the handle; neither case retains it.
             with suppress(ValidationError):
                 preparation.loaded.bus.release_save_checkpoint(preparation.checkpoint)
+            collection = preparation.draft.canvas.collection_session
+            if collection is not None:
+                collection.discard_failed_save_recovery()
             self._prepared_sketch_save = None
             preparation.draft.reject()
             entry.draft = None
@@ -11675,6 +16187,9 @@ class MainWindow(QMainWindow):
         entry = session.find(identity)
         if entry is None:
             return
+        if entry is not session.active and self._pending_drawing_text_blocks_navigation():
+            self._refresh_document_choice()
+            return
         if entry is not session.active and (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -11782,6 +16297,14 @@ class MainWindow(QMainWindow):
                 )
             self.bind_document(entry.loaded)
             self._sketch_dialog = entry.draft
+            if entry.draft is not None and entry.draft.canvas.collection_session is not None:
+                try:
+                    entry.draft.canvas.collection_session.rebind_workspace(
+                        entry.services, entry.loaded, self._session_id
+                    )
+                except (KeyError, ValueError, ValidationError) as exc:
+                    entry.draft.status_label.setText(str(exc))
+                    self.status_command.setText(str(exc))
             workspace = (
                 "model"
                 if entry.kind == "part"
@@ -12756,7 +17279,31 @@ class MainWindow(QMainWindow):
         if name == "post_command":
             command_id = payload.get("command_id", "?")
             ordinal = payload.get("ordinal", "?")
-            self.status_command.setText(f"当前：{command_id}（#{ordinal}）")
+            transaction_memberships = payload.get("transaction_unmapped_group_memberships")
+            if payload.get("unmapped_group_members") or transaction_memberships:
+                self.status_command.setText(
+                    f"当前：{command_id}（#{ordinal}）；原组成员已清理，未提供确定的替换映射。"
+                )
+                raw_memberships = transaction_memberships or payload.get(
+                    "unmapped_group_memberships"
+                )
+                details: list[str] = []
+                if isinstance(raw_memberships, list):
+                    for item in cast("list[object]", raw_memberships):
+                        if not isinstance(item, Mapping):
+                            continue
+                        entry = cast("Mapping[str, object]", item)
+                        group_id, member = entry.get("group_id"), entry.get("member")
+                        if isinstance(group_id, str) and isinstance(member, Mapping):
+                            ref = cast("Mapping[str, object]", member)
+                            details.append(
+                                f"组 {group_id}：{ref.get('kind', '?')} {ref.get('object_id', '?')}"
+                                + (f" / 草图 {ref['sketch_id']}" if ref.get("sketch_id") else "")
+                            )
+                self.status_command.setToolTip("\n".join(details))
+            else:
+                self.status_command.setText(f"当前：{command_id}（#{ordinal}）")
+                self.status_command.setToolTip("")
         if name == "geometry_rebuilt":
             self.status_rebuild.setText("重建状态：就绪")
         elif name in PENDING_REBUILD_SIGNALS:
@@ -12900,6 +17447,20 @@ class MainWindow(QMainWindow):
 
     def request_undo(self) -> None:
         if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools.pending
+        ):
+            self.status_command.setText("请先完成或取消形位公差放置，再撤销文档操作。")
+            return
+        if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.text_tools is not None
+            and self._sketch_dialog.canvas.text_tools.pending
+        ):
+            self.status_command.setText("请先完成或取消文字编辑，再撤销文档操作。")
+            return
+        if (
             self.active_workspace == "sketch"
             and self.execution_unit is not None
             and (self.execution_unit.is_busy or self.execution_unit.is_delivering_result)
@@ -12929,6 +17490,14 @@ class MainWindow(QMainWindow):
         ):
             self.status_command.setText("请先完成或取消当前二维操作，再撤销。")
             return
+        if (
+            draft is not None
+            and self.active_workspace == "sketch"
+            and draft.canvas.collection_session is not None
+        ):
+            if not draft.canvas.undo_last_operation():
+                self.status_command.setText(draft.canvas.message or "没有可撤销的暂存操作。")
+            return
         layer_undo = (
             draft is not None
             and self._loaded is not None
@@ -12942,6 +17511,13 @@ class MainWindow(QMainWindow):
                 "drawing.layers.set",
                 "drawing.clipboard.prepare",
                 "drawing.dimension_styles.set",
+                "drawing.text.add",
+                "drawing.text.update",
+                "drawing.text.remove",
+                "drawing.text.batch",
+                "drawing.text_styles.set",
+                "drawing.tolerance.batch",
+                "drawing.reference_dimensions.batch",
                 "drawing.raster.add",
                 "drawing.raster.update",
                 "drawing.raster.remove",
@@ -13135,6 +17711,20 @@ class MainWindow(QMainWindow):
 
     def request_redo(self) -> None:
         if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools.pending
+        ):
+            self.status_command.setText("请先完成或取消形位公差放置，再重做文档操作。")
+            return
+        if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.text_tools is not None
+            and self._sketch_dialog.canvas.text_tools.pending
+        ):
+            self.status_command.setText("请先完成或取消文字编辑，再重做文档操作。")
+            return
+        if (
             self.active_workspace == "sketch"
             and self.execution_unit is not None
             and (self.execution_unit.is_busy or self.execution_unit.is_delivering_result)
@@ -13164,17 +17754,25 @@ class MainWindow(QMainWindow):
         ):
             self.status_command.setText("请先完成或取消当前二维操作，再重做。")
             return
+        if (
+            draft is not None
+            and self.active_workspace == "sketch"
+            and draft.canvas.collection_session is not None
+        ):
+            if not draft.canvas.redo_last_operation():
+                self.status_command.setText(draft.canvas.message or "没有可重做的暂存操作。")
+            return
         layer_redo = (
             draft is not None
             and self._loaded is not None
             and bool(draft.layer_history_redo)
-            and draft.layer_history_redo[-1]
-            == (len(self._loaded.document.commands) + 1, draft.canvas.history_position)
+            and draft.layer_history_redo[-1][0] > len(self._loaded.document.commands)
+            and draft.layer_history_redo[-1][1] == draft.canvas.history_position
             and not draft.canvas.has_pending_geometry
             and not draft.canvas.has_active_edit_gesture
         )
         mixed_draft = (
-            draft.mixed_draft_history.get(len(self._loaded.document.commands) + 1)
+            draft.mixed_draft_history.get(draft.layer_history_redo[-1][0])
             if layer_redo and draft is not None and self._loaded is not None
             else None
         )
@@ -13417,6 +18015,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_new_document(self) -> None:
+        if self._pending_drawing_text_blocks_navigation():
+            return
         if (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -13455,6 +18055,8 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _on_new_drawing_document(self) -> None:
+        if self._pending_drawing_text_blocks_navigation():
+            return
         if (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -13489,8 +18091,136 @@ class MainWindow(QMainWindow):
         ):
             return
         self._replace_document(
-            mycad_app.new_document(self._services, document_type=document_type), None
+            (
+                mycad_app.new_workspace_document(self._services, kind="sketch")
+                if document_type == "drawing2d"
+                else mycad_app.new_document(self._services, document_type=document_type)
+            ),
+            None,
         )
+
+    def _queue_dxf_collection_import(
+        self,
+        imported: DxfSketchImport,
+        loaded: LoadedDocument,
+        services: AppServices,
+        session_id: int,
+    ) -> None:
+        from mycad.formats.dxf_collection_import import prepare_dxf_collection_import
+
+        unit = self.execution_unit
+        editor = self._sketch_dialog
+        if unit is None or self._loaded is not loaded or self._session_id != session_id:
+            self.status_command.setText("文档已变化，DXF 未导入。")
+            return
+        if loaded.document.document_type != "drawing2d":
+            self._show_error("DXF 块和组只能导入独立二维文档。")
+            return
+        if editor is not None and (
+            editor.canvas.collection_session is not None
+            or editor.canvas.entities
+            or editor.canvas.constraints
+            or editor.canvas.has_pending_geometry
+            or editor.canvas.has_active_edit_gesture
+            or (editor.canvas.text_tools is not None and editor.canvas.text_tools.pending)
+        ):
+            self._show_error("请先完成或取消当前草稿，再导入 DXF 集合。")
+            return
+        try:
+            datum_tools = editor.canvas.geometric_tolerance_tools if editor is not None else None
+            prepared = prepare_dxf_collection_import(
+                imported,
+                mycad_app.drawing_collection_snapshot(services),
+                datum_relayout=datum_tools.relayout_recorded_datum if datum_tools else None,
+            )
+            candidate = mycad_app.create_replay_candidate(
+                services, loaded, session_identity=session_id
+            )
+            try:
+                candidate.stage(
+                    ReplayChangeSet((), (prepared.operation,), False, target_archive_version=8),
+                    current_session_identity=session_id,
+                )
+            except Exception:
+                candidate.cancel()
+                raise
+        except (KeyError, ValueError, MycadError) as exc:
+            self._show_error(f"无法准备 DXF 集合导入：{exc}")
+            return
+
+        def preview_candidate() -> object:
+            return candidate.preview(current_session_identity=session_id)
+
+        def finish_preview(result: ExecutionResult) -> None:
+            if result.error is not None or not isinstance(
+                result.value, mycad_app.ReplayCandidatePreview
+            ):
+                candidate.cancel()
+                self._show_error(f"DXF 候选预览失败：{result.error or '返回结果无效'}")
+                return
+            preview = result.value
+            if preview.state != "succeeded":
+                candidate.cancel()
+                self._show_error(f"DXF 候选预览失败：{preview.failure or preview.state}")
+                return
+            report = replace(
+                imported.report, warnings=(*imported.report.warnings, *prepared.warnings)
+            )
+            message = (
+                f"{report}\n\n将导入 {len(imported.sketch.entities)} 个几何、"
+                f"{len(imported.texts)} 个文字、{len(imported.block_definitions)} 个块定义、"
+                f"{len(imported.block_instances)} 个块实例和 {len(imported.groups)} 个组。"
+                f"\n关联尺寸 {len(imported.sketch.constraints)} 个，"
+                f"独立参考尺寸 {len(imported.detached_dimensions)} 个，"
+                f"公差框 {len(imported.tolerance_frames)} 个，基准 {len(imported.datum_identifiers)} 个。"
+                "\n确认前不会修改命令历史或模型。"
+            )
+            choice = QMessageBox.question(
+                self,
+                "导入 DXF 集合预览",
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                candidate.cancel()
+                self.status_command.setText("DXF 导入已取消；文档历史未改变。")
+                return
+
+            def commit_candidate() -> object:
+                if self._loaded is not loaded or self._session_id != session_id:
+                    raise ValidationError("文档已变化；DXF 未导入。")
+                grant = candidate.authorize_commit(current_session_identity=session_id)
+                candidate.commit(grant, current_session_identity=session_id)
+                return None
+
+            def finish_commit(commit_result: ExecutionResult) -> None:
+                if commit_result.error is not None:
+                    candidate.cancel()
+                    self._show_error(f"DXF 集合提交失败：{commit_result.error[:240]}")
+                    return
+                self._sync_drawing_layers()
+                if self.viewport is not None:
+                    self.viewport.refresh()
+                self.status_command.setText("DXF 集合已导入；可一次撤销、重做和保存重放。")
+
+            if not unit.submit(
+                commit_candidate,
+                operation="dxf-collection-import-commit",
+                session_id=session_id,
+                on_complete=finish_commit,
+            ):
+                candidate.cancel()
+                self.status_command.setText("应用工作线程忙碌，DXF 集合尚未提交。")
+
+        if not unit.submit(
+            preview_candidate,
+            operation="dxf-collection-import-preview",
+            session_id=session_id,
+            on_complete=finish_preview,
+        ):
+            candidate.cancel()
+            self.status_command.setText("应用工作线程忙碌，DXF 集合尚未预览。")
 
     def _on_import_dxf_sketch(self) -> None:
         if self._services is None or self._loaded is None:
@@ -13540,7 +18270,16 @@ class MainWindow(QMainWindow):
                 self._show_error("无法读取 DXF 草图：返回结果无效。")
                 return
             imported = result.value
-            if not imported.sketch.entities:
+            if imported.groups or imported.block_instances or imported.block_definitions:
+                self._queue_dxf_collection_import(imported, loaded, services, session_id)
+                return
+            if (
+                not imported.sketch.entities
+                and not imported.texts
+                and not imported.tolerance_frames
+                and not imported.datum_identifiers
+                and not imported.detached_dimensions
+            ):
                 self._show_error(f"DXF 中没有可导入的支持图元：{imported.report}")
                 return
             existing_sketch_ids = {
@@ -13551,10 +18290,58 @@ class MainWindow(QMainWindow):
             report = imported.report
             sketch = imported.sketch
             imported_styles: DimensionStyleTable | None = None
+            prepared_text_styles = imported.text_styles
+            prepared_texts = imported.texts
+            prepared_frames = imported.tolerance_frames
+            prepared_datums = imported.datum_identifiers
             if imported.dimension_styles and loaded.document.document_type == "drawing2d":
                 try:
                     table = services.kernel.drawing_dimension_styles
                     styles_by_id = dict(imported.dimension_styles)
+                    font_ids = tuple(
+                        style.text_style_id
+                        for style in styles_by_id.values()
+                        if style.text_style_id is not None
+                    )
+                    if font_ids:
+                        if prepared_text_styles is None:
+                            raise ValueError("DXF 标注引用了缺失的文字样式。")
+                        font_ids += tuple(text.style_id for text in prepared_texts)
+                        font_ids += tuple(
+                            frame.text_style_id
+                            for frame in prepared_frames
+                            if frame.text_style_id is not None
+                        )
+                        font_ids += tuple(
+                            datum.text_style_id
+                            for datum in prepared_datums
+                            if datum.text_style_id is not None
+                        )
+                        prepared_text_styles, font_map = reconcile_text_style_ids(
+                            font_ids, prepared_text_styles, services.kernel.drawing_text_styles
+                        )
+                        styles_by_id = {
+                            identity: replace(style, text_style_id=font_map[style.text_style_id])
+                            if style.text_style_id is not None
+                            else style
+                            for identity, style in styles_by_id.items()
+                        }
+                        prepared_texts = tuple(
+                            replace(text, style_id=font_map[text.style_id])
+                            for text in prepared_texts
+                        )
+                        prepared_frames = tuple(
+                            replace(frame, text_style_id=font_map[frame.text_style_id])
+                            if frame.text_style_id is not None
+                            else frame
+                            for frame in prepared_frames
+                        )
+                        prepared_datums = tuple(
+                            replace(datum, text_style_id=font_map[datum.text_style_id])
+                            if datum.text_style_id is not None
+                            else datum
+                            for datum in prepared_datums
+                        )
                     constraints: list[SketchConstraint] = []
                     for constraint in sketch.constraints:
                         style = styles_by_id.get(constraint.constraint_id)
@@ -13571,12 +18358,89 @@ class MainWindow(QMainWindow):
                     sketch = replace(sketch, constraints=tuple(constraints))
                     if table != services.kernel.drawing_dimension_styles:
                         imported_styles = table
-                except ValueError as exc:
+                except (KeyError, ValueError) as exc:
                     self._show_error(f"无法导入 DXF 标注样式：{exc}")
                     return
+            sketch, prepared_datums, prepared_frames, curve_count = remap_colliding_curves(
+                sketch, prepared_datums, prepared_frames, services.kernel.sketches
+            )
+            try:
+                prepared_datums, prepared_frames, label_changes = remap_datum_labels(
+                    prepared_datums, prepared_frames, services.kernel.drawing_datum_identifiers
+                )
+            except ValueError as exc:
+                self._show_error(f"无法导入 DXF 基准：{exc}")
+                return
+            identity_warnings = (
+                (f"{curve_count} 条曲线的身份与当前文档重复，已分配新的图元及点身份",)
+                if curve_count
+                else ()
+            ) + tuple(f"基准名称冲突：{old} → {new}" for old, new in label_changes)
+            if identity_warnings:
+                report = DxfExchangeReport(
+                    report.action,
+                    report.dxf_version,
+                    report.unit,
+                    report.entity_count,
+                    (*report.warnings, *identity_warnings),
+                )
             if sketch.sketch_id in existing_sketch_ids:
+                new_sketch_id = uuid4().hex
+                imported = replace(
+                    imported,
+                    datum_identifiers=tuple(
+                        replace(
+                            datum, attachment=replace(datum.attachment, sketch_id=new_sketch_id)
+                        )
+                        if datum.attachment is not None
+                        and datum.attachment.sketch_id == sketch.sketch_id
+                        else datum
+                        for datum in imported.datum_identifiers
+                    ),
+                )
+                prepared_datums = tuple(
+                    replace(datum, attachment=replace(datum.attachment, sketch_id=new_sketch_id))
+                    if datum.attachment is not None
+                    and datum.attachment.sketch_id == sketch.sketch_id
+                    else datum
+                    for datum in prepared_datums
+                )
+                prepared_datums = tuple(
+                    replace(
+                        datum,
+                        annotation_attachment=replace(
+                            datum.annotation_attachment, sketch_id=new_sketch_id
+                        ),
+                    )
+                    if datum.annotation_attachment is not None
+                    and datum.annotation_attachment.sketch_id == sketch.sketch_id
+                    else datum
+                    for datum in prepared_datums
+                )
+                prepared_frames = tuple(
+                    replace(
+                        frame,
+                        leader_attachment=replace(frame.leader_attachment, sketch_id=new_sketch_id),
+                    )
+                    if frame.leader_attachment is not None
+                    and frame.leader_attachment.sketch_id == sketch.sketch_id
+                    else frame
+                    for frame in prepared_frames
+                )
+                prepared_frames = tuple(
+                    replace(
+                        frame,
+                        leader_annotation_attachment=replace(
+                            frame.leader_annotation_attachment, sketch_id=new_sketch_id
+                        ),
+                    )
+                    if frame.leader_annotation_attachment is not None
+                    and frame.leader_annotation_attachment.sketch_id == sketch.sketch_id
+                    else frame
+                    for frame in prepared_frames
+                )
                 sketch = Sketch(
-                    uuid4().hex,
+                    new_sketch_id,
                     sketch.frame,
                     sketch.entities,
                     constraints=sketch.constraints,
@@ -13592,7 +18456,8 @@ class MainWindow(QMainWindow):
                 )
             preview = (
                 f"{report}\n\n将把 {len(sketch.entities)} 个支持图元作为一张 XY 草图追加到当前文档。"
-                f"\n恢复关联尺寸 {len(sketch.constraints)} 个。"
+                f"\n恢复关联尺寸 {len(sketch.constraints)} 个；独立参考尺寸 {len(imported.detached_dimensions)} 个；文字 {len(imported.texts)} 个。"
+                f"\n恢复形位公差框 {len(imported.tolerance_frames)} 个，基准 {len(imported.datum_identifiers)} 个。"
                 f"\n恢复图纸样式关联 {sum(c.style_name is not None for c in sketch.constraints)} 个。"
                 "\n确认前不会修改命令历史或模型。"
             )
@@ -13614,17 +18479,25 @@ class MainWindow(QMainWindow):
                     sketch,
                     session_identity=session_id,
                     imported_styles=imported_styles,
+                    imported_texts=prepared_texts,
+                    imported_text_styles=prepared_text_styles,
+                    imported_tolerance_frames=prepared_frames,
+                    imported_datums=prepared_datums,
+                    imported_reference_dimensions=imported.detached_dimensions,
+                    imported_curve_ids=True,
                 )
 
             def finish_submit(submit_result: ExecutionResult) -> None:
                 if submit_result.error is not None:
                     self._show_error(f"DXF 草图提交失败：{submit_result.error[:240]}")
                     return
+                self._sync_drawing_layers()
                 if self.viewport is not None:
                     self.viewport.refresh()
                 self.status_command.setText(
                     f"DXF 草图已导入并写入命令历史：{len(sketch.entities)} 个图元，"
-                    f"{len(sketch.constraints)} 个关联尺寸；可撤销、重做和保存重放。"
+                    f"{len(sketch.constraints)} 个关联尺寸，{len(imported.detached_dimensions)} 个独立参考尺寸，{len(imported.texts)} 个文字，"
+                    f"{len(imported.tolerance_frames)} 个形位公差框，{len(imported.datum_identifiers)} 个基准；可撤销、重做和保存重放。"
                 )
 
             if not unit.submit(
@@ -13644,6 +18517,8 @@ class MainWindow(QMainWindow):
             self.status_command.setText("应用工作线程忙碌，DXF 尚未读取；请稍后重试。")
 
     def _on_open_document(self) -> None:
+        if self._pending_drawing_text_blocks_navigation():
+            return
         if (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -13672,9 +18547,17 @@ class MainWindow(QMainWindow):
         )
         if not selected:
             return
-        self.open_document_path(Path(selected).absolute())
+        self.open_document_path(Path(selected).absolute(), _already_confirmed=True)
 
-    def open_document_path(self, path: Path, *, old_recent_path: Path | None = None) -> None:
+    def open_document_path(
+        self,
+        path: Path,
+        *,
+        old_recent_path: Path | None = None,
+        _already_confirmed: bool = False,
+    ) -> None:
+        if self._pending_drawing_text_blocks_navigation():
+            return
         if (
             self._active_modeling_command is not None
             or self.datum_task is not None
@@ -13689,6 +18572,10 @@ class MainWindow(QMainWindow):
         if self.part_sketch_task is not None and self.part_sketch_task.has_draft:
             self.status_command.setText("请先完成或取消零件草图，再打开文档。")
             return
+        if self.document_session is None and not _already_confirmed:
+            resume = partial(self.open_document_path, path, old_recent_path=old_recent_path)
+            if not self._confirm_unsaved_changes(on_saved=resume):
+                return
         if self.document_session is not None:
             unit, session, services = self.execution_unit, self.document_session, self._services
             if unit is None:
@@ -13923,8 +18810,16 @@ class MainWindow(QMainWindow):
     def _prepare_session_document(
         self, entry: SessionDocument, complete: Callable[[bool], None]
     ) -> None:
-        if self._prepared_sketch_save is not None:
-            complete(False)
+        preparation = self._prepared_sketch_save
+        if preparation is not None:
+
+            def retry_preparation(error: str | None) -> None:
+                if error is not None:
+                    complete(False)
+                else:
+                    self._prepare_session_document(entry, complete)
+
+            self._settle_session_save(preparation.entry, False, retry_preparation)
             return
         if self.execution_unit is not None and (
             self.execution_unit.is_busy or self.execution_unit.is_notifying_result
@@ -13945,11 +18840,28 @@ class MainWindow(QMainWindow):
         draft = self._sketch_dialog
         if draft is None or not (
             draft.canvas.entities
+            or (draft.canvas.text_tools is not None and draft.canvas.text_tools.pending)
             or draft.canvas.has_pending_geometry
             or draft.canvas.mixed_move is not None
+            or (
+                draft.canvas.collection_session is not None
+                and draft.canvas.collection_session.has_staged_operations
+            )
         ):
             complete(True)
             return
+        collection = draft.canvas.collection_session
+        if collection is not None:
+            try:
+                recovered = collection.retry_failed_commit_recovery()
+                if recovered is not None:
+                    draft.canvas.rebind_restored_source(*recovered)
+                    collection.complete_failed_commit_canvas_rebind(recovered)
+            except Exception as exc:
+                draft.status_label.setText(f"二维暂存恢复失败：{exc}。请重试或取消草稿。")
+                self._show_error(draft.status_label.text())
+                complete(False)
+                return
         revision = entry.loaded.document.revision
         self._prepared_sketch_save = _PreparedSketchSave(
             entry,
@@ -13980,10 +18892,16 @@ class MainWindow(QMainWindow):
         bus, draft = preparation.loaded.bus, preparation.draft
 
         def retain_failed(error: str) -> None:
+            collection = draft.canvas.collection_session
+            if collection is not None:
+                try:
+                    collection.retain_failed_save_recovery()
+                except Exception as exc:
+                    error = f"{error}；无法恢复写入保护：{exc}"
             entry.draft = draft
             draft.setEnabled(False)
-            draft.status_label.setText(f"保存恢复失败：{error}。原草稿已保留，暂时不能编辑。")
-            complete(error)
+            draft.status_label.setText(f"保存恢复失败：{error}。原草稿已保留；再次保存可重试恢复。")
+            complete(f"{error}；请再次保存以重试恢复")
 
         if saved:
             bus.release_save_checkpoint(preparation.checkpoint)
@@ -13997,6 +18915,52 @@ class MainWindow(QMainWindow):
                 if self._sketch_dialog is not None:
                     self._sketch_dialog.continue_workspace_from(draft)
             complete(None)
+            return
+
+        def finish_restore() -> None:
+            try:
+                collection = draft.canvas.collection_session
+                if collection is not None and not preparation.collection_restored:
+                    collection.restore_after_save_failure(
+                        entry.services,
+                        preparation.loaded,
+                        preparation.source_revision,
+                        preparation.loaded.document.revision,
+                        self._session_id,
+                    )
+                    preparation.collection_restored = True
+                draft.canvas.rebind_restored_source(
+                    preparation.source_revision, preparation.loaded.document.revision
+                )
+            except Exception as exc:
+                retain_failed(str(exc))
+                return
+            self._prepared_sketch_save = None
+            draft.result_sketch = None
+            draft.setResult(QDialog.DialogCode.Rejected)
+            draft.setEnabled(True)
+            entry.draft = draft
+            if (
+                self._loaded is preparation.loaded
+                and self.document_session is not None
+                and self.document_session.active is entry
+            ):
+                self._sketch_dialog = draft
+                self._show_sketch_workbench(draft)
+                self._sync_drawing_layers()
+                if self.viewport is not None:
+                    self.viewport.refresh()
+            elif (
+                self.document_session is not None
+                and self.document_session.active is not None
+                and self.document_session.active.kind == "sketch"
+                and self._sketch_dialog is None
+            ):
+                self._on_sketch_start()
+            complete(None)
+
+        if preparation.checkpoint_restored:
+            finish_restore()
             return
         unit = self.execution_unit
         if unit is None or unit.is_busy or unit.is_notifying_result:
@@ -14015,34 +18979,23 @@ class MainWindow(QMainWindow):
                 or entry.loaded is not preparation.loaded
             ):
                 raise ValidationError("文档会话已变化，拒绝恢复到旧状态。")
-            bus.restore_save_checkpoint(
-                preparation.checkpoint, expected_revision=preparation.prepared_revision
-            )
+            collection = draft.canvas.collection_session
+            if collection is None:
+                bus.restore_save_checkpoint(
+                    preparation.checkpoint, expected_revision=preparation.prepared_revision
+                )
+            else:
+                collection.restore_save_checkpoint(
+                    preparation.checkpoint, preparation.prepared_revision
+                )
 
         def restored(result: ExecutionResult) -> None:
             if result.error is not None:
                 # Do not discard the retained draft or hide a failed recovery.
                 retain_failed(result.error)
                 return
-            self._prepared_sketch_save = None
-            draft.canvas.rebind_restored_source(
-                preparation.source_revision, preparation.loaded.document.revision
-            )
-            draft.result_sketch = None
-            draft.setResult(QDialog.DialogCode.Rejected)
-            draft.setEnabled(True)
-            entry.draft = draft
-            if (
-                self._loaded is preparation.loaded
-                and self.document_session is not None
-                and self.document_session.active is entry
-            ):
-                self._sketch_dialog = draft
-                self._show_sketch_workbench(draft)
-                self._sync_drawing_layers()
-                if self.viewport is not None:
-                    self.viewport.refresh()
-            complete(None)
+            preparation.checkpoint_restored = True
+            finish_restore()
 
         if not unit.submit(
             restore,
@@ -14211,11 +19164,12 @@ class MainWindow(QMainWindow):
             self.status_command.setText("未组合应用服务，无法导出")
             return
         drawing2d = self._loaded is not None and self._loaded.document.document_type == "drawing2d"
-        selected, _selected_filter = QFileDialog.getSaveFileName(
+        graphic_filter = "DXF 图形兼容（标注不可结构化编辑） (*.dxf)"
+        selected, selected_filter = QFileDialog.getSaveFileName(
             self,
             "导出 DXF 草图" if drawing2d else "导出（STEP/STL/DXF）",
             "",
-            "DXF 草图 (*.dxf)"
+            f"DXF 草图 (*.dxf);;{graphic_filter}"
             if drawing2d
             else "STEP 文件 (*.step *.stp);;STL 文件 (*.stl);;DXF 草图 (*.dxf)",
         )
@@ -14228,7 +19182,9 @@ class MainWindow(QMainWindow):
         try:
             provider = self._services.formats.resolve(target)
             if cast("object", provider) is DXF_PROVIDER:
-                self._queue_dxf_output_preview(target)
+                self._queue_dxf_output_preview(
+                    target, tolerance_graphics=drawing2d and selected_filter == graphic_filter
+                )
                 return
             report = provider.write(self._services.kernel, target)
         except UnknownFormatError as exc:
@@ -14243,12 +19199,50 @@ class MainWindow(QMainWindow):
         suffix = f"；{report}" if report is not None else ""
         self.status_command.setText(f"已导出：{target}{suffix}")
 
-    def _queue_dxf_output_preview(self, target: Path) -> None:
+    def _queue_dxf_output_preview(self, target: Path, *, tolerance_graphics: bool = False) -> None:
         loaded, services, unit = self._loaded, self._services, self.execution_unit
         if loaded is None or services is None or unit is None:
             self.status_command.setText("当前文档不可用，DXF 未导出。")
             return
         session_id, revision = self._session_id, loaded.document.revision
+        legacy_frame_anchors: dict[str, tuple[float, float]] = {}
+        legacy_frame_skipped_vertices: dict[str, int] = {}
+        legacy_frame_bounds: dict[str, tuple[float, float, float, float]] = {}
+        graphic_frame_widths: dict[str, tuple[tuple[float, ...], ...]] = {}
+        graphic_frame_glyphs = None
+        graphic_datum_snapshots = None
+        legacy_datum_snapshots = None
+        graphic_font_notices: tuple[str, ...] = ()
+        legacy_font_notices: tuple[str, ...] = ()
+        editor = self.active_sketch_dialog()
+        if editor is not None and editor.canvas.geometric_tolerance_tools is not None:
+            try:
+                tools = editor.canvas.geometric_tolerance_tools
+                frames = services.kernel.drawing_tolerance_frames
+                legacy_frame_anchors = tools.legacy_frame_export_anchors(frames)
+                legacy_frame_skipped_vertices = tools.legacy_frame_export_skipped_vertices(
+                    frames, legacy_frame_anchors
+                )
+                legacy_frame_bounds = tools.legacy_frame_export_bounds(frames, legacy_frame_anchors)
+                if tolerance_graphics:
+                    datums = services.kernel.drawing_datum_identifiers
+                    graphic_frame_widths = tools.graphic_frame_export_widths(frames)
+                    graphic_frame_glyphs = tools.graphic_frame_export_glyphs(frames)
+                    graphic_datum_snapshots = tools.graphic_datum_export_snapshots(datums)
+                    graphic_font_notices = (
+                        *tools.graphic_frame_export_font_notices(frames),
+                        *tools.graphic_datum_export_font_notices(datums),
+                    )
+                else:
+                    datums = services.kernel.drawing_datum_identifiers
+                    legacy_datum_snapshots = tools.legacy_datum_export_snapshots(datums)
+                    graphic_font_notices = tools.legacy_datum_export_font_notices(datums)
+                legacy_font_notices = tools.legacy_frame_export_font_notices(
+                    frames, legacy_frame_anchors
+                )
+            except ValueError as exc:
+                self._show_error(f"DXF 输出预览失败：{exc}")
+                return
 
         def is_current() -> bool:
             return (
@@ -14265,6 +19259,11 @@ class MainWindow(QMainWindow):
             if result.error is not None or not isinstance(preview, DxfOutputPreview):
                 self._show_error(f"DXF 输出预览失败：{result.error or '返回结果无效'}")
                 return
+            if legacy_font_notices or graphic_font_notices:
+                preview = replace(
+                    preview,
+                    notices=(*preview.notices, *legacy_font_notices, *graphic_font_notices),
+                )
             try:
                 dialog = DxfOutputPreviewDialog(preview, target.name, self)
             except ValueError as exc:
@@ -14286,7 +19285,17 @@ class MainWindow(QMainWindow):
             self.status_command.setText(f"已导出：{target}；{preview.report}")
 
         if unit.submit(
-            lambda: prepare_dxf_output_preview(services.kernel),
+            lambda: prepare_dxf_output_preview(
+                services.kernel,
+                tolerance_graphics=tolerance_graphics,
+                legacy_frame_anchors=legacy_frame_anchors,
+                legacy_frame_skipped_vertices=legacy_frame_skipped_vertices,
+                legacy_frame_bounds=legacy_frame_bounds,
+                graphic_frame_widths=graphic_frame_widths,
+                graphic_frame_glyphs=graphic_frame_glyphs,
+                graphic_datum_snapshots=graphic_datum_snapshots,
+                legacy_datum_snapshots=legacy_datum_snapshots,
+            ),
             operation="dxf-output-preview",
             session_id=session_id,
             on_complete=finish_preview,
@@ -14295,9 +19304,28 @@ class MainWindow(QMainWindow):
         else:
             self.status_command.setText("应用工作线程忙碌，DXF 尚未导出；请稍后重试。")
 
+    def _pending_drawing_text_blocks_navigation(self) -> bool:
+        if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools is not None
+            and self._sketch_dialog.canvas.geometric_tolerance_tools.pending
+        ):
+            self.status_command.setText("形位公差或基准尚未放置，请先完成或按 Esc 取消。")
+            return True
+        if (
+            self._sketch_dialog is None
+            or self._sketch_dialog.canvas.text_tools is None
+            or not self._sketch_dialog.canvas.text_tools.pending
+        ):
+            return False
+        self.status_command.setText("二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消，再切换文档。")
+        return True
+
     def _has_unsubmitted_geometry(
         self, *, include_sketch: bool = True, include_history: bool = True
     ) -> bool:
+        if self._pending_drawing_text_blocks_navigation():
+            return True
         if include_history and self.history_edit_task is not None:
             self.status_command.setText("历史编辑尚未确认，请先完成或取消当前命令。")
             return True
@@ -14306,6 +19334,15 @@ class MainWindow(QMainWindow):
             return True
         if self.bound_hole_task is not None:
             self.status_command.setText("绑定孔尚未确认，请先完成或取消当前命令。")
+            return True
+        if (
+            self._sketch_dialog is not None
+            and self._sketch_dialog.canvas.text_tools is not None
+            and self._sketch_dialog.canvas.text_tools.pending
+        ):
+            self.status_command.setText(
+                "二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消，再保存或切换文档。"
+            )
             return True
         if include_sketch and self._has_unsubmitted_sketch():
             return True
@@ -14336,10 +19373,25 @@ class MainWindow(QMainWindow):
         draft = self._sketch_dialog
         if draft is None:
             return False
+        if (
+            draft.canvas.geometric_tolerance_tools is not None
+            and draft.canvas.geometric_tolerance_tools.pending
+        ):
+            self.status_command.setText("形位公差或基准尚未放置，请先完成或按 Esc 取消。")
+            draft.status_label.setText(self.status_command.text())
+            return True
+        if draft.canvas.text_tools is not None and draft.canvas.text_tools.pending:
+            self.status_command.setText("二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消。")
+            draft.status_label.setText(self.status_command.text())
+            return True
         if not (
             draft.canvas.entities
             or draft.canvas.has_pending_geometry
             or draft.canvas.mixed_move is not None
+            or (
+                draft.canvas.collection_session is not None
+                and draft.canvas.collection_session.has_staged_operations
+            )
         ):
             return False
         self.status_command.setText(
@@ -14350,6 +19402,8 @@ class MainWindow(QMainWindow):
 
     def _confirm_unsaved_changes(self, *, on_saved: Callable[[], object] | None = None) -> bool:
         """放行或保留当前文档；异步保存成功后通过 on_saved 继续原操作。"""
+        if not self._close_block_editor(self._loaded):
+            return False
         if self._has_unsubmitted_geometry(include_sketch=False):
             return False
         has_draft = self._has_unsubmitted_sketch()
@@ -14431,6 +19485,9 @@ class MainWindow(QMainWindow):
         if self.execution_unit is not None and self.execution_unit.is_busy:
             self.status_command.setText("操作完成前无法关闭窗口")
             self._session_close_waiting = self._session_close_approved
+            event.ignore()
+            return
+        if not self._close_block_editor():
             event.ignore()
             return
         self._session_close_waiting = False

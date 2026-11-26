@@ -2253,6 +2253,8 @@ def test_drag_saved_handle_with_pending_draft_tangency(qtbot: QtBot, tmp_path: P
     QTest.mouseMove(canvas, end)
     qtbot.waitUntil(lambda: bool(canvas.saved_handle_preview), timeout=15000)
     assert services.kernel.sketches == before and canvas.entities == [circle]
+    # The preview status can resize the canvas while the solver runs.
+    end = canvas.local_to_screen((-10, 1))
     QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
     qtbot.waitUntil(lambda: canvas.mixed_move is not None and not unit.is_busy, timeout=15000)
     changed_line = next(

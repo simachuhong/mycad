@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast, override
+from typing import TYPE_CHECKING, Literal, cast, override
 
 from PySide6.QtCore import (
     QCoreApplication,
@@ -177,7 +177,7 @@ class _CommandInput(QPlainTextEdit):
     def set_history(self, lines: list[str], prompt: str) -> None:
         typed = self.text()
         visible = lines[:-1] if lines and lines[-1] == prompt else lines
-        prefix = "\n".join((*visible, f"{prompt} "))
+        prefix = "\n".join((*visible, prompt, "命令: "))
         self.setPlainText(prefix)
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -293,6 +293,15 @@ class Drawing2DCommandBar(QWidget):
     history_reset = Signal()
     activate_requested = Signal()
     panel_requested = Signal(str)
+    group_requested = Signal()
+    ungroup_requested = Signal()
+    group_edit_requested = Signal()
+    block_requested = Signal()
+    block_insert_requested = Signal()
+    block_explode_requested = Signal()
+    block_edit_requested = Signal()
+    block_library_requested = Signal()
+    block_write_requested = Signal()
 
     _DIMENSIONS = {
         "DIM": "smart",
@@ -329,6 +338,7 @@ class Drawing2DCommandBar(QWidget):
         "POLYGON": "多边形",
         "C": "圆",
         "CIRCLE": "圆",
+        "ELLIPSE": "椭圆",
         "A": "圆弧",
         "ARC": "圆弧",
         "SPL": "样条曲线",
@@ -344,7 +354,9 @@ class Drawing2DCommandBar(QWidget):
         "CHA": "二维倒角",
         "CHAMFER": "二维倒角",
     }
-    _DRAWING_TOOLS = frozenset({"点", "直线", "多段线", "矩形", "多边形", "圆", "圆弧", "样条曲线"})
+    _DRAWING_TOOLS = frozenset(
+        {"点", "直线", "多段线", "矩形", "多边形", "圆", "圆弧", "椭圆", "样条曲线"}
+    )
     _TRANSFORMS = {
         "E": "erase",
         "ERASE": "erase",
@@ -402,6 +414,7 @@ class Drawing2DCommandBar(QWidget):
         self._commit_rectangular_array = commit_rectangular_array
         self._configure_polygon = configure_polygon
         self._polygon_stage = ""
+        self._collection_selecting: Literal["group", "block"] | None = None
         self._view_stage = ""
         self._view_first: Point2D | None = None
         self._distance_active = False
@@ -484,6 +497,7 @@ class Drawing2DCommandBar(QWidget):
         self.status = MessageLabel("输入命令或坐标。", self)
         self.status.text_changed.connect(self._record_history)
         self.input = _CommandInput(self)
+        self.input.installEventFilter(self)
         self.input.setObjectName("drawing2dCommandInput")
         self.input.set_history(self.history, self.status.text())
         self.status.hide()
@@ -510,6 +524,102 @@ class Drawing2DCommandBar(QWidget):
         dimensions.status_changed.connect(self.status.setText)
         dimensions.command_reset.connect(self._reset_dimension_input)
         dimensions.operation_started.connect(self._end_readonly_workflow)
+
+    def begin_group_selection(self) -> bool:
+        """Wait for an object selection made after the GROUP command."""
+        return self._begin_collection_selection("group")
+
+    def begin_block_selection(self) -> bool:
+        """Wait for an object selection made after the BLOCK command."""
+        return self._begin_collection_selection("block")
+
+    def _begin_collection_selection(self, operation: Literal["group", "block"]) -> bool:
+        if not self._activate("选择元素"):
+            return False
+        self._collection_selecting = operation
+        subject = "要编组的对象" if operation == "group" else "要创建块的几何或文字"
+        self._canvas.message = f"请先选择{subject}（Ctrl 多选），按 Enter 或右键确认，Esc 取消。"
+        self.status.setText(self._canvas.message)
+        self._canvas.setFocus()
+        return True
+
+    def _confirm_collection_selection(self) -> None:
+        operation = self._collection_selecting
+        self._collection_selecting = None
+        self.input.clear()
+        if operation == "group":
+            self.group_requested.emit()
+        elif operation == "block":
+            self.block_requested.emit()
+        self.status.setText(self._canvas.message)
+
+    def remember_collection_command(
+        self,
+        operation: Literal[
+            "group",
+            "block",
+            "ungroup",
+            "groupedit",
+            "insert",
+            "explode",
+            "bedit",
+            "blocklib",
+            "wblock",
+        ],
+    ) -> None:
+        """Keep toolbar and command-line collection actions available for repeat."""
+        self._last_command = operation.upper()
+        self._last_is_transform = False
+
+    def _can_repeat_on_canvas_right_click(self) -> bool:
+        canvas = self._canvas
+        return bool(
+            canvas.select_committed_entities
+            and canvas.tool == "选择元素"
+            and not self.input.text().strip()
+            and not canvas.has_pending_geometry
+            and not canvas.has_active_edit_gesture
+            and not canvas.selected_entity_ids
+            and not canvas.selected_constraint_ids
+            and not canvas.selected_raster_ids
+            and not canvas.selected_block_instance_ids
+            and not (
+                canvas.text_tools and (canvas.text_tools.pending or canvas.text_tools.selected_ids)
+            )
+            and not (
+                canvas.geometric_tolerance_tools
+                and (
+                    canvas.geometric_tolerance_tools.pending
+                    or canvas.geometric_tolerance_tools.selected_ids
+                )
+            )
+            and not self._collection_selecting
+            and not self._distance_active
+            and self._area_points is None
+            and not self._measurement_mode
+            and not self._view_stage
+            and not self._polygon_stage
+            and not self._array_stage
+            and not self._polar_stage
+            and not self._rect_stage
+            and not self._chamfer_stage
+            and not self._chamfer_system_pending
+            and not self._fillet_radius_pending
+            and not self._filletrad_system_pending
+            and not self._fillet_trim_pending
+            and not self._copy_mode_pending
+            and not self._copy_command_mode_pending
+            and not self._line_edge_pending
+            and not self._edge_system_pending
+            and not self._offsetdist_pending
+            and not self._offsetgaptype_pending
+            and not self._trim_mode_system_pending
+            and not self._corner_trim_system_pending
+            and not self._line_mode_pending
+            and not self._projection_pending
+            and not self._linear_rotation_pending
+            and not (self._dimensions and self._dimensions.mode is not None)
+        )
 
     def _end_readonly_workflow(self) -> bool:
         active = bool(
@@ -571,6 +681,15 @@ class Drawing2DCommandBar(QWidget):
                 "ZOOM",
                 "Z",
                 "PAN",
+                "GROUP",
+                "UNGROUP",
+                "GROUPEDIT",
+                "BLOCK",
+                "INSERT",
+                "EXPLODE",
+                "BEDIT",
+                "BLOCKLIB",
+                "WBLOCK",
                 "P",
                 "HELP",
                 "FILLETRAD",
@@ -580,7 +699,26 @@ class Drawing2DCommandBar(QWidget):
                 "CHAMFERC",
                 "CHAMFERD",
                 "CHAMMODE",
+                "TEXT",
+                "DTEXT",
+                "MTEXT",
+                "STYLE",
                 "DIMSTYLE",
+                "TOLERANCE",
+                "AMFCFRAME",
+                "AMDATUMID",
+                "DATUMLABEL",
+                "DATUMSTYLE",
+                "DATUMSYMBOL",
+                "DATUMARROW",
+                "SURFACEEXTEDIT",
+                "SURFACEINDICATION",
+                "EDGESYMBOL",
+                "DETACHDATUM",
+                "DETACHFRAME",
+                "REATTACH",
+                "REPAIRANNOTATIONIDS",
+                "CURVEIDUPGRADE",
                 "D",
                 "DIST",
                 "DI",
@@ -703,6 +841,10 @@ class Drawing2DCommandBar(QWidget):
             if not self._canvas.arc_mode_prompt_active or self._canvas.arc_ttr_active:
                 return
             candidates = ["3POINT", "CENTER", "TTR"]
+        elif self._canvas.tool == "椭圆" and self._canvas.ellipse_mode_prompt_active:
+            candidates = ["ARC"]
+        elif self._canvas.tool == "椭圆" and self._canvas.ellipse_arc_mode:
+            candidates = ["CW", "CCW"]
         elif self._canvas.tool == "多段线" and self._canvas.pending_point_count:
             if self._canvas.polyline_arc_stage:
                 return
@@ -764,6 +906,50 @@ class Drawing2DCommandBar(QWidget):
 
     @override
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if self._collection_selecting and watched is self._canvas:
+            if isinstance(event, QKeyEvent) and event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self.cancel()
+                    return True
+                if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space}:
+                    if not self._canvas.has_active_edit_gesture:
+                        self._confirm_collection_selection()
+                    return True
+            if (
+                isinstance(event, QMouseEvent)
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.RightButton
+                and not self._canvas.has_active_edit_gesture
+            ):
+                self._canvas.suppress_next_mouse_context_menu()
+                self._confirm_collection_selection()
+                return True
+        if (
+            watched is self._canvas
+            and isinstance(event, QMouseEvent)
+            and event.type() == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.RightButton
+            and self._can_repeat_on_canvas_right_click()
+        ):
+            self._canvas.suppress_next_mouse_context_menu()
+            self.submit()
+            return True
+        tools = self._canvas.geometric_tolerance_tools
+        if (
+            watched in (self._canvas, self.input)
+            and isinstance(event, QKeyEvent)
+            and event.key() == Qt.Key.Key_F
+            and event.modifiers() == Qt.KeyboardModifier.ShiftModifier
+            and tools is not None
+            and (tools.mechanical_datum_active or tools.mechanical_frame_active)
+        ):
+            if event.type() == QEvent.Type.ShortcutOverride:
+                event.accept()
+                return True
+            if event.type() == QEvent.Type.KeyPress:
+                tools.toggle_mechanical_leader_orthogonal()
+                event.accept()
+                return True
         if watched is self._canvas and self._measurement_mode:
             if self._measurement_mode == "quick":
                 if event.type() in {QEvent.Type.Leave, QEvent.Type.Wheel}:
@@ -1240,6 +1426,8 @@ class Drawing2DCommandBar(QWidget):
 
     def _sync_canvas_prompt(self) -> None:
         self._invalidate_quick_for_visible_change()
+        if self._collection_selecting and self._canvas.tool != "选择元素":
+            self._collection_selecting = None
         if self._canvas.active_transform is not None:
             self._end_readonly_workflow()
         if self._measurement_mode and self._canvas.tool != "选择元素":
@@ -1296,6 +1484,8 @@ class Drawing2DCommandBar(QWidget):
             self._canvas.circle_fillet_radius_pending = False
         else:
             self._fillet_radius_pending = self._canvas.circle_fillet_radius_pending
+        if self._collection_selecting and "按 Enter 或右键确认" not in self._canvas.message:
+            self._canvas.message += " 按 Enter 或右键确认，Esc 取消。"
         self.status.setText(self._canvas.message)
         self.status.setToolTip(self._canvas.message)
 
@@ -1314,6 +1504,7 @@ class Drawing2DCommandBar(QWidget):
     def start_offset(self) -> None:
         """Start the same offset operation from a visible button."""
         if self._start_transform("offset"):
+            self._canvas.enable_offset_direct_pick()
             self._last_command = "offset"
             self._last_is_transform = True
             self.input.clear()
@@ -1341,6 +1532,9 @@ class Drawing2DCommandBar(QWidget):
         QCoreApplication.sendEvent(self._canvas, event)
 
     def cancel(self) -> None:
+        self._collection_selecting = None
+        if self._canvas.text_tools is not None:
+            self._canvas.text_tools.cancel()
         if self._end_readonly_workflow():
             self.status.setText("命令已取消。")
             self.input.setFocus()
@@ -1395,6 +1589,7 @@ class Drawing2DCommandBar(QWidget):
                 self._measurement_mode,
                 self._view_stage,
                 self._polygon_stage,
+                self._collection_selecting,
                 self._array_stage,
                 self._polar_stage,
                 self._rect_stage,
@@ -2721,6 +2916,34 @@ class Drawing2DCommandBar(QWidget):
         self._history_draft = ""
         self._record_history(f"命令: {text}")
         upper = text.upper()
+        if self._collection_selecting:
+            if not text or upper == self._collection_selecting.upper():
+                self._confirm_collection_selection()
+                return
+            self._collection_selecting = None
+        if (
+            self._canvas.geometric_tolerance_tools is not None
+            and self._canvas.geometric_tolerance_tools.handle_command(text)
+        ):
+            self.input.clear()
+            self.status.setText(self._canvas.message)
+            return
+        corner_trim_option = (
+            upper == "T"
+            and self._canvas.tool in {"二维倒角", "二维圆角"}
+            and self._canvas.text_tools is not None
+            and not self._canvas.text_tools.pending
+        )
+        if self._canvas.text_tools is not None and not corner_trim_option:
+            try:
+                handled = self._canvas.text_tools.handle_command(text)
+            except ValueError as exc:
+                self.status.setText(str(exc))
+                return
+            if handled:
+                self.input.clear()
+                self.status.setText(self._canvas.message)
+                return
         if self._measurement_mode:
             if self._measurement_mode == "options":
                 if upper in {"Q", "QUICK"}:
@@ -3653,6 +3876,22 @@ class Drawing2DCommandBar(QWidget):
                 self._canvas_key(Qt.Key.Key_Return)
                 self.status.setText(self._canvas.message)
             elif self._last_command is not None:
+                if self._last_command in {
+                    "GROUP",
+                    "BLOCK",
+                    "UNGROUP",
+                    "GROUPEDIT",
+                    "INSERT",
+                    "EXPLODE",
+                    "BEDIT",
+                    "BLOCKLIB",
+                    "WBLOCK",
+                    "ZOOM",
+                    "PAN",
+                }:
+                    self.input.setText(self._last_command)
+                    self.submit()
+                    return
                 if self._last_command == "MEASUREGEOM":
                     self._begin_measuregeom()
                     return
@@ -3863,6 +4102,20 @@ class Drawing2DCommandBar(QWidget):
             self.input.clear()
             return
         if (
+            upper in {"A", "ARC"}
+            and self._canvas.tool == "椭圆"
+            and self._canvas.ellipse_mode_prompt_active
+        ):
+            if self._canvas.begin_ellipse_arc():
+                self.input.clear()
+            self.status.setText(self._canvas.message)
+            return
+        if upper in {"CW", "CCW"} and self._canvas.tool == "椭圆" and self._canvas.ellipse_arc_mode:
+            self._canvas.set_ellipse_arc_direction(upper == "CW")
+            self.input.clear()
+            self.status.setText(self._canvas.message)
+            return
+        if (
             upper in {"3P", "3POINT"}
             and self._canvas.tool == "圆弧"
             and self._canvas.arc_mode_prompt_active
@@ -4053,6 +4306,8 @@ class Drawing2DCommandBar(QWidget):
             if not self._activate("选择元素"):
                 self.status.setText(self._canvas.message)
                 return
+            self._last_command = "ZOOM" if upper in {"ZOOM", "Z"} else "PAN"
+            self._last_is_transform = False
             self._view_stage = "zoom" if upper in {"ZOOM", "Z"} else "pan_first"
             self._view_first = None
             self.input.clear()
@@ -4072,6 +4327,48 @@ class Drawing2DCommandBar(QWidget):
                 else "options"
             )
             self.panel_requested.emit(panel)
+            return
+        if upper == "GROUP":
+            self.input.clear()
+            self.group_requested.emit()
+            self.status.setText(self._canvas.message)
+            return
+        if upper == "UNGROUP":
+            self.input.clear()
+            self.remember_collection_command("ungroup")
+            self.ungroup_requested.emit()
+            return
+        if upper == "GROUPEDIT":
+            self.input.clear()
+            self.remember_collection_command("groupedit")
+            self.group_edit_requested.emit()
+            return
+        if upper in {"BLOCKLIB", "WBLOCK"}:
+            self.input.clear()
+            self.remember_collection_command("blocklib" if upper == "BLOCKLIB" else "wblock")
+            (
+                self.block_library_requested if upper == "BLOCKLIB" else self.block_write_requested
+            ).emit()
+            return
+        if upper == "BLOCK":
+            self.input.clear()
+            self.block_requested.emit()
+            self.status.setText(self._canvas.message)
+            return
+        if upper == "INSERT":
+            self.input.clear()
+            self.remember_collection_command("insert")
+            self.block_insert_requested.emit()
+            return
+        if upper == "EXPLODE":
+            self.input.clear()
+            self.remember_collection_command("explode")
+            self.block_explode_requested.emit()
+            return
+        if upper == "BEDIT":
+            self.input.clear()
+            self.remember_collection_command("bedit")
+            self.block_edit_requested.emit()
             return
         if upper in {"POL", "POLYGON"}:
             self._begin_polygon()
@@ -4139,6 +4436,18 @@ class Drawing2DCommandBar(QWidget):
             if self._accepted:
                 self.input.clear()
             self.input.setFocus()
+            return
+        if self._canvas.ellipse_arc_angle_pending and not any(
+            separator in text for separator in (",", "<", "@")
+        ):
+            try:
+                angle = float(text)
+                self._canvas.add_ellipse_arc_angle(angle)
+            except ValueError as exc:
+                self.status.setText(str(exc))
+                return
+            self.input.clear()
+            self.status.setText(self._canvas.message)
             return
         if self._canvas.object_tracking_distance_available and not any(
             separator in text for separator in (",", "<", "@")

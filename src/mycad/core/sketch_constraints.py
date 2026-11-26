@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID
 
 from mycad.core.dimension_styles import DimensionStyle
+from mycad.core.dimension_tolerance import DimensionTolerance
 from mycad.core.sketch_layers import SketchLayer
 
 if TYPE_CHECKING:
@@ -172,6 +173,7 @@ class SketchConstraint:
     projection_axis: tuple[float, float] | None = None
     text_override: str | None = None
     style_name: str | None = None
+    tolerance: DimensionTolerance | None = None
 
     def __post_init__(self) -> None:
         _identity(self.constraint_id, "constraint_id")
@@ -219,6 +221,11 @@ class SketchConstraint:
             if self.kind not in DIMENSION_KINDS:
                 raise ValueError("only a dimension can carry an annotation layer")
         numeric_unit = _DIMENSION_UNITS.get(self.kind)
+        if self.tolerance is not None and (
+            not isinstance(cast("object", self.tolerance), DimensionTolerance)
+            or numeric_unit is None
+        ):
+            raise ValueError("only dimensions can carry a structured tolerance")
         if self.style_name is not None:
             DimensionStyle(self.style_name)
             if numeric_unit is None:
@@ -315,6 +322,8 @@ class SketchConstraint:
             result["text_override"] = self.text_override
         if self.style_name is not None:
             result["style_name"] = self.style_name
+        if self.tolerance is not None:
+            result["tolerance"] = self.tolerance.to_mapping()
         return result
 
     @classmethod
@@ -338,6 +347,7 @@ class SketchConstraint:
             "projection_axis",
             "text_override",
             "style_name",
+            "tolerance",
         }
         if not base.issubset(mapping) or any(key not in allowed for key in mapping):
             raise ValueError(
@@ -403,6 +413,9 @@ class SketchConstraint:
             _placement_point(mapping.get("projection_axis")),
             cast("str | None", mapping.get("text_override")),
             cast("str | None", mapping.get("style_name")),
+            DimensionTolerance.from_mapping(mapping["tolerance"])
+            if "tolerance" in mapping
+            else None,
         )
 
 

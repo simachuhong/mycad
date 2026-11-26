@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="11.256" timestamp="2026-11-17T13:17:05.884780+08:00" hostname="MyLaptop"><testcase classname="tests.ui.test_font_acceptance" name="test_unwritable_font_destination_reports_error_without_staging" time="8.866" /></testsuite></testsuites>

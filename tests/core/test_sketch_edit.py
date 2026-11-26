@@ -44,6 +44,27 @@ def _line(
     return LineEntity(uuid4().hex, start, end, construction=construction, layer_name=layer_name)
 
 
+@pytest.mark.parametrize("kind", ["polyline", "spline"])
+def test_copy_curve_assigns_distinct_point_identities(kind: str) -> None:
+    from mycad.core.geometric_tolerance_topology import legacy_curve_point_identities
+    from mycad.core.sketch import Sketch, SplineEntity, WorkPlaneFrame
+
+    identity = uuid4().hex
+    points = ((0, 0), (1, 0), (2, 1), (3, 1))
+    point_ids = legacy_curve_point_identities(identity, kind, len(points))
+    entity = (
+        PolylineEntity(identity, points, point_ids=point_ids)
+        if kind == "polyline"
+        else SplineEntity(identity, points, point_ids=point_ids)
+    )
+    original, copied = copy_entities((entity,), (identity,), (5, 0))
+    assert isinstance(copied, PolylineEntity | SplineEntity)
+    assert original == entity and copied.entity_id != identity
+    assert len(copied.point_ids) == len(point_ids)
+    assert set(copied.point_ids).isdisjoint(point_ids)
+    Sketch(uuid4().hex, WorkPlaneFrame.xy(), (original, copied))
+
+
 @pytest.mark.parametrize("gap", (-5e-9, 5e-9))
 def test_trim_extend_recognize_tangent_tolerance(gap: float) -> None:
     line = _line((-5, 2 + gap), (-1, 2 + gap))

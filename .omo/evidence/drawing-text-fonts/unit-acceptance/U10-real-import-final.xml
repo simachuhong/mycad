@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="11.576" timestamp="2026-11-17T13:13:52.551582+08:00" hostname="MyLaptop"><testcase classname="tests.ui.test_font_acceptance" name="test_real_font_import_survives_cancelling_resource_dialog" time="8.985" /></testsuite></testsuites>

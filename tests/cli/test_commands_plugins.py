@@ -66,12 +66,12 @@ def test_commands_lists_all_released_builtins(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
     assert main(["commands"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 56
+    assert len(lines) == 77
     rows = [line.split("\t") for line in lines]
     assert all(len(row) == 3 for row in rows)
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)
-    assert verbs.count("") == 29
+    assert verbs.count("") == 50
     assert [row[1] for row in rows if not row[0]] == [
         "datum.coordinate_system.create",
         "datum.plane.create",
@@ -86,16 +86,37 @@ def test_commands_lists_all_released_builtins(
         "drawing.array.resize",
         "drawing.array.rotate",
         "drawing.array.update",
+        "drawing.block.create",
+        "drawing.block.remove",
+        "drawing.block.update",
+        "drawing.block_instance.explode",
+        "drawing.block_instance.insert",
+        "drawing.block_instance.remove",
+        "drawing.block_instance.update",
         "drawing.chamfer_values.set",
+        "drawing.clipboard.prepare",
+        "drawing.curve_identity.upgrade",
+        "drawing.dimension_styles.set",
         "drawing.fillet_radius.set",
+        "drawing.group.create",
+        "drawing.group.remove",
+        "drawing.group.update",
         "drawing.layers.set",
+        "drawing.objects.batch",
         "drawing.raster.add",
         "drawing.raster.batch",
         "drawing.raster.remove",
         "drawing.raster.update",
+        "drawing.reference_dimensions.batch",
         "drawing.sketch.revise",
         "drawing.tangency.add",
         "drawing.tangency.remove",
+        "drawing.text.add",
+        "drawing.text.batch",
+        "drawing.text.remove",
+        "drawing.text.update",
+        "drawing.text_styles.set",
+        "drawing.tolerance.batch",
         "reference.attach",
         "reference.detach",
         "reference.update",
@@ -115,7 +136,7 @@ def test_commands_json_shape(
     payload = json.loads(raw)
     assert set(payload) == {"commands"}
     commands = payload["commands"]
-    assert len(commands) == 56
+    assert len(commands) == 77
     verbs = [entry["verb"] for entry in commands]
     assert verbs == sorted(verbs)
     assert [entry["id"] for entry in commands if not entry["verb"]] == [
@@ -132,16 +153,37 @@ def test_commands_json_shape(
         "drawing.array.resize",
         "drawing.array.rotate",
         "drawing.array.update",
+        "drawing.block.create",
+        "drawing.block.remove",
+        "drawing.block.update",
+        "drawing.block_instance.explode",
+        "drawing.block_instance.insert",
+        "drawing.block_instance.remove",
+        "drawing.block_instance.update",
         "drawing.chamfer_values.set",
+        "drawing.clipboard.prepare",
+        "drawing.curve_identity.upgrade",
+        "drawing.dimension_styles.set",
         "drawing.fillet_radius.set",
+        "drawing.group.create",
+        "drawing.group.remove",
+        "drawing.group.update",
         "drawing.layers.set",
+        "drawing.objects.batch",
         "drawing.raster.add",
         "drawing.raster.batch",
         "drawing.raster.remove",
         "drawing.raster.update",
+        "drawing.reference_dimensions.batch",
         "drawing.sketch.revise",
         "drawing.tangency.add",
         "drawing.tangency.remove",
+        "drawing.text.add",
+        "drawing.text.batch",
+        "drawing.text.remove",
+        "drawing.text.update",
+        "drawing.text_styles.set",
+        "drawing.tolerance.batch",
         "reference.attach",
         "reference.detach",
         "reference.update",
@@ -171,7 +213,7 @@ def test_commands_lists_plugin_contributions(
     monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
     assert main(["commands"]) == 0
     rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
-    assert len(rows) == 57
+    assert len(rows) == 78
     assert "demo.ping" in {row[1] for row in rows}
     verbs = [row[0] for row in rows]
     assert verbs == sorted(verbs)

@@ -10097,3 +10097,247 @@ def test_rotate_reference_target_points_saved_selection_replays(
             ),
             timeout=10000,
         )
+
+
+@pytest.mark.parametrize("attach_during_drag", [False, True])
+def test_array_grip_rejects_edit_during_collection_session(
+    qtbot: QtBot,
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+    attach_during_drag: bool,
+) -> None:
+    from typing import cast
+
+    from mycad.app import AppServices
+    from mycad.core.replay_proposal import ReplayAppend
+    from mycad.core.sketch import Sketch
+    from mycad.ui.drawing_collection_session import DrawingCollectionSession
+
+    window, _saved, _other = reopened_drawing
+    editor, loaded, unit = (
+        window.active_sketch_dialog(),
+        window.loaded_document(),
+        window.execution_unit,
+    )
+    assert editor is not None and loaded is not None and unit is not None
+    source = LineEntity(uuid4().hex, (10, 4), (20, 4))
+    assert editor.canvas.replace_draft_entities((source,))
+    editor.canvas.selected_entity_ids = {source.entity_id}
+    command = editor.drawing_command_bar.input
+    for value in (
+        "ARRAYRECT",
+        "",
+        "1",
+        "2",
+        "8",
+        "AS",
+        "Y",
+        "",
+    ):
+        command.setText(value)
+        QTest.keyClick(command, Qt.Key.Key_Return)
+    editor.finish_sketch()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    current = window.active_sketch_dialog()
+    assert current is not None and current.canvas.set_tool("选择元素")
+    canvas = current.canvas
+    canvas.selected_entity_ids = {source.entity_id}
+    draft = Sketch(current.draft_sketch_id, current.current_frame(), (), layers=current.layer_table)
+    services = cast("AppServices | None", getattr(window, "_" + "services"))
+    assert services is not None
+    session = DrawingCollectionSession(
+        services,
+        loaded,
+        ReplayAppend("sketch.create", 3, draft.to_mapping(version=3), "local"),
+        session_identity=cast("int", getattr(window, "_" + "session_id")),
+    )
+    if not attach_during_drag:
+        canvas.attach_collection_session(session, draft.sketch_id)
+    before = loaded.document.commands
+    checkpoint = session.checkpoint()
+    grip = canvas.local_to_screen((18, 4))
+    target = canvas.local_to_screen((22, 4))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=grip)
+    QTest.mouseMove(canvas, target)
+    if attach_during_drag:
+        assert canvas.array_spacing_drag_active
+        canvas.attach_collection_session(session, draft.sketch_id)
+        QTest.mouseMove(canvas, canvas.local_to_screen((23, 4)))
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=target)
+    assert not canvas.array_spacing_drag_active
+    assert ("变化" if attach_during_drag else "完成或取消") in canvas.message
+    assert loaded.document.commands == before and session.checkpoint() == checkpoint
+
+
+@pytest.mark.parametrize(
+    "mode", ["remove", "spacing", "during_dialog", "replace_cell", "resize_during_dialog"]
+)
+def test_array_menu_rejects_collection_session_before_or_during_dialog(
+    qtbot: QtBot,
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import cast
+
+    from mycad.app import AppServices
+    from mycad.core.replay_proposal import ReplayAppend
+    from mycad.core.sketch import Sketch
+    from mycad.ui.drawing_collection_session import DrawingCollectionSession
+
+    window, _saved, _other = reopened_drawing
+    editor, loaded, unit = (
+        window.active_sketch_dialog(),
+        window.loaded_document(),
+        window.execution_unit,
+    )
+    assert editor is not None and loaded is not None and unit is not None
+    source = LineEntity(uuid4().hex, (10, 4), (20, 4))
+    assert editor.canvas.replace_draft_entities((source,))
+    editor.canvas.selected_entity_ids = {source.entity_id}
+    command = editor.drawing_command_bar.input
+    for value in (
+        "ARRAYRECT",
+        "",
+        "1",
+        "2",
+        "8",
+        "AS",
+        "Y",
+        "",
+    ):
+        command.setText(value)
+        QTest.keyClick(command, Qt.Key.Key_Return)
+    editor.finish_sketch()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    current = window.active_sketch_dialog()
+    assert current is not None and current.canvas.set_tool("选择元素")
+    canvas = current.canvas
+    canvas.selected_entity_ids = {source.entity_id}
+    draft = Sketch(current.draft_sketch_id, current.current_frame(), (), layers=current.layer_table)
+    services = cast("AppServices | None", getattr(window, "_" + "services"))
+    assert services is not None
+    session = DrawingCollectionSession(
+        services,
+        loaded,
+        ReplayAppend("sketch.create", 3, draft.to_mapping(version=3), "local"),
+        session_identity=cast("int", getattr(window, "_" + "session_id")),
+    )
+    if mode not in {"during_dialog", "resize_during_dialog"}:
+        canvas.attach_collection_session(session, draft.sketch_id)
+    before = tuple(loaded.document.commands)
+    checkpoint = session.checkpoint()
+    dialog_calls: list[str] = []
+
+    def choose_value(*_args: object, **_kwargs: object) -> tuple[str, bool]:
+        dialog_calls.append("opened")
+        if mode == "during_dialog":
+            canvas.attach_collection_session(session, draft.sketch_id)
+        return "12", True
+
+    def choose_count(*_args: object, **_kwargs: object) -> tuple[int, bool]:
+        dialog_calls.append("opened")
+        if mode == "resize_during_dialog" and len(dialog_calls) == 1:
+            canvas.attach_collection_session(session, draft.sketch_id)
+        return 2, True
+
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", choose_value)
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getInt", choose_count)
+    if mode == "remove":
+        window.act_remove_associative_array.trigger()
+    elif mode == "replace_cell":
+        window.act_replace_associative_cell.trigger()
+    elif mode == "resize_during_dialog":
+        window.act_resize_associative_array.trigger()
+    else:
+        window.act_edit_associative_array.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=15000)
+    assert len(dialog_calls) == (1 if mode in {"during_dialog", "resize_during_dialog"} else 0)
+    assert "草稿" in window.status_command.text() or "变化" in window.status_command.text()
+    assert tuple(loaded.document.commands) == before and session.checkpoint() == checkpoint
+
+
+def test_replace_array_cell_aborts_if_collection_starts_in_dialog(
+    qtbot: QtBot,
+    reopened_drawing: tuple[MainWindow, LineEntity, LineEntity],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import cast
+
+    from mycad.app import AppServices
+    from mycad.core.replay_proposal import ReplayAppend
+    from mycad.core.sketch import CircleEntity, Sketch
+    from mycad.ui.drawing_collection_session import DrawingCollectionSession
+
+    source_count = 2
+
+    window, _saved, _other = reopened_drawing
+    editor, loaded, unit = (
+        window.active_sketch_dialog(),
+        window.loaded_document(),
+        window.execution_unit,
+    )
+    assert editor is not None and loaded is not None and unit is not None
+    sources = (LineEntity(uuid4().hex, (0, 0), (2, 0)), LineEntity(uuid4().hex, (0, 4), (2, 4)))[
+        :source_count
+    ]
+    replacements = tuple(CircleEntity(uuid4().hex, (20, y), 2) for y in (20, 25, 30))[
+        : source_count + 1
+    ]
+    assert editor.canvas.replace_draft_entities((*sources, *replacements))
+    editor.canvas.selected_entity_ids = {entity.entity_id for entity in sources}
+    bar = editor.drawing_command_bar.input
+    for value in ("ARRAYRECT", "", "1", "2", "8", "AS", "Y", ""):
+        bar.setText(value)
+        QTest.keyClick(bar, Qt.Key.Key_Return)
+    members = tuple(
+        member.target.entity_id for member in editor.canvas.pending_associative_arrays[0].members
+    )
+    editor.finish_sketch()
+    qtbot.waitUntil(
+        lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
+    )
+    current = window.active_sketch_dialog()
+    assert current is not None and current.canvas.set_tool("选择元素")
+    canvas = current.canvas
+    canvas.selected_entity_ids = set(members)
+    draft = Sketch(current.draft_sketch_id, current.current_frame(), (), layers=current.layer_table)
+    services = cast("AppServices | None", getattr(window, "_" + "services"))
+    assert services is not None
+    session = DrawingCollectionSession(
+        services,
+        loaded,
+        ReplayAppend("sketch.create", 3, draft.to_mapping(version=3), "local"),
+        session_identity=cast("int", getattr(window, "_" + "session_id")),
+    )
+    before = tuple(loaded.document.commands)
+    checkpoint = session.checkpoint()
+    choices = iter(replacements)
+    chosen_calls: list[str] = []
+
+    def count(*_args: object, **_kwargs: object) -> tuple[int, bool]:
+        canvas.attach_collection_session(session, draft.sketch_id)
+        return source_count + 1, True
+
+    def choose(
+        _parent: object, _title: object, _label: object, items: list[str], *_args: object
+    ) -> tuple[str, bool]:
+        chosen_calls.append("opened")
+        item = next(choices)
+        return next(value for value in items if item.entity_id[:8] in value), True
+
+    def base(*_args: object, **_kwargs: object) -> tuple[str, bool]:
+        return "20,20", True
+
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getInt", count)
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getItem", choose)
+    monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", base)
+    window.act_replace_associative_cell.trigger()
+    qtbot.waitUntil(lambda: not unit.is_busy, timeout=10000)
+    assert not chosen_calls
+    assert "草稿" in window.status_command.text()
+    assert tuple(loaded.document.commands) == before and session.checkpoint() == checkpoint
+    assert current.isEnabled()

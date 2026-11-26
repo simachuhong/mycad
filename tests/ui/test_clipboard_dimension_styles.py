@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Dimension styles retain their complete appearance on cross-drawing paste."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -14,6 +16,7 @@ from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
 from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
 from mycad.ui.drawing_clipboard import (
     decode_drawing_clipboard_data,
+    decode_drawing_clipboard_full,
     decode_mixed_clipboard_data,
     encode_drawing_clipboard,
     encode_mixed_clipboard,
@@ -51,9 +54,157 @@ def test_clipboard_retains_full_style_and_resolves_name_conflicts() -> None:
     assert copied.arrow_first == "filled" and copied.center_mark == "line"
     assert merged.current_name == destination.current_name
     assert merged.get("加工图") == destination.current
-
     again, repeated = reconcile_clipboard_styles(decoded, carried, merged)
     assert again == merged and repeated.constraints[0].style_name == copied.name
+
+
+def test_clipboard_carries_dimension_font_style() -> None:
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+
+    line = LineEntity(uuid4().hex, (0, 0), (10, 0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        10,
+        "mm",
+        driving=False,
+        style_name="检验",
+    )
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dimension,))
+    styles = DimensionStyleTable((DimensionStyle("检验", text_style_id="font"),), "检验")
+    fonts = TextStyleTable((TextStyle("font", "字体", "Font A"),), "font")
+    with pytest.raises(ValueError):
+        encode_drawing_clipboard(sketch, styles)
+    decoded, decoded_styles, decoded_fonts = decode_drawing_clipboard_full(
+        encode_drawing_clipboard(sketch, styles, fonts)
+    )
+    assert (decoded, decoded_styles, decoded_fonts) == (sketch, styles, fonts)
+
+
+def test_dxf_import_reconciles_dimension_font_and_undoes(
+    qtbot: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+    from pytestqt.qtbot import QtBot
+
+    from mycad import app
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+    from mycad.formats.providers.dxf_provider import read_sketch_dxf, write_sketches_dxf
+    from mycad.ui.main_window import MainWindow
+
+    assert isinstance(qtbot, QtBot)
+    line = LineEntity(uuid4().hex, (0, 0), (10, 0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        10,
+        "mm",
+        driving=False,
+        style_name="检验",
+    )
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dimension,))
+    styles = DimensionStyleTable((DimensionStyle("检验", text_style_id="font"),), "检验")
+    fonts = TextStyleTable((TextStyle("font", "字体", "Font A"),), "font")
+    path = tmp_path / "font.dxf"
+    write_sketches_dxf((sketch,), path, dimension_styles=styles, text_styles=fonts)
+    incoming = read_sketch_dxf(path).text_styles
+    assert incoming is not None
+    collision = incoming.current.style_id
+    services = app.build_app(discoverers=())
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.act_new_drawing.trigger()
+    loaded, unit = window.loaded_document(), window.execution_unit
+    assert loaded is not None and unit is not None
+    target_fonts = TextStyleTable((TextStyle(), TextStyle(collision, "字体", "Font B")))
+    loaded.bus.execute("drawing.text_styles.set", target_fonts.to_mapping(), "local")
+
+    def yes(*_args: object, **_kwargs: object) -> QMessageBox.StandardButton:
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", yes)
+    cast("Callable[..., None]", vars(type(window))["_queue_dxf_sketch_import"])(
+        window, path, unit_override=None
+    )
+    qtbot.waitUntil(lambda: bool(services.kernel.sketches) and not unit.is_busy, timeout=15000)
+    imported = services.kernel.sketches[0].constraints[0]
+    assert imported.style_name is not None
+    font_id = services.kernel.drawing_dimension_styles.get(imported.style_name).text_style_id
+    assert font_id is not None and font_id != collision
+    assert services.kernel.drawing_text_styles.get(font_id).font_family == "Font A"
+    assert services.kernel.drawing_text_styles.get(collision).font_family == "Font B"
+    window.request_undo()
+    qtbot.waitUntil(lambda: not services.kernel.sketches and not unit.is_busy, timeout=15000)
+    assert services.kernel.drawing_text_styles == target_fonts
+
+
+@pytest.mark.parametrize("mixed", (False, True))
+def test_paste_dimension_font_style_handles_conflicts_and_undo(qtbot: object, mixed: bool) -> None:
+    from PySide6.QtCore import QByteArray, QMimeData
+    from PySide6.QtGui import QImage
+    from pytestqt.qtbot import QtBot
+
+    from mycad import app
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+    from mycad.ui.drawing_clipboard import (
+        DRAWING_CLIPBOARD_MIME,
+        DRAWING_MIXED_CLIPBOARD_MIME,
+        raster_from_clipboard_image,
+    )
+    from mycad.ui.main_window import MainWindow
+
+    assert isinstance(qtbot, QtBot)
+    services = app.build_app(discoverers=())
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.act_new_drawing.trigger()
+    editor, loaded = window.active_sketch_dialog(), window.loaded_document()
+    assert editor is not None and loaded is not None
+    target_fonts = TextStyleTable((TextStyle(), TextStyle("font", "字体", "Font B")))
+    loaded.bus.execute("drawing.text_styles.set", target_fonts.to_mapping(), "local")
+    cast("Callable[[MainWindow], None]", vars(type(window))["_sync_drawing_layers"])(window)
+    line = LineEntity(uuid4().hex, (0, 0), (10, 0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        10,
+        "mm",
+        driving=False,
+        style_name="检验",
+    )
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dimension,))
+    styles = DimensionStyleTable((DimensionStyle("检验", text_style_id="font"),), "检验")
+    fonts = TextStyleTable((TextStyle("font", "字体", "Font A"),), "font")
+    mime = QMimeData()
+    if mixed:
+        image = raster_from_clipboard_image(QImage(1, 1, QImage.Format.Format_RGB32), "0")
+        mime.setData(
+            DRAWING_MIXED_CLIPBOARD_MIME,
+            QByteArray(encode_mixed_clipboard(sketch, (image,), styles, fonts)),
+        )
+    else:
+        mime.setData(
+            DRAWING_CLIPBOARD_MIME, QByteArray(encode_drawing_clipboard(sketch, styles, fonts))
+        )
+    QApplication.clipboard().setMimeData(mime)
+    assert editor.canvas.begin_clipboard_paste()
+    editor.canvas.add_coordinate_point((20, 20), exact_point=True)
+    assert not editor.canvas.clipboard_paste_active, editor.status_label.text()
+    imported = services.kernel.drawing_dimension_styles.get("检验").text_style_id
+    assert imported is not None and imported != "font"
+    assert services.kernel.drawing_text_styles.get(imported).font_family == "Font A"
+    assert services.kernel.drawing_text_styles.get("font").font_family == "Font B"
+    window.request_undo()
+    qtbot.waitUntil(lambda: services.kernel.drawing_text_styles == target_fonts, timeout=10000)
+    assert window.execution_unit is not None
+    qtbot.waitUntil(lambda: not window.execution_unit.is_busy, timeout=10000)
+    window.request_redo()
+    qtbot.waitUntil(lambda: len(services.kernel.drawing_text_styles.styles) == 3, timeout=10000)
 
 
 def test_mixed_clipboard_retains_styles() -> None:
@@ -405,6 +556,7 @@ def test_paste_style_into_v7_drawing_upgrades_and_undoes(
     from pytestqt.qtbot import QtBot
 
     from mycad import app
+    from mycad.core.dimension_tolerance import DimensionTolerance
     from mycad.core.document import Document
     from mycad.core.persistence import save_document
     from mycad.ui.drawing_clipboard import (
@@ -433,7 +585,9 @@ def test_paste_style_into_v7_drawing_upgrades_and_undoes(
     assert target is not None and loaded is not None and loaded.document.archive_version == 7
     active_services = window._services
     assert active_services is not None
-    style = DimensionStyle("源样式", arrow_first="filled")
+    style = DimensionStyle(
+        "源样式", arrow_first="filled", linear_tolerance=DimensionTolerance("symmetric", 0.1, -0.1)
+    )
     line = LineEntity(uuid4().hex, (0, 0), (10, 0))
     dim = SketchConstraint(
         uuid4().hex,
@@ -443,6 +597,7 @@ def test_paste_style_into_v7_drawing_upgrades_and_undoes(
         "mm",
         driving=False,
         style_name=style.name,
+        tolerance=DimensionTolerance("deviation", 0.2, -0.1),
     )
     sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (line,), (dim,))
     mime = QMimeData()

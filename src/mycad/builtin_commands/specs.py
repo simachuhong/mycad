@@ -24,8 +24,19 @@ from typing import cast
 
 from mycad.builtin_commands.bound_hole_spec import BOUND_HOLE_SPEC
 from mycad.builtin_commands.datum_specs import DATUM_SPECS, PLANE
+from mycad.builtin_commands.drawing_block_specs import DRAWING_BLOCK_SPECS
+from mycad.builtin_commands.drawing_group_specs import (
+    DRAWING_GROUP_SPECS,
+    DRAWING_OBJECT_BATCH_SPEC,
+)
 from mycad.builtin_commands.drawing_specs import DRAWING_COMMAND_SPECS
+from mycad.builtin_commands.ellipse_specs import with_ellipse_entities
 from mycad.builtin_commands.reference_specs import REFERENCE_COMMAND_SPECS
+from mycad.builtin_commands.text_specs import TEXT_COMMAND_SPECS, TEXT_STYLES_SCHEMA
+from mycad.builtin_commands.tolerance_specs import (
+    REFERENCE_DIMENSIONS_COMMAND_SPEC,
+    TOLERANCE_COMMAND_SPEC,
+)
 from mycad.commands.spec import CliSyntax, CommandSpec
 
 __all__ = ["BUILTIN_COMMAND_SPECS"]
@@ -4005,7 +4016,25 @@ for _choice in cast("list[dict[str, object]]", _MIXED_RASTER_CREATE_SCHEMA["oneO
 _BEFORE_DIMENSION_TEXT_SPECS = (
     *_WITH_POLYLINE_TRANSFORM_SPECS,
     *(_raster_frame_spec(action) for action in ("add", "update")),
+    *(
+        replace(
+            _raster_frame_spec(action),
+            version=3,
+            summary_en=f"{action.title()} image with layer protection",
+        )
+        for action in ("add", "update")
+    ),
+    replace(
+        next(
+            spec
+            for spec in _RELEASED_COMMAND_SPECS
+            if spec.id == "drawing.raster.remove" and spec.version == 1
+        ),
+        version=2,
+        summary_en="Remove image with layer protection",
+    ),
     _raster_batch_spec(),
+    replace(_raster_batch_spec(), version=2, summary_en="Apply image batch with layer protection"),
     replace(
         _MIXED_RASTER_CREATE_BASE,
         version=29,
@@ -4439,6 +4468,58 @@ for _field in ("suppress_dimension_first", "suppress_dimension_second"):
     }
     cast("list[str]", _dimension_visibility_item["required"]).append(_field)
 
+_TOLERANCE_VALUE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "mode": {"enum": ["none", "symmetric", "deviation", "limits"]},
+        "upper_deviation": {"type": "number"},
+        "lower_deviation": {"type": "number"},
+        "precision": {"type": "integer", "minimum": 0, "maximum": 8},
+        "text_factor": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+        "alignment": {"enum": ["top", "middle", "bottom"]},
+    },
+    "required": [
+        "mode",
+        "upper_deviation",
+        "lower_deviation",
+        "precision",
+        "text_factor",
+        "alignment",
+    ],
+    "additionalProperties": False,
+}
+
+
+def _with_dimension_tolerance_schema(value: object) -> object:
+    if isinstance(value, dict):
+        data = {
+            key: _with_dimension_tolerance_schema(item)
+            for key, item in cast("dict[str, object]", value).items()
+        }
+        properties = data.get("properties")
+        if isinstance(properties, dict):
+            props = cast("dict[str, object]", properties)
+            if {"constraint_id", "kind", "references", "driving", "source"}.issubset(props):
+                props["tolerance"] = deepcopy(_TOLERANCE_VALUE_SCHEMA)
+            if "clipboard_styles" in props:
+                props["clipboard_styles"] = deepcopy(_DIMENSION_STYLE_V9_SCHEMA)
+        return data
+    if isinstance(value, list):
+        return [_with_dimension_tolerance_schema(item) for item in cast("list[object]", value)]
+    return value
+
+
+_DIMENSION_STYLE_V9_SCHEMA = deepcopy(_DIMENSION_STYLE_V8_SCHEMA)
+_tolerance_style_array = cast(
+    "dict[str, object]",
+    cast("dict[str, object]", _DIMENSION_STYLE_V9_SCHEMA["properties"])["styles"],
+)
+_tolerance_style_item = cast("dict[str, object]", _tolerance_style_array["items"])
+for _tolerance_field in ("linear_tolerance", "angular_tolerance"):
+    cast("dict[str, object]", _tolerance_style_item["properties"])[_tolerance_field] = deepcopy(
+        _TOLERANCE_VALUE_SCHEMA
+    )
+
 
 def _with_color_styles(
     schema: Mapping[str, object],
@@ -4466,8 +4547,39 @@ def _with_color_styles(
     return updated
 
 
-BUILTIN_COMMAND_SPECS = (
+_BEFORE_TOLERANCE_SPECS = (
+    *TEXT_COMMAND_SPECS,
+    TOLERANCE_COMMAND_SPEC,
+    replace(TOLERANCE_COMMAND_SPEC, version=2),
+    REFERENCE_DIMENSIONS_COMMAND_SPEC,
     *_BEFORE_DIMENSION_LAYER_SPECS,
+    replace(
+        next(
+            spec
+            for spec in _BEFORE_DIMENSION_LAYER_SPECS
+            if spec.id == "sketch.create" and spec.version == 32
+        ),
+        version=46,
+        params_schema=cast(
+            "dict[str, object]",
+            _with_dimension_tolerance_schema(
+                next(
+                    spec
+                    for spec in _BEFORE_DIMENSION_LAYER_SPECS
+                    if spec.id == "sketch.create" and spec.version == 32
+                ).params_schema
+            ),
+        ),
+    ),
+    replace(
+        next(
+            spec
+            for spec in _BEFORE_DIMENSION_LAYER_SPECS
+            if spec.id == "drawing.dimension_styles.set" and spec.version == 2
+        ),
+        version=9,
+        params_schema=_DIMENSION_STYLE_V9_SCHEMA,
+    ),
     replace(
         next(spec for spec in _BEFORE_DIMENSION_LAYER_SPECS if spec.id == "drawing.layers.set"),
         id="drawing.clipboard.prepare",
@@ -4721,5 +4833,675 @@ BUILTIN_COMMAND_SPECS = (
         version=52,
         summary_en="Revise drawing objects and dimension layers in one operation",
         params_schema=_DIMENSION_LAYER_REVISION_SCHEMA,
+    ),
+)
+
+_BEFORE_RIGID_DIMENSION_SPECS = (
+    *_BEFORE_TOLERANCE_SPECS,
+    *(
+        replace(
+            source,
+            version=version,
+            summary_en=f"{source.summary_en}; support dimension tolerances",
+            params_schema=cast(
+                "dict[str, object]", _with_dimension_tolerance_schema(source.params_schema)
+            ),
+        )
+        for command_id, base, version in (
+            ("sketch.constraint.add", 8, 9),
+            ("sketch.constraint.update", 6, 7),
+            ("sketch.revise", 8, 9),
+            ("drawing.sketch.revise", 52, 53),
+            ("drawing.tangency.add", 9, 10),
+            ("sketch.create", 45, 47),
+            ("sketch.create", 44, 48),
+            ("drawing.clipboard.prepare", 6, 7),
+        )
+        for source in (
+            next(
+                item
+                for item in _BEFORE_TOLERANCE_SPECS
+                if item.id == command_id and item.version == base
+            ),
+        )
+    ),
+)
+
+_BEFORE_DIMENSION_FONT_SPECS = (
+    *_BEFORE_RIGID_DIMENSION_SPECS,
+    replace(
+        next(
+            item
+            for item in _BEFORE_RIGID_DIMENSION_SPECS
+            if item.id == "drawing.sketch.revise" and item.version == 53
+        ),
+        version=54,
+        summary_en="Revise drawing objects with rigidly translated dimension placement",
+    ),
+)
+
+_DIMENSION_STYLE_V10_SCHEMA = deepcopy(_DIMENSION_STYLE_V9_SCHEMA)
+_font_style_array = cast(
+    "dict[str, object]",
+    cast("dict[str, object]", _DIMENSION_STYLE_V10_SCHEMA["properties"])["styles"],
+)
+_font_style_item = cast("dict[str, object]", _font_style_array["items"])
+cast("dict[str, object]", _font_style_item["properties"])["text_style_id"] = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 80,
+}
+
+
+def _with_dimension_text_style_schema(value: object) -> object:
+    if isinstance(value, dict):
+        data = {
+            key: _with_dimension_text_style_schema(item)
+            for key, item in cast("dict[str, object]", value).items()
+        }
+        properties = data.get("properties")
+        if isinstance(properties, dict):
+            props = cast("dict[str, object]", properties)
+            if "clipboard_styles" in props:
+                props["clipboard_styles"] = deepcopy(_DIMENSION_STYLE_V10_SCHEMA)
+        return data
+    if isinstance(value, list):
+        return [_with_dimension_text_style_schema(item) for item in cast("list[object]", value)]
+    return value
+
+
+_BEFORE_CLIPBOARD_FONT_SPECS = (
+    *_BEFORE_DIMENSION_FONT_SPECS,
+    *(
+        replace(
+            source,
+            version=version,
+            params_schema=(
+                _DIMENSION_STYLE_V10_SCHEMA
+                if command_id == "drawing.dimension_styles.set"
+                else cast(
+                    "dict[str, object]", _with_dimension_text_style_schema(source.params_schema)
+                )
+            ),
+        )
+        for command_id, base, version in (
+            ("drawing.dimension_styles.set", 9, 10),
+            ("drawing.clipboard.prepare", 7, 8),
+            ("sketch.create", 47, 49),
+            ("sketch.create", 48, 50),
+        )
+        for source in (
+            next(
+                item
+                for item in _BEFORE_DIMENSION_FONT_SPECS
+                if item.id == command_id and item.version == base
+            ),
+        )
+    ),
+    replace(
+        next(
+            item
+            for item in _BEFORE_DIMENSION_FONT_SPECS
+            if item.id == "sketch.create" and item.version == 33
+        ),
+        version=51,
+        params_schema=cast(
+            "dict[str, object]",
+            _with_dimension_tolerance_schema(
+                next(
+                    item
+                    for item in _BEFORE_DIMENSION_FONT_SPECS
+                    if item.id == "sketch.create" and item.version == 33
+                ).params_schema
+            ),
+        ),
+    ),
+)
+
+
+def _with_clipboard_text_styles(value: object) -> object:
+    if isinstance(value, dict):
+        data = {
+            key: _with_clipboard_text_styles(item)
+            for key, item in cast("dict[str, object]", value).items()
+        }
+        properties = data.get("properties")
+        if isinstance(properties, dict):
+            props = cast("dict[str, object]", properties)
+            if "clipboard_styles" in props:
+                props["clipboard_text_styles"] = deepcopy(TEXT_STYLES_SCHEMA)
+        return data
+    if isinstance(value, list):
+        return [_with_clipboard_text_styles(item) for item in cast("list[object]", value)]
+    return value
+
+
+_BEFORE_ELLIPSE_SPECS = (
+    *_BEFORE_CLIPBOARD_FONT_SPECS,
+    replace(TOLERANCE_COMMAND_SPEC, version=3),
+    replace(TOLERANCE_COMMAND_SPEC, version=4),
+    replace(TOLERANCE_COMMAND_SPEC, version=5),
+    replace(TOLERANCE_COMMAND_SPEC, version=6),
+    replace(TOLERANCE_COMMAND_SPEC, version=7),
+    replace(TOLERANCE_COMMAND_SPEC, version=8),
+    replace(TOLERANCE_COMMAND_SPEC, version=9),
+    replace(TOLERANCE_COMMAND_SPEC, version=10),
+    replace(TOLERANCE_COMMAND_SPEC, version=11),
+    replace(TOLERANCE_COMMAND_SPEC, version=12),
+    replace(TOLERANCE_COMMAND_SPEC, version=13),
+    replace(TOLERANCE_COMMAND_SPEC, version=14),
+    replace(TOLERANCE_COMMAND_SPEC, version=15),
+    replace(TOLERANCE_COMMAND_SPEC, version=16),
+    replace(TOLERANCE_COMMAND_SPEC, version=17),
+    replace(TOLERANCE_COMMAND_SPEC, version=18),
+    replace(TOLERANCE_COMMAND_SPEC, version=19),
+    replace(TOLERANCE_COMMAND_SPEC, version=20),
+    replace(TOLERANCE_COMMAND_SPEC, version=21),
+    replace(TOLERANCE_COMMAND_SPEC, version=22),
+    replace(TOLERANCE_COMMAND_SPEC, version=23),
+    replace(TOLERANCE_COMMAND_SPEC, version=24),
+    replace(TOLERANCE_COMMAND_SPEC, version=25),
+    replace(TOLERANCE_COMMAND_SPEC, version=26),
+    replace(TOLERANCE_COMMAND_SPEC, version=27),
+    replace(TOLERANCE_COMMAND_SPEC, version=28),
+    replace(TOLERANCE_COMMAND_SPEC, version=29),
+    replace(TOLERANCE_COMMAND_SPEC, version=30),
+    replace(TOLERANCE_COMMAND_SPEC, version=31),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=2),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=3),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=4),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=5),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=6),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=7),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=8),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=9),
+    replace(REFERENCE_DIMENSIONS_COMMAND_SPEC, version=10),
+    *(
+        replace(
+            source,
+            version=version,
+            params_schema=cast(
+                "dict[str, object]", _with_clipboard_text_styles(source.params_schema)
+            ),
+        )
+        for command_id, base, version in (
+            ("drawing.clipboard.prepare", 8, 9),
+            ("sketch.create", 50, 52),
+        )
+        for source in (
+            next(
+                item
+                for item in _BEFORE_CLIPBOARD_FONT_SPECS
+                if item.id == command_id and item.version == base
+            ),
+        )
+    ),
+)
+
+# New versions extend the entity union without changing historical command schemas.
+_BEFORE_NORMAL_SIDE_SPECS = (
+    *_BEFORE_ELLIPSE_SPECS,
+    *(
+        replace(
+            source,
+            version=version,
+            params_schema=with_ellipse_entities(source.params_schema),
+        )
+        for command_id, base, version in (
+            ("sketch.create", 46, 53),
+            ("sketch.create", 49, 54),
+            ("sketch.create", 52, 55),
+            ("drawing.sketch.revise", 54, 55),
+            ("drawing.tangency.add", 10, 11),
+        )
+        for source in (
+            next(
+                item
+                for item in _BEFORE_ELLIPSE_SPECS
+                if item.id == command_id and item.version == base
+            ),
+        )
+    ),
+)
+
+_BEFORE_TOPOLOGY_REVISION_SPECS = (
+    *_BEFORE_NORMAL_SIDE_SPECS,
+    replace(
+        next(
+            item
+            for item in _BEFORE_NORMAL_SIDE_SPECS
+            if item.id == "drawing.sketch.revise" and item.version == 55
+        ),
+        version=56,
+        summary_en="Revise drawing objects preserving attached normal side",
+    ),
+    replace(
+        next(
+            item
+            for item in _BEFORE_NORMAL_SIDE_SPECS
+            if item.id == "drawing.tangency.add" and item.version == 11
+        ),
+        version=12,
+        summary_en="Add cross-sketch tangency preserving attached normal side",
+    ),
+    replace(
+        next(
+            item
+            for item in _BEFORE_NORMAL_SIDE_SPECS
+            if item.id == "drawing.array.reset" and item.version == 4
+        ),
+        version=5,
+        summary_en="Reset array members while protecting annotation attachments",
+    ),
+    replace(
+        next(
+            item
+            for item in _BEFORE_NORMAL_SIDE_SPECS
+            if item.id == "drawing.array.replace" and item.version == 8
+        ),
+        version=9,
+        summary_en="Replace array members while protecting annotation attachments",
+    ),
+    replace(
+        next(
+            item
+            for item in _BEFORE_NORMAL_SIDE_SPECS
+            if item.id == "drawing.array.resize" and item.version == 15
+        ),
+        version=16,
+        summary_en="Resize arrays while protecting annotation attachments",
+    ),
+    *(
+        replace(
+            next(
+                item
+                for item in _BEFORE_NORMAL_SIDE_SPECS
+                if item.id == command_id and item.version == base
+            ),
+            version=version,
+            summary_en="Modify array members while protecting annotation attachments",
+        )
+        for command_id, base, version in (
+            ("drawing.array.rotate", 2, 3),
+            ("drawing.array.batch_override", 1, 2),
+        )
+    ),
+    *(
+        replace(
+            next(
+                item
+                for item in _BEFORE_NORMAL_SIDE_SPECS
+                if item.id == command_id and item.version == base
+            ),
+            version=version,
+            summary_en="Apply a sketch constraint preserving attached normal side",
+        )
+        for command_id, base, version in (
+            ("sketch.constraint.add", 9, 10),
+            ("sketch.constraint.update", 7, 8),
+        )
+    ),
+)
+
+_TOPOLOGY_REVISION_SOURCE = next(
+    item
+    for item in _BEFORE_TOPOLOGY_REVISION_SPECS
+    if item.id == "drawing.sketch.revise" and item.version == 56
+)
+_TOPOLOGY_REVISION_SCHEMA = deepcopy(dict(_TOPOLOGY_REVISION_SOURCE.params_schema))
+_PROTECTED_RASTER_CREATE_SOURCE = next(
+    item
+    for item in _BEFORE_TOPOLOGY_REVISION_SPECS
+    if item.id == "sketch.create" and item.version == 55
+)
+_PROTECTED_RASTER_CREATE_SCHEMA = deepcopy(dict(_PROTECTED_RASTER_CREATE_SOURCE.params_schema))
+_create_choices = cast("list[dict[str, object]]", _PROTECTED_RASTER_CREATE_SCHEMA["oneOf"])
+for _styled_choice in tuple(_create_choices):
+    _unstyled_choice = deepcopy(_styled_choice)
+    _properties = cast("dict[str, object]", _unstyled_choice["properties"])
+    _properties.pop("clipboard_styles")
+    _properties.pop("clipboard_text_styles")
+    cast("list[str]", _unstyled_choice["required"]).remove("clipboard_styles")
+    _create_choices.append(_unstyled_choice)
+for _topology_choice in cast("list[dict[str, object]]", _TOPOLOGY_REVISION_SCHEMA["oneOf"]):
+    cast("dict[str, object]", _topology_choice["properties"])["polyline_topology_maps"] = {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "object",
+            "properties": {
+                "sketch_id": {"type": "string", "minLength": 32, "maxLength": 36},
+                "mapping": {
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string", "minLength": 32, "maxLength": 36},
+                        "old_to_new": {
+                            "type": "array",
+                            "minItems": 2,
+                            "items": {"type": "integer", "minimum": 0},
+                        },
+                        "new_count": {"type": "integer", "minimum": 2},
+                        "closed": {"type": "boolean"},
+                    },
+                    "required": ["entity_id", "old_to_new", "new_count", "closed"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["sketch_id", "mapping"],
+            "additionalProperties": False,
+        },
+    }
+_IDENTITY_REVISION_SCHEMA = deepcopy(_TOPOLOGY_REVISION_SCHEMA)
+for _identity_choice in cast("list[dict[str, object]]", _IDENTITY_REVISION_SCHEMA["oneOf"]):
+    _choice_properties = cast("dict[str, object]", _identity_choice["properties"])
+    _revision_array = cast("dict[str, object]", _choice_properties["revisions"])
+    _revision_item = cast("dict[str, object]", _revision_array["items"])
+    _revision_properties = cast("dict[str, object]", _revision_item["properties"])
+    _entities = cast("dict[str, object]", _revision_properties["entities"])
+    _entity_items = cast("dict[str, object]", _entities["items"])
+    for _entity_choice in cast("list[dict[str, object]]", _entity_items["oneOf"]):
+        _entity_properties = cast("dict[str, object]", _entity_choice["properties"])
+        if "points_mm" in _entity_properties or "control_points_mm" in _entity_properties:
+            _entity_properties["point_ids"] = {
+                "type": "array",
+                "minItems": 2,
+                "items": {"type": "string", "minLength": 32, "maxLength": 32},
+            }
+_LOCAL_TANGENCY_REMOVAL_SCHEMA = deepcopy(_IDENTITY_REVISION_SCHEMA)
+for _removal_choice in cast("list[dict[str, object]]", _LOCAL_TANGENCY_REMOVAL_SCHEMA["oneOf"]):
+    _removal_properties = cast("dict[str, object]", _removal_choice["properties"])
+    _removal_revisions = cast("dict[str, object]", _removal_properties["revisions"])
+    _removal_item = cast("dict[str, object]", _removal_revisions["items"])
+    cast("dict[str, object]", _removal_item["properties"])["removed_local_tangencies"] = {
+        "type": "array",
+        "items": {"type": "string", "minLength": 32, "maxLength": 36},
+    }
+_IDENTITY_TANGENCY_SOURCE = next(
+    item
+    for item in _BEFORE_TOPOLOGY_REVISION_SPECS
+    if item.id == "drawing.tangency.add" and item.version == 12
+)
+_IDENTITY_TANGENCY_SCHEMA = deepcopy(dict(_IDENTITY_TANGENCY_SOURCE.params_schema))
+_tangency_properties = cast("dict[str, object]", _IDENTITY_TANGENCY_SCHEMA["properties"])
+_tangency_revisions = cast("dict[str, object]", _tangency_properties["revisions"])
+_tangency_revision = cast("dict[str, object]", _tangency_revisions["items"])
+_tangency_revision_properties = cast("dict[str, object]", _tangency_revision["properties"])
+_tangency_entities = cast("dict[str, object]", _tangency_revision_properties["entities"])
+_tangency_entity_items = cast("dict[str, object]", _tangency_entities["items"])
+for _tangency_entity in cast("list[dict[str, object]]", _tangency_entity_items["oneOf"]):
+    _tangency_entity_properties = cast("dict[str, object]", _tangency_entity["properties"])
+    if (
+        "points_mm" in _tangency_entity_properties
+        or "control_points_mm" in _tangency_entity_properties
+    ):
+        _tangency_entity_properties["point_ids"] = {
+            "type": "array",
+            "minItems": 2,
+            "items": {"type": "string", "minLength": 32, "maxLength": 32},
+        }
+_IDENTITY_CREATE_SCHEMA = deepcopy(_PROTECTED_RASTER_CREATE_SCHEMA)
+_identity_create_choices = cast("list[dict[str, object]]", _IDENTITY_CREATE_SCHEMA["oneOf"])
+for _create_version in (53, 54):
+    _create_source = next(
+        item
+        for item in _BEFORE_TOPOLOGY_REVISION_SPECS
+        if item.id == "sketch.create" and item.version == _create_version
+    )
+    for _create_choice in cast("list[dict[str, object]]", _create_source.params_schema["oneOf"]):
+        _new_choice = deepcopy(_create_choice)
+        if _create_version == 54:
+            _new_properties = cast("dict[str, object]", _new_choice["properties"])
+            _raster_properties = cast(
+                "dict[str, object]", _identity_create_choices[0]["properties"]
+            )
+            _new_properties["clipboard_text_styles"] = deepcopy(
+                _raster_properties["clipboard_text_styles"]
+            )
+        _identity_create_choices.append(_new_choice)
+for _identity_choice in cast("list[dict[str, object]]", _IDENTITY_CREATE_SCHEMA["oneOf"]):
+    _choice_properties = cast("dict[str, object]", _identity_choice["properties"])
+    _entities = cast("dict[str, object]", _choice_properties["entities"])
+    _entity_items = cast("dict[str, object]", _entities["items"])
+    for _entity_choice in cast("list[dict[str, object]]", _entity_items["oneOf"]):
+        _entity_properties = cast("dict[str, object]", _entity_choice["properties"])
+        if "points_mm" in _entity_properties or "control_points_mm" in _entity_properties:
+            _entity_properties["point_ids"] = {
+                "type": "array",
+                "minItems": 2,
+                "items": {"type": "string", "minLength": 32, "maxLength": 32},
+            }
+BUILTIN_COMMAND_SPECS = (
+    *DRAWING_BLOCK_SPECS,
+    *DRAWING_GROUP_SPECS,
+    DRAWING_OBJECT_BATCH_SPEC,
+    *_BEFORE_TOPOLOGY_REVISION_SPECS,
+    replace(
+        _IDENTITY_TANGENCY_SOURCE,
+        version=13,
+        params_schema=_IDENTITY_TANGENCY_SCHEMA,
+        min_archive_version=8,
+        summary_en="Add cross-sketch tangency while preserving curve point identities",
+    ),
+    CommandSpec(
+        id="drawing.curve_identity.upgrade",
+        version=1,
+        summary_en="Upgrade legacy curve point identities without changing geometry",
+        label_zh="升级曲线点身份",
+        params_schema={
+            "type": "object",
+            "properties": {
+                "sketch_id": {"type": "string", "minLength": 32, "maxLength": 36},
+                "base_state_sha256": {"type": "string", "minLength": 64, "maxLength": 64},
+                "records": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "version": {"type": "integer", "const": 1},
+                            "entity_id": {"type": "string", "minLength": 32, "maxLength": 36},
+                            "kind": {"type": "string", "enum": ["polyline", "spline"]},
+                            "point_ids": {
+                                "type": "array",
+                                "minItems": 2,
+                                "items": {"type": "string", "minLength": 32, "maxLength": 32},
+                            },
+                        },
+                        "required": ["version", "entity_id", "kind", "point_ids"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["sketch_id", "base_state_sha256", "records"],
+            "additionalProperties": False,
+        },
+        cli=CliSyntax(verb_aliases=()),
+        min_archive_version=6,
+        undo_compensation="history_replay",
+    ),
+    replace(
+        _PROTECTED_RASTER_CREATE_SOURCE,
+        version=56,
+        params_schema=_PROTECTED_RASTER_CREATE_SCHEMA,
+        summary_en="Create sketch and images with layer protection",
+    ),
+    replace(
+        _PROTECTED_RASTER_CREATE_SOURCE,
+        version=57,
+        params_schema=_IDENTITY_CREATE_SCHEMA,
+        summary_en="Create sketch with independent curve point identities",
+    ),
+    replace(
+        _PROTECTED_RASTER_CREATE_SOURCE,
+        version=58,
+        params_schema=_IDENTITY_CREATE_SCHEMA,
+        summary_en="Import sketch with reordered curve point identities",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=57,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing with proven polyline topology maps",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=58,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing and rebind proven associative-array bases",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=59,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing with proven unchanged array replacements",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=60,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing with proven unchanged array extra outputs",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=61,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing with proven array extra output topology",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=62,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing with proven independent array output sources",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=63,
+        params_schema=_TOPOLOGY_REVISION_SCHEMA,
+        summary_en="Revise drawing and images with layer protection",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=64,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise drawing while preserving curve point identities",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=65,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise proven replacement-source topology with member identities",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=66,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise proven chained array topology",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=67,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise proven rotated chained array topology",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=68,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise proven chained arrays with stable dynamic bases",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=69,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with verified stable base vertices",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=70,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with proven dynamic base rebinding",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=71,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with proven unchanged replacements",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=72,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with verified replacement topology",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=73,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with verified extra output topology",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=74,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with verified simultaneous replacement sources",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=75,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays after dependent replacement sources are ready",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=76,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise chained arrays with mixed replacement and extra outputs",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=77,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise array members with proven tangent segment rebinding",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=78,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise array members with proven reversed tangencies",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=79,
+        params_schema=_IDENTITY_REVISION_SCHEMA,
+        summary_en="Revise tangencies shared by array sources and members",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=80,
+        params_schema=_LOCAL_TANGENCY_REMOVAL_SCHEMA,
+        min_archive_version=8,
+        summary_en="Explicitly remove selected local tangent constraints",
+    ),
+    replace(
+        _TOPOLOGY_REVISION_SOURCE,
+        version=81,
+        params_schema=_LOCAL_TANGENCY_REMOVAL_SCHEMA,
+        min_archive_version=8,
+        summary_en="Rebind rectangle transforms while removing invalid inferred relations",
+    ),
+    *(
+        replace(
+            next(
+                item
+                for item in _BEFORE_TOPOLOGY_REVISION_SPECS
+                if item.id == command_id and item.version == base
+            ),
+            version=version,
+            summary_en="Apply a sketch constraint while preserving curve point identities",
+        )
+        for command_id, base, version in (
+            ("sketch.constraint.add", 10, 11),
+            ("sketch.constraint.update", 8, 9),
+        )
     ),
 )

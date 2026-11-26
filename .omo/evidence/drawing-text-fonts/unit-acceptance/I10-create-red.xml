@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="13.676" timestamp="2026-11-17T13:14:35.334890+08:00" hostname="MyLaptop"><testcase classname="tests.ui.test_text_entry_acceptance" name="test_pending_text_blocks_switch_and_close_until_cancelled" time="1.803"><failure message="assert (SessionDocum..._messages=())) == (SessionDocum..._messages=()))&#10;  &#10;  Left contains one more item: SessionDocument(services=AppServices(registry=&lt;mycad.commands.registry.CommandRegistry object at 0x7734f9865310&gt;, kern...der=False, draft=None, workbench=None, view_state=None, plan_draft=None, reference_locations={}, reference_messages=())&#10;  Use -v to get more diff">qtbot = &lt;pytestqt.qtbot.QtBot object at 0x7734be24c9e0&gt;
+
+    def test_pending_text_blocks_switch_and_close_until_cancelled(qtbot: QtBot) -&gt; None:
+        services = app.build_app(discoverers=())
+        session = DocumentSession()
+        window = MainWindow(services=services, document_session=session)
+        qtbot.addWidget(window)
+        window.show()
+        first = window.new_session_document("sketch")
+        second = window.new_session_document("sketch")
+        window.activate_session_document(first.loaded.document.document_id)
+        editor = window.active_sketch_dialog()
+        assert editor is not None and editor.canvas.text_tools is not None
+        tools = editor.canvas.text_tools
+        assert tools.begin("text")
+        tools.place((1, 2))
+        tools.editor.setPlainText("尚未提交")
+        before = first.loaded.document.commands
+        window.request_redo()
+        assert tools.pending and tools.editor.toPlainText() == "尚未提交"
+        assert "文字" in window.status_command.text()
+        window.activate_session_document(second.loaded.document.document_id)
+        assert session.active is first
+        assert tools.pending and tools.editor.toPlainText() == "尚未提交"
+        assert "文字" in window.status_command.text()
+        documents_before = session.documents
+        window.act_new_drawing.trigger()
+&gt;       assert session.documents == documents_before
+E       assert (SessionDocum..._messages=())) == (SessionDocum..._messages=()))
+E         
+E         Left contains one more item: SessionDocument(services=AppServices(registry=&lt;mycad.commands.registry.CommandRegistry object at 0x7734f9865310&gt;, kern...der=False, draft=None, workbench=None, view_state=None, plan_draft=None, reference_locations={}, reference_messages=())
+E         Use -v to get more diff
+
+tests/ui/test_text_entry_acceptance.py:96: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()</failure></testcase></testsuite></testsuites>

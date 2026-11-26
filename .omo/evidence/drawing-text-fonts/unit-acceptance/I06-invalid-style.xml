@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="8.326" timestamp="2026-11-17T13:12:16.424513+08:00" hostname="MyLaptop"><testcase classname="tests.app.test_drawing_text_import" name="test_invalid_imported_style_does_not_publish_any_part" time="0.007" /></testsuite></testsuites>

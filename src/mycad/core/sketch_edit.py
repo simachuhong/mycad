@@ -14,6 +14,7 @@ from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -92,16 +93,32 @@ def _preserve_entity_metadata[EntityT: SketchEntity](
 
 def _copy_identity(entity: SketchEntity) -> SketchEntity:
     identity = uuid4().hex
+    if isinstance(entity, EllipseEntity):
+        return replace(entity, entity_id=identity)
     if isinstance(entity, PointEntity):
         return replace(entity, entity_id=identity)
     if isinstance(entity, SplineEntity):
-        return replace(entity, entity_id=identity)
+        from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+
+        point_ids = (
+            new_curve_point_identities(identity, "spline", len(entity.control_points_mm))
+            if entity.point_ids
+            else ()
+        )
+        return replace(entity, entity_id=identity, point_ids=point_ids)
     if isinstance(entity, LineEntity):
         result: SketchEntity = LineEntity(
             identity, entity.start_mm, entity.end_mm, entity.construction
         )
     elif isinstance(entity, PolylineEntity):
-        result = replace(entity, entity_id=identity)
+        from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+
+        point_ids = (
+            new_curve_point_identities(identity, "polyline", len(entity.points_mm))
+            if entity.point_ids
+            else ()
+        )
+        result = replace(entity, entity_id=identity, point_ids=point_ids)
     elif isinstance(entity, CircleEntity):
         result = CircleEntity(identity, entity.center_mm, entity.radius_mm, entity.construction)
     elif isinstance(entity, ArcEntity):
@@ -127,6 +144,19 @@ def _transformed_entity(
     angle_delta_deg: float = 0.0,
     reflected_axis_angle_deg: float | None = None,
 ) -> SketchEntity:
+    if isinstance(entity, EllipseEntity):
+        reflected = reflected_axis_angle_deg is not None
+        return replace(
+            entity,
+            center_mm=transform_point(entity.center_mm),
+            rotation_deg=(
+                2 * reflected_axis_angle_deg - entity.rotation_deg
+                if reflected_axis_angle_deg is not None
+                else entity.rotation_deg + angle_delta_deg
+            ),
+            start_angle_deg=(-entity.start_angle_deg if reflected else entity.start_angle_deg),
+            sweep_angle_deg=(-entity.sweep_angle_deg if reflected else entity.sweep_angle_deg),
+        )
     if isinstance(entity, PointEntity):
         return replace(entity, position_mm=transform_point(entity.position_mm))
     if isinstance(entity, SplineEntity):
@@ -297,6 +327,12 @@ def scale_entities(
                 opposite_corner_mm=transform(entity.opposite_corner_mm),
             )
         transformed = _transformed_entity(entity, transform)
+        if isinstance(transformed, EllipseEntity):
+            return replace(
+                transformed,
+                major_radius_mm=transformed.major_radius_mm * magnitude,
+                minor_radius_mm=transformed.minor_radius_mm * magnitude,
+            )
         if isinstance(transformed, CircleEntity | ArcEntity):
             return replace(transformed, radius_mm=transformed.radius_mm * magnitude)
         return transformed
@@ -333,6 +369,8 @@ def move_sketch_handle(
     if entity_index is None:
         raise ValueError(f"sketch handle references missing entity {reference.entity_id!r}")
     entity = result[entity_index]
+    if isinstance(entity, EllipseEntity):
+        raise ValueError("椭圆暂不支持通过控制点修改。")
     if isinstance(entity, PointEntity):
         if reference.kind != "vertex" or reference.index != 0:
             raise ValueError("point handle must reference vertex 0")
@@ -814,6 +852,8 @@ def _curve_direction(segment: LineEntity | ArcEntity, *, end: bool) -> Point2D:
 def _offset_entity(entity: SketchEntity, distance_mm: float, gap_type: int = 0) -> SketchEntity:
     if isinstance(entity, PointEntity):
         raise ValueError("点不支持偏移；草稿未修改。")
+    if isinstance(entity, EllipseEntity):
+        raise ValueError("椭圆偏移需要几何适配器。")
     if isinstance(entity, SplineEntity):
         raise ValueError("样条曲线暂不支持偏移；草稿未修改。")
     identity = uuid4().hex
@@ -1185,6 +1225,13 @@ def _offset_tangent_curved_polyline(
             ),
         ),
     )
+
+
+def validate_curved_offset_source(entity: PolylineEntity) -> None:
+    """Reject crossing or overlapping segments before an external offset is attempted."""
+    if not entity.bulges:
+        raise ValueError("圆弧路径校验需要带圆弧的多段线。")
+    _offset_tangent_curved_polyline(entity, 0.0, entity.entity_id)
 
 
 def offset_entities(

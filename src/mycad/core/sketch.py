@@ -39,6 +39,25 @@ def _validate_identity(value: str, name: str) -> None:
         raise ValueError(f"{name} must be a canonical UUID")
 
 
+def _curve_point_ids(value: object, count: int, *, required: bool = False) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple):
+        raise ValueError("curve point identities must be an array")
+    identities: list[str] = []
+    for identity in cast("Sequence[object]", value):
+        if not isinstance(identity, str):
+            raise ValueError("curve point identity must be a UUID")
+        try:
+            parsed = UUID(identity)
+        except ValueError as exc:
+            raise ValueError("curve point identity must be a UUID") from exc
+        if identity != parsed.hex:
+            raise ValueError("curve point identity must be lowercase UUID hex")
+        identities.append(identity)
+    if (required or identities) and (len(identities) != count or len(set(identities)) != count):
+        raise ValueError("curve point identities must match point count and be unique")
+    return tuple(identities)
+
+
 def _finite_number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
@@ -105,6 +124,24 @@ def _entity_layer_name(value: object) -> str:
 
 
 def _polyline_area(points: tuple[Point2D, ...]) -> float:
+    # Translate to a local origin before taking cross products; otherwise small
+    # polygons at large coordinates lose their area to cancellation.
+    origin_x, origin_y = points[0]
+    relative = tuple((point[0] - origin_x, point[1] - origin_y) for point in points)
+    following = (*relative[1:], relative[0])
+    terms = tuple(
+        first[0] * second[1] - second[0] * first[1]
+        for first, second in zip(relative, following, strict=True)
+    )
+    if all(math.isfinite(value) for value in terms):
+        try:
+            area = 0.5 * math.fsum(terms)
+            if abs(area) > _EPSILON:
+                return area
+        except OverflowError:
+            pass
+    # Preserve the prior acceptance boundary for existing persisted sketches,
+    # including cases where the translated sum is below the area threshold.
     following = (*points[1:], points[0])
     return 0.5 * sum(
         first[0] * second[1] - second[0] * first[1]
@@ -423,11 +460,13 @@ class PolylineEntity:
     construction: bool = False
     layer_name: str = "0"
     bulges: tuple[float, ...] = ()
+    point_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_identity(self.entity_id, "entity_id")
         points = tuple(_point2(point, "polyline point") for point in self.points_mm)
         object.__setattr__(self, "points_mm", points)
+        object.__setattr__(self, "point_ids", _curve_point_ids(self.point_ids, len(points)))
         _boolean(self.closed, "closed")
         _boolean(self.construction, "construction")
         object.__setattr__(self, "layer_name", _entity_layer_name(self.layer_name))
@@ -510,6 +549,64 @@ class ArcEntity:
 
 
 @dataclass(frozen=True, slots=True)
+class EllipseEntity:
+    """Exact ellipse or elliptic arc in sketch-local coordinates.
+
+    The start and sweep are ellipse parameters, measured from the major axis;
+    a negative sweep follows the opposite parameter direction.
+    """
+
+    entity_id: str
+    center_mm: Point2D
+    major_radius_mm: float
+    minor_radius_mm: float
+    rotation_deg: float = 0.0
+    start_angle_deg: float = 0.0
+    sweep_angle_deg: float = 360.0
+    construction: bool = False
+    layer_name: str = "0"
+
+    def __post_init__(self) -> None:
+        _validate_identity(self.entity_id, "entity_id")
+        object.__setattr__(self, "center_mm", _point2(self.center_mm, "ellipse center"))
+        for name in (
+            "major_radius_mm",
+            "minor_radius_mm",
+            "rotation_deg",
+            "start_angle_deg",
+            "sweep_angle_deg",
+        ):
+            object.__setattr__(self, name, _finite_number(getattr(self, name), name))
+        _boolean(self.construction, "construction")
+        object.__setattr__(self, "layer_name", _entity_layer_name(self.layer_name))
+        if not _EPSILON < self.minor_radius_mm <= self.major_radius_mm:
+            raise ValueError("ellipse radii must be positive and major must not be smaller")
+        if not _EPSILON < abs(self.sweep_angle_deg) <= 360:
+            raise ValueError("ellipse sweep must be nonzero and at most 360 degrees")
+
+    @property
+    def closed(self) -> bool:
+        return abs(self.sweep_angle_deg) == 360.0
+
+    def point_at(self, parameter: float) -> Point2D:
+        value = _finite_number(parameter, "ellipse parameter")
+        if not 0 <= value <= 1:
+            raise ValueError("ellipse parameter must be in [0, 1]")
+        angle = math.radians(self.start_angle_deg + value * self.sweep_angle_deg)
+        rotation = math.radians(self.rotation_deg)
+        major = self.major_radius_mm * math.cos(angle)
+        minor = self.minor_radius_mm * math.sin(angle)
+        return (
+            self.center_mm[0] + major * math.cos(rotation) - minor * math.sin(rotation),
+            self.center_mm[1] + major * math.sin(rotation) + minor * math.cos(rotation),
+        )
+
+    def sampled_points(self) -> tuple[Point2D, ...]:
+        segments = max(8, math.ceil(abs(self.sweep_angle_deg) / 2.8125))
+        return tuple(self.point_at(index / segments) for index in range(segments + 1))
+
+
+@dataclass(frozen=True, slots=True)
 class RectangleEntity:
     """Axis-aligned rectangle in local coordinates, defined by opposite corners."""
 
@@ -550,6 +647,7 @@ class SplineEntity:
     control_points_mm: tuple[Point2D, ...]
     construction: bool = False
     layer_name: str = "0"
+    point_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_identity(self.entity_id, "entity_id")
@@ -559,6 +657,7 @@ class SplineEntity:
         if all(math.dist(points[0], point) <= _EPSILON for point in points[1:]):
             raise ValueError("样条控制点不能全部重合。")
         object.__setattr__(self, "control_points_mm", points)
+        object.__setattr__(self, "point_ids", _curve_point_ids(self.point_ids, len(points)))
         _boolean(self.construction, "construction")
         object.__setattr__(self, "layer_name", _entity_layer_name(self.layer_name))
 
@@ -604,6 +703,7 @@ type SketchEntity = (
     | PolylineEntity
     | CircleEntity
     | ArcEntity
+    | EllipseEntity
     | RectangleEntity
     | SplineEntity
 )
@@ -618,11 +718,14 @@ def _entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
     if isinstance(entity, PointEntity):
         return {**common, "kind": "point", "position_mm": list(entity.position_mm)}
     if isinstance(entity, SplineEntity):
-        return {
+        result = {
             **common,
             "kind": "spline",
             "control_points_mm": [list(point) for point in entity.control_points_mm],
         }
+        if entity.point_ids:
+            result["point_ids"] = list(entity.point_ids)
+        return result
     if isinstance(entity, LineEntity):
         return {
             **common,
@@ -639,6 +742,8 @@ def _entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
         }
         if entity.bulges:
             result["bulges"] = list(entity.bulges)
+        if entity.point_ids:
+            result["point_ids"] = list(entity.point_ids)
         return result
     if isinstance(entity, CircleEntity):
         return {
@@ -653,6 +758,17 @@ def _entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
             "kind": "arc",
             "center_mm": list(entity.center_mm),
             "radius_mm": entity.radius_mm,
+            "start_angle_deg": entity.start_angle_deg,
+            "sweep_angle_deg": entity.sweep_angle_deg,
+        }
+    if isinstance(entity, EllipseEntity):
+        return {
+            **common,
+            "kind": "ellipse",
+            "center_mm": list(entity.center_mm),
+            "major_radius_mm": entity.major_radius_mm,
+            "minor_radius_mm": entity.minor_radius_mm,
+            "rotation_deg": entity.rotation_deg,
             "start_angle_deg": entity.start_angle_deg,
             "sweep_angle_deg": entity.sweep_angle_deg,
         }
@@ -681,7 +797,10 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             cast("str", layer_name),
         )
     if kind == "spline":
-        data = _strict_mapping(mapping, "spline entity", (*entity_common, "control_points_mm"))
+        fields = (*entity_common, "control_points_mm")
+        data = _strict_mapping(
+            mapping, "spline entity", (*fields, "point_ids") if "point_ids" in mapping else fields
+        )
         raw_points = data["control_points_mm"]
         if not isinstance(raw_points, (list, tuple)):
             raise ValueError("spline.control_points_mm must be an array")
@@ -693,6 +812,11 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             ),
             _boolean(data["construction"], "construction"),
             _entity_layer_name(layer_name),
+            _curve_point_ids(
+                data.get("point_ids", ()),
+                len(cast("Sequence[object]", raw_points)),
+                required="point_ids" in data,
+            ),
         )
     if kind == "line":
         data = _strict_mapping(mapping, "line entity", (*entity_common, "start_mm", "end_mm"))
@@ -705,9 +829,11 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
         )
     if kind == "polyline":
         fields = (*entity_common, "points_mm", "closed")
-        data = _strict_mapping(
-            mapping, "polyline entity", (*fields, "bulges") if "bulges" in mapping else fields
-        )
+        if "bulges" in mapping:
+            fields = (*fields, "bulges")
+        if "point_ids" in mapping:
+            fields = (*fields, "point_ids")
+        data = _strict_mapping(mapping, "polyline entity", fields)
         raw_points = data["points_mm"]
         if not isinstance(raw_points, (list, tuple)):
             raise ValueError("polyline.points_mm must be an array")
@@ -728,6 +854,7 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
                 _finite_number(value, "polyline bulge")
                 for value in cast("Sequence[object]", raw_bulges)
             ),
+            _curve_point_ids(data.get("point_ids", ()), len(points), required="point_ids" in data),
         )
     if kind == "circle":
         data = _strict_mapping(mapping, "circle entity", (*entity_common, "center_mm", "radius_mm"))
@@ -753,6 +880,31 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             _boolean(data["construction"], "construction"),
             _entity_layer_name(layer_name),
         )
+    if kind == "ellipse":
+        data = _strict_mapping(
+            mapping,
+            "ellipse entity",
+            (
+                *entity_common,
+                "center_mm",
+                "major_radius_mm",
+                "minor_radius_mm",
+                "rotation_deg",
+                "start_angle_deg",
+                "sweep_angle_deg",
+            ),
+        )
+        return EllipseEntity(
+            cast("str", data["entity_id"]),
+            _point2(data["center_mm"], "ellipse.center_mm"),
+            _finite_number(data["major_radius_mm"], "ellipse.major_radius_mm"),
+            _finite_number(data["minor_radius_mm"], "ellipse.minor_radius_mm"),
+            _finite_number(data["rotation_deg"], "ellipse.rotation_deg"),
+            _finite_number(data["start_angle_deg"], "ellipse.start_angle_deg"),
+            _finite_number(data["sweep_angle_deg"], "ellipse.sweep_angle_deg"),
+            _boolean(data["construction"], "construction"),
+            _entity_layer_name(layer_name),
+        )
     if kind == "rectangle":
         data = _strict_mapping(
             mapping,
@@ -767,6 +919,16 @@ def _entity_from_mapping(value: object, *, require_layer: bool) -> SketchEntity:
             _entity_layer_name(layer_name),
         )
     raise ValueError(f"unsupported geometry kind {kind!r}")
+
+
+def sketch_entity_to_mapping(entity: SketchEntity) -> dict[str, object]:
+    """Encode one neutral entity using the sketch state representation."""
+    return _entity_to_mapping(entity)
+
+
+def sketch_entity_from_mapping(value: object) -> SketchEntity:
+    """Decode one neutral entity with an explicit layer."""
+    return _entity_from_mapping(value, require_layer=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,6 +962,7 @@ class Sketch:
                     PolylineEntity,
                     CircleEntity,
                     ArcEntity,
+                    EllipseEntity,
                     RectangleEntity,
                     SplineEntity,
                 ),
@@ -810,6 +973,14 @@ class Sketch:
         identities = tuple(entity.entity_id for entity in entities)
         if len(identities) != len(set(identities)):
             raise ValueError("entity identities must be unique within a sketch")
+        point_ids = tuple(
+            identity
+            for entity in entities
+            if isinstance(entity, PolylineEntity | SplineEntity)
+            for identity in entity.point_ids
+        )
+        if len(point_ids) != len(set(point_ids)):
+            raise ValueError("curve point identities must be unique within a sketch")
         layer_names = {layer.name.casefold() for layer in self.layers.layers}
         missing_layers = tuple(
             sorted(
@@ -848,8 +1019,15 @@ class Sketch:
 
     def to_mapping(self, *, version: int = 2) -> dict[str, object]:
         """Return JSON-compatible command values in the requested schema version."""
-        if version not in (1, 2, 3, 4, 5):
+        if version not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError(f"unsupported sketch mapping version {version}")
+        if version < 7 and any(
+            isinstance(entity, PolylineEntity | SplineEntity) and entity.point_ids
+            for entity in self.entities
+        ):
+            raise ValueError("curve point identities require mapping version 7")
+        if version < 6 and any(isinstance(entity, EllipseEntity) for entity in self.entities):
+            raise ValueError("ellipse sketches require mapping version 6")
         if version < 5 and any(
             isinstance(entity, PolylineEntity) and entity.bulges for entity in self.entities
         ):
@@ -893,7 +1071,14 @@ class Sketch:
         """Return canonical sketch state, including durable constraint records."""
         return {
             **self.to_mapping(
-                version=5
+                version=7
+                if any(
+                    isinstance(entity, PolylineEntity | SplineEntity) and entity.point_ids
+                    for entity in self.entities
+                )
+                else 6
+                if any(isinstance(entity, EllipseEntity) for entity in self.entities)
+                else 5
                 if any(
                     isinstance(entity, PolylineEntity) and entity.bulges for entity in self.entities
                 )

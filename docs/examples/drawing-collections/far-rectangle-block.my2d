@@ -1,0 +1,112 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.block.create",
+      "version": 1,
+      "params": {
+        "definition_id": "ffeca306a7fb4fcead62944c0a179d46",
+        "name": "FAR_RECTANGLE",
+        "entities": [
+          {
+            "entity_id": "b442ed85d96a4fa183a980930ef432f4",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "rectangle",
+            "first_corner_mm": [
+              1000000000.0,
+              1000000000.0
+            ],
+            "opposite_corner_mm": [
+              1000000001.0,
+              1000000002.0
+            ]
+          }
+        ],
+        "texts": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-21T16:29:49.357454+00:00",
+      "confirmed_by": "local",
+      "instance_id": "3f6c2ee1d9c24a9eba1d7bf74e798e61"
+    },
+    {
+      "id": "drawing.block_instance.insert",
+      "version": 1,
+      "params": {
+        "instance_id": "ff34950de6c74697a1e84b5364214049",
+        "definition_id": "ffeca306a7fb4fcead62944c0a179d46",
+        "insertion_mm": [
+          5.0,
+          7.0
+        ],
+        "rotation_deg": 30.0,
+        "scale": 1.0,
+        "layer_name": "0"
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-21T16:29:49.358355+00:00",
+      "confirmed_by": "local",
+      "instance_id": "d3cc95d82e044f2b8ec1b74eea748e0f"
+    },
+    {
+      "id": "drawing.group.create",
+      "version": 1,
+      "params": {
+        "group_id": "eb1d360cc9654477bfaf4d5a7e5255b3",
+        "members": [
+          {
+            "kind": "block_instance",
+            "object_id": "ff34950de6c74697a1e84b5364214049",
+            "sketch_id": null
+          }
+        ],
+        "name": "FAR_GROUP",
+        "description": "",
+        "selectable": true
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-21T16:29:49.358800+00:00",
+      "confirmed_by": "local",
+      "instance_id": "495d3d11a31c4976873259c3cc447fe0"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "df0dcb6005ff48da990111ba7b4e0d69",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

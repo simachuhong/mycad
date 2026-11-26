@@ -18,6 +18,7 @@ from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     PointEntity,
     PolylineEntity,
@@ -157,7 +158,16 @@ def _entities_to_curves(sketch: Sketch) -> tuple[list[_Curve], list[_Contour]]:
     for entity in sketch.entities:
         if entity.construction or isinstance(entity, PointEntity):
             continue
-        if isinstance(entity, CircleEntity):
+        if isinstance(entity, EllipseEntity):
+            from mycad.geom.offset_ellipse import ellipse_edge
+
+            points = entity.sampled_points()
+            edge = ellipse_edge(entity, frame=sketch.frame)
+            if entity.closed:
+                contours.append(_Contour(Wire([edge]), points[:-1], (entity.entity_id,)))
+            else:
+                curves.append(_Curve(points[0], points[-1], points, edge, entity.entity_id))
+        elif isinstance(entity, CircleEntity):
             center = _world(sketch, entity.center_mm)
             plane = Plane(origin=center, x_dir=sketch.frame.u_axis, z_dir=sketch.frame.normal)
             points = tuple(

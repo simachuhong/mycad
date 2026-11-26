@@ -15,8 +15,15 @@ from uuid import uuid4
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QImage, QImageWriter
 
+from mycad.core.dimension_interchange import (
+    reconcile_clipboard_fonts as reconcile_clipboard_fonts,
+)
+from mycad.core.dimension_interchange import (
+    reconcile_clipboard_styles as reconcile_clipboard_styles,
+)
 from mycad.core.dimension_styles import DimensionStyleTable
 from mycad.core.drawing_raster import MAX_RASTER_PIXELS, DrawingRaster
+from mycad.core.drawing_text import TextStyleTable
 from mycad.core.sketch import Point2D, PolylineEntity, RectangleEntity, Sketch, SketchEntity
 from mycad.core.sketch_constraints import SketchConstraint
 from mycad.core.sketch_edit import copy_entities
@@ -26,12 +33,16 @@ DRAWING_CLIPBOARD_MIME = "application/x-mycad-drawing2d+json"
 DRAWING_RASTER_MIME = "application/x-mycad-raster-size+json"
 DRAWING_RASTER_GROUP_MIME = "application/x-mycad-raster-group+json"
 DRAWING_MIXED_CLIPBOARD_MIME = "application/x-mycad-drawing-with-images+json"
-_MAX_RASTER_GROUP_BYTES = 32_000_000
+MAX_MIXED_CLIPBOARD_BYTES = 32_000_000
+_MAX_RASTER_GROUP_BYTES = MAX_MIXED_CLIPBOARD_BYTES
 _MAX_BYTES = 1_000_000
 
 
 def encode_mixed_clipboard(
-    sketch: Sketch, images: tuple[DrawingRaster, ...], styles: DimensionStyleTable | None = None
+    sketch: Sketch,
+    images: tuple[DrawingRaster, ...],
+    styles: DimensionStyleTable | None = None,
+    text_styles: TextStyleTable | None = None,
 ) -> bytes:
     """Encode geometry and pictures in one bounded clipboard record."""
     if not 1 <= len(images) <= 1000 or len({item.image_id for item in images}) != len(images):
@@ -39,7 +50,9 @@ def encode_mixed_clipboard(
     record = {
         "format": "mycad-drawing-with-images",
         "version": 1,
-        "sketch": base64.b64encode(encode_drawing_clipboard(sketch, styles)).decode("ascii"),
+        "sketch": base64.b64encode(encode_drawing_clipboard(sketch, styles, text_styles)).decode(
+            "ascii"
+        ),
         "images": [image.to_mapping(version=2) for image in images],
     }
     data = json.dumps(record, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -58,6 +71,16 @@ def decode_mixed_clipboard_data(
     data: bytes,
 ) -> tuple[Sketch, tuple[DrawingRaster, ...], DimensionStyleTable | None]:
     """Validate a mixed record and preserve the contained dimension styles."""
+    sketch, images, styles, text_styles = decode_mixed_clipboard_full(data)
+    if text_styles is not None:
+        raise ValueError("此粘贴路径暂不支持携带标注文字样式。")
+    return sketch, images, styles
+
+
+def decode_mixed_clipboard_full(
+    data: bytes,
+) -> tuple[Sketch, tuple[DrawingRaster, ...], DimensionStyleTable | None, TextStyleTable | None]:
+    """Read mixed geometry, images, dimension styles and their font styles."""
     if not data or len(data) > _MAX_RASTER_GROUP_BYTES:
         raise ValueError("剪贴板数据无效或过大。")
     try:
@@ -74,7 +97,7 @@ def decode_mixed_clipboard_data(
             or not isinstance(record["images"], list)
         ):
             raise ValueError("剪贴板数据无效。")
-        sketch, styles = decode_drawing_clipboard_data(
+        sketch, styles, text_styles = decode_drawing_clipboard_full(
             base64.b64decode(record["sketch"], validate=True)
         )
         images = tuple(
@@ -82,7 +105,7 @@ def decode_mixed_clipboard_data(
         )
         if not 1 <= len(images) <= 1000 or len({item.image_id for item in images}) != len(images):
             raise ValueError("图片数量或身份无效。")
-        return sketch, images, styles
+        return sketch, images, styles, text_styles
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ValueError("混合剪贴板数据无效。") from exc
 
@@ -217,7 +240,11 @@ def _validate_references(sketch: Sketch) -> None:
                 raise ValueError("约束引用的点不存在。")
 
 
-def encode_drawing_clipboard(sketch: Sketch, styles: DimensionStyleTable | None = None) -> bytes:
+def encode_drawing_clipboard(
+    sketch: Sketch,
+    styles: DimensionStyleTable | None = None,
+    text_styles: TextStyleTable | None = None,
+) -> bytes:
     """Serialize selected geometry using the existing neutral sketch format."""
     if not sketch.entities:
         raise ValueError("请选择要复制的二维图元。")
@@ -234,6 +261,19 @@ def encode_drawing_clipboard(sketch: Sketch, styles: DimensionStyleTable | None 
             raise ValueError("所选尺寸引用了不存在的标注样式。")
         envelope["version"] = 2
         envelope["styles"] = DimensionStyleTable(selected, selected[0].name).to_mapping()
+        used_fonts = {style.text_style_id for style in selected if style.text_style_id is not None}
+        if used_fonts:
+            if text_styles is None:
+                raise ValueError("所选尺寸引用的文字样式不可用。")
+            selected_fonts = tuple(
+                style for style in text_styles.styles if style.style_id in used_fonts
+            )
+            if {style.style_id for style in selected_fonts} != used_fonts:
+                raise ValueError("所选尺寸引用了不存在的文字样式。")
+            envelope["version"] = 3
+            envelope["text_styles"] = TextStyleTable(
+                selected_fonts, selected_fonts[0].style_id
+            ).to_mapping()
     data = json.dumps(
         envelope,
         ensure_ascii=False,
@@ -252,6 +292,16 @@ def decode_drawing_clipboard(data: bytes) -> Sketch:
 
 def decode_drawing_clipboard_data(data: bytes) -> tuple[Sketch, DimensionStyleTable | None]:
     """Read geometry and the complete styles carried by modern clipboard records."""
+    sketch, styles, text_styles = decode_drawing_clipboard_full(data)
+    if text_styles is not None:
+        raise ValueError("此粘贴路径暂不支持携带标注文字样式。")
+    return sketch, styles
+
+
+def decode_drawing_clipboard_full(
+    data: bytes,
+) -> tuple[Sketch, DimensionStyleTable | None, TextStyleTable | None]:
+    """Validate all referenced dimension and text styles in a clipboard record."""
     if not data or len(data) > _MAX_BYTES:
         raise ValueError("剪贴板中没有有效的二维图元。")
     try:
@@ -267,7 +317,11 @@ def decode_drawing_clipboard_data(data: bytes) -> tuple[Sketch, DimensionStyleTa
                 envelope["version"] == 2
                 and set(envelope) != {"format", "version", "sketch", "styles"}
             )
-            or envelope["version"] not in (1, 2)
+            or (
+                envelope["version"] == 3
+                and set(envelope) != {"format", "version", "sketch", "styles", "text_styles"}
+            )
+            or envelope["version"] not in (1, 2, 3)
         ):
             raise ValueError("剪贴板格式不受支持。")
         sketch = Sketch.from_mapping(envelope["sketch"])
@@ -276,46 +330,26 @@ def decode_drawing_clipboard_data(data: bytes) -> tuple[Sketch, DimensionStyleTa
         _validate_references(sketch)
         styles = (
             DimensionStyleTable.from_mapping(envelope["styles"])
-            if envelope["version"] == 2
+            if envelope["version"] in (2, 3)
+            else None
+        )
+        text_styles = (
+            TextStyleTable.from_mapping(envelope["text_styles"])
+            if envelope["version"] == 3
             else None
         )
         if styles is not None:
             for constraint in sketch.constraints:
                 if constraint.style_name is not None:
                     styles.get(constraint.style_name)
-        return sketch, styles
+            for style in styles.styles:
+                if style.text_style_id is not None:
+                    if text_styles is None:
+                        raise ValueError("剪贴板缺少标注文字样式。")
+                    text_styles.get(style.text_style_id)
+        return sketch, styles, text_styles
     except (KeyError, ValueError, UnicodeDecodeError, RecursionError, OverflowError) as exc:
         raise ValueError("剪贴板中的二维图元数据无效。") from exc
-
-
-def reconcile_clipboard_styles(
-    sketch: Sketch, source: DimensionStyleTable, destination: DimensionStyleTable
-) -> tuple[DimensionStyleTable, Sketch]:
-    """Reuse identical styles and give conflicting source styles distinct names."""
-    combined = list(destination.styles)
-    names: dict[str, str] = {}
-    for original in source.styles:
-        equivalent = next(
-            (style for style in combined if replace(style, name=original.name) == original), None
-        )
-        if equivalent is not None:
-            names[original.name.casefold()] = equivalent.name
-            continue
-        existing = {style.name.casefold() for style in combined}
-        name = original.name
-        index = 1
-        while name.casefold() in existing:
-            suffix = f" ({index})"
-            name = original.name[: 80 - len(suffix)] + suffix
-            index += 1
-        combined.append(replace(original, name=name))
-        names[original.name.casefold()] = name
-    styles = DimensionStyleTable(tuple(combined), destination.current_name)
-    constraints = tuple(
-        replace(c, style_name=names[c.style_name.casefold()]) if c.style_name is not None else c
-        for c in sketch.constraints
-    )
-    return styles, replace(sketch, constraints=constraints)
 
 
 def instantiate_drawing_clipboard(

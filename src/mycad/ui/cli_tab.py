@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import override
 
+from PySide6.QtCore import QStandardPaths
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QLineEdit,
@@ -61,6 +63,11 @@ class CliTab(QWidget):
         self._on_replace_doc_cb = on_replace_doc
         self._execution_unit = execution_unit
         self._command_guard = command_guard
+        self._font_resource_directory = (
+            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+            / "MyCAD"
+            / "fonts"
+        )
         self.current: LoadedDocument | None = None
         self.drawing_bar: Drawing2DCommandBar | None = None
         self._drawing_owner: QWidget | None = None
@@ -166,6 +173,7 @@ class CliTab(QWidget):
                 loaded=current,
                 services=services,
                 on_replace_doc=replaced.append,
+                font_resource_directory=self._font_resource_directory,
             )
             loaded = replaced[-1] if replaced else current
             # Pay the cold-tessellation cost on the worker so the queued UI
@@ -223,6 +231,7 @@ class CliTab(QWidget):
             loaded=self.current,
             services=self._services,
             on_replace_doc=self._apply_replace,
+            font_resource_directory=self._font_resource_directory,
         )
         for message in messages:
             self.append_line(message)

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Drawing style edits remain staged until the dialog is accepted."""
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from PySide6.QtCore import Qt, QTimer
@@ -13,6 +15,7 @@ from pytestqt.qtbot import QtBot
 
 from mycad import app
 from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
+from mycad.core.dimension_tolerance import DimensionTolerance
 from mycad.core.persistence import save_document
 from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
 from mycad.ui.dimension_presets import DimensionPresetDialog
@@ -34,6 +37,137 @@ def test_stage_style_add_select_and_cancel(qtbot: QtBot) -> None:
     dialog.reject()
     assert dialog.result() == QDialog.DialogCode.Rejected
     assert initial == DimensionStyleTable((DimensionStyle("标准"),), "标准")
+
+
+def test_editing_other_style_fields_preserves_tolerances(qtbot: QtBot) -> None:
+    tol = DimensionTolerance("deviation", 0.02, -0.01)
+    style = DimensionStyle("标准", linear_tolerance=tol)
+    dialog = DrawingDimensionStylesDialog(DimensionStyleTable((style,), "标准"), frozenset())
+    qtbot.addWidget(dialog)
+    dialog.precision.setValue(3)
+    dialog.save_button.click()
+    assert dialog.table.current.precision == 3
+    assert dialog.table.current.linear_tolerance == tol
+
+
+def test_dimension_style_dialog_selects_document_text_style(qtbot: QtBot) -> None:
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+
+    styles = TextStyleTable((TextStyle(), TextStyle("inspection", "检验", "DejaVu Sans")))
+    dialog = DrawingDimensionStylesDialog(
+        DimensionStyleTable((DimensionStyle("标准"),), "标准"), frozenset(), text_styles=styles
+    )
+    qtbot.addWidget(dialog)
+    dialog.text_style.setCurrentIndex(dialog.text_style.findData("inspection"))
+    dialog.save_button.click()
+    assert dialog.table.current.text_style_id == "inspection"
+
+
+def test_dimension_style_dialog_reports_font_substitution_and_width_limit(qtbot: QtBot) -> None:
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+
+    styles = TextStyleTable(
+        (TextStyle(), TextStyle("missing", "缺失", "MyCAD missing font 9182", width_factor=100))
+    )
+    dialog = DrawingDimensionStylesDialog(
+        DimensionStyleTable((DimensionStyle("标准"),), "标准"), frozenset(), text_styles=styles
+    )
+    qtbot.addWidget(dialog)
+    dialog.text_style.setCurrentIndex(dialog.text_style.findData("missing"))
+    assert "替代" in dialog.font_notice.text()
+    assert "40" in dialog.font_notice.text()
+
+
+def test_dimension_label_font_uses_selected_text_style(qtbot: QtBot) -> None:
+    from dataclasses import replace
+    from uuid import uuid4
+
+    from PySide6.QtGui import QFontDatabase
+
+    from mycad.core.drawing_text import TextStyle, TextStyleTable
+    from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
+
+    services = app.build_app(discoverers=())
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.act_new_drawing.trigger()
+    editor = window.active_sketch_dialog()
+    loaded = window.loaded_document()
+    assert editor is not None and loaded is not None and editor.canvas.text_tools is not None
+    family = QFontDatabase.families()[0]
+    text_style = TextStyle("inspect", "检验", family, width_factor=1.2)
+    text_styles = TextStyleTable((TextStyle(), text_style))
+    loaded.bus.execute("drawing.text_styles.set", text_styles.to_mapping(), "local")
+    dimensions = DimensionStyleTable((DimensionStyle("标准", text_style_id="inspect"),), "标准")
+    loaded.bus.execute("drawing.dimension_styles.set", dimensions.to_mapping(), "local")
+    cast("Callable[[MainWindow], None]", vars(type(window))["_sync_drawing_layers"])(window)
+    line = LineEntity(uuid4().hex, (0, 0), (10, 0))
+    dimension = SketchConstraint(
+        uuid4().hex,
+        "length",
+        (SketchGeometryReference(line.entity_id, "geometry"),),
+        10,
+        "mm",
+        style_name="标准",
+    )
+    font = editor.canvas.dimension_label_font(dimension)
+    assert font.family() == editor.canvas.text_tools.manager.resolve(text_style).family()
+    assert font.stretch() == 120
+    huge = replace(text_style, width_factor=1e308)
+    loaded.bus.execute(
+        "drawing.text_styles.set", TextStyleTable((TextStyle(), huge)).to_mapping(), "local"
+    )
+    cast("Callable[[MainWindow], None]", vars(type(window))["_sync_drawing_layers"])(window)
+    assert editor.canvas.dimension_label_font(dimension).stretch() == 4000
+
+
+def test_style_editor_sets_distinct_linear_and_angular_tolerances(qtbot: QtBot) -> None:
+    initial = DimensionStyleTable((DimensionStyle("标准"),), "标准")
+    dialog = DrawingDimensionStylesDialog(initial, frozenset())
+    qtbot.addWidget(dialog)
+    dialog.linear_tolerance.set_value(DimensionTolerance("deviation", 0.02, -0.01, 3, 0.7, "top"))
+    dialog.angular_tolerance.set_value(DimensionTolerance("symmetric", 0.5, -0.5, 1))
+    dialog.save_button.click()
+    assert dialog.table.current.linear_tolerance == DimensionTolerance(
+        "deviation", 0.02, -0.01, 3, 0.7, "top"
+    )
+    assert dialog.table.current.angular_tolerance == DimensionTolerance("symmetric", 0.5, -0.5, 1)
+
+
+def test_style_tolerance_is_committed_and_inherited_on_canvas(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    services = app.build_app(discoverers=())
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.act_new_drawing.trigger()
+    editor = window.active_sketch_dialog()
+    assert editor is not None
+    tolerance = DimensionTolerance("deviation", 0.02, -0.01)
+
+    def configure() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, DrawingDimensionStylesDialog)
+        dialog.linear_tolerance.set_value(tolerance)
+        dialog.save_button.click()
+        dialog.accept()
+
+    QTimer.singleShot(100, configure)
+    window._open_drawing_dimension_styles(editor)
+    assert services.kernel.drawing_dimension_styles.current.linear_tolerance == tolerance
+    line = LineEntity(uuid4().hex, (0, 0), (25, 0))
+    assert editor.canvas.replace_draft_entities((line,))
+    editor.dimensions.driving_check.setChecked(False)
+    bar = editor.drawing_command_bar.input
+    for value in ("DIMLINEAR", "0,0", "25,0", "10,10"):
+        bar.setText(value)
+        QTest.keyClick(bar, Qt.Key.Key_Return)
+    assert editor.canvas.dimension_tolerance_layout(editor.canvas.constraints[0]).lines == (
+        "+0.02",
+        "-0.01",
+    )
 
 
 def test_style_manager_remains_usable_at_small_window_height(qtbot: QtBot) -> None:
@@ -733,3 +867,35 @@ def test_new_drawing_default_scale_and_first_style_are_consistent(qtbot: QtBot) 
         bar.setText(value)
         QTest.keyClick(bar, Qt.Key.Key_Return)
     assert editor.canvas.constraints[0].scale == 0.8
+
+
+def test_symmetric_to_deviation_style_edit_saves_effective_values(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    services = app.build_app(discoverers=())
+    window = MainWindow(services=services)
+    qtbot.addWidget(window)
+    window.show()
+    window.act_new_drawing.trigger()
+    editor, loaded = window.active_sketch_dialog(), window.loaded_document()
+    assert editor is not None and loaded is not None
+
+    def configure() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, DrawingDimensionStylesDialog)
+        tolerance = dialog.linear_tolerance
+        tolerance.set_value(DimensionTolerance("symmetric", 0.1, -0.1))
+        tolerance.upper_spin.setValue(0.2)
+        tolerance.mode.setCurrentIndex(tolerance.mode.findData("deviation"))
+        dialog.save_button.click()
+        dialog.accept()
+
+    QTimer.singleShot(20, configure)
+    window._open_drawing_dimension_styles(editor)
+    expected = DimensionTolerance("deviation", 0.2, -0.2)
+    assert services.kernel.drawing_dimension_styles.current.linear_tolerance == expected
+    path = tmp_path / "converted-tolerance-style.my2d"
+    save_document(loaded.document, path)
+    reopened = app.build_app(discoverers=())
+    app.open_app_document(reopened, path)
+    assert reopened.kernel.drawing_dimension_styles.current.linear_tolerance == expected

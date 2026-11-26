@@ -1,0 +1,1891 @@
+diff --git a/README.md b/README.md
+index 0e73edb..ffa2946 100644
+--- a/README.md
++++ b/README.md
+@@ -65,6 +65,7 @@ P2 G（P2-32～P2-37）已有工程实现与自检证据；**二维人工验收
+ - **二维绘图与草稿编辑**：独立 `drawing2d` 文档，在主窗口内嵌工作区绘制，绘图/修改/尺寸标注三个可独立停靠、悬浮的原生工具栏与 UCS 原点/方向；直线连续接段，Enter/右键/Esc结束、C或首点捕捉闭合。完成后保留同平面已提交图形作为只读捕捉参照。XY/XZ/YZ 或选面工作平面；线、折线、圆、顺逆圆弧、矩形、控制点式三次 B 样条和构造几何；精确局部坐标输入、正交、UCS原点/独立栅格捕捉、端点/交点/中点/圆心/切点/垂足捕捉。选择工具支持空白处拖拽或两次单击框选：从左到右蓝色实线框仅选完全包含的图元，从右到左绿色虚线框选包含或与框线相交的图元；Ctrl 加选、Shift 减选、Esc/右键取消。独立二维图的已提交图元在存盘重开后仍可点选、框选和高亮；隐藏图层与三维草图只读参照不参与选择。框选可用于草稿移动/复制命令的对象选择阶段；包含已提交图元时保持选择并提示通过历史编辑修改，避免只修改混选中的部分草稿。未提交草稿可移动、复制、旋转、镜像、阵列、偏移、限定修剪/延伸/分割，并完整撤销/重做。移动/复制支持选择—基点—鼠标预览—落点，也可按住基点拖放；右侧参数面板“修改”页保留按 ΔU/ΔV 执行。旋转支持选择—中心—鼠标方向或键入角度（Enter 确认），可勾选参考旋转按中心—起点—目标三点操作；镜像用任意两点定义轴，默认保留原对象，可取消“镜像保留原对象”以替换。两者均支持预览、Esc 取消、撤销/重做，右侧“修改”页保留明确的数值执行按钮。正多边形支持 3–128 边、内接圆/外切圆模式，按中心—顶点或边中点绘制，保存为闭合多段线。二维点阵网格可用“网格 F7”复选框或 F7 显隐，隐藏不影响栅格捕捉；三维 XY 工作网格也使用点阵。直线连续修剪保留剩余线段的连通性。样条至少四个控制点，Enter/右键完成，支持控制点拖动、保存重放、原生 DXF SPLINE 输出和闭合轮廓建模；尚不支持拟合点/周期/有理样条、样条修剪/延伸/偏移。闭合路径/矩形按两个唯一交点修剪或拆成两条开放路径；复杂、退化或歧义结果明确拒绝。
+ - **图内尺寸标注**：智能、水平、垂直、对齐、角度、半径、直径、弧长、连续、基线、坐标共 11 个独立工具；在图中拾取端点/圆心/顶点/线段、随鼠标预览并点击放置，支持中键平移和滚轮缩放。新尺寸默认驱动，可关闭“驱动尺寸”切换为仅测量的参考尺寸；在尺寸旁输入数值、预览并显式确认；双击尺寸使用画布内数值框，拖动文字或尺寸线调整位置，Esc 取消。草稿和同平面已提交图形共用操作；新尺寸默认存入自动创建的 DIM 层，可在工具栏选择其他标注层或使用当前层；独立标注层不随引用几何隐藏。线性尺寸提供自动、固定起点、固定终点、中心对称；自动优先遵守已有固定/锁定关系，否则保持首点或圆心。固定方式为临时编辑定位，不增加永久固定约束；显示真实自由度并在画布标红冲突图形。标注位置、图层、投影方向、固定方式、小数位和比例随档案保存、撤销与重放。
+ - **参数化草图**：受限 PlaneGCS 关系和长度/距离/角度/半径/直径/弧长，驱动与参考尺寸分开；显示自由度、冲突关系和图元位置，失败不能确认，分支变化需额外核对。已提交草图的数值尺寸可以修改，预览同时重建下游实体；确认后追加审计历史，撤销/重做和重开使用冻结解。锁定图层不能被直接或间接求解移动，参考测量仍可用。
++- **二维文字与字体**：独立二维草图提供 `TEXT` 单行文字、`MTEXT` 多行文字和 `STYLE` 文档文字样式；从绘图工具栏或命令栏进入，点击插入点输入，`Ctrl+Enter` 提交、`Esc` 取消，双击编辑。文字特性支持字高、宽度因子、旋转、对齐、文本框宽度、行距和图层，支持选择、移动/复制/旋转/缩放/镜像、混合剪贴板、撤销重做与保存重开。系统设置的“字体管理…”可枚举系统字体并将 TTF/OTF/TTC 导入 MyCAD 用户字体库；图纸保留请求字体，缺失时提示替代和缺字。DXF 交换使用原生 TEXT/MTEXT/STYLE，支持纯文字文档；字体文件不嵌入 DXF。首批 MTEXT 为统一样式，SHX 绘制、局部富文本和复杂分栏仍属后续兼容范围；含暂存相切/关联阵列的草稿需先完成，再进行文字与几何的混合变换。开发与定向检查记录见 [文字与字体计划](docs/superpowers/plans/2026-11-17-drawing-text-fonts.md)。
+ - **图层与 DXF**：非模态图层表统一控制整张图纸的草稿和已提交对象，提供颜色、线型、线宽及独立的显示/隐藏、冻结/解冻、锁定/解锁。冻结层不参与显示再生、适配范围、捕捉和选择；关闭层仍计入适配范围；解冻保持原显隐状态，当前绘图层不能冻结。隐藏/冻结不解除驱动约束，旧尺寸可批量迁入 DIM；图层状态支持撤销、保存和 DXF 往返，以及线性、投影、角度、径向、弧长和坐标尺寸。DXF R2010 指定子集先显示实际输出字节的缩放/平移预览，再确认原子写入。未知单位要求输入；不支持的实体、带 bulge 圆弧或宽度的 LWPOLYLINE、外部无关联尺寸等通过报告披露，不能误报完整交换。
+ - **草图驱动三维**：拉伸、旋转、孔和孔阵列，支持已公布的新建/合并/切除、正负方向、对称深度、到平面和盲深/贯穿模式。法兰、阶梯轴、长圆孔安装板有从空白 GUI 创建、修改、undo/redo、重开与 STEP 的自动流程证据。
+ - **多实体修改**：多边圆角/倒角，目标体与刀具体并/差/交及保留/消耗，移动/旋转/复制/镜像，通用线性/完整或部分环形阵列。实体树显示来源步骤、结果序号、输入关系，可打开历史预览；逐体显隐仅影响显示和拾取。对称支架和通用阵列改参有完整任务级证据。
+diff --git a/src/mycad/app.py b/src/mycad/app.py
+index a0f5736..f46eebe 100644
+--- a/src/mycad/app.py
++++ b/src/mycad/app.py
+@@ -59,6 +59,8 @@ from mycad.core.document import Document, ExecutedCommand
+ from mycad.core.document_kinds import DocumentKind, DocumentType, native_suffix
+ from mycad.core.document_migration import migrate_archive
+ from mycad.core.document_references import archive_fingerprint
++from mycad.core.drawing_raster import DrawingRaster
++from mycad.core.drawing_text import DrawingText, TextStyleTable
+ from mycad.core.exceptions import ValidationError
+ from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
+ from mycad.core.identity import BodyId, TopologyId
+@@ -88,6 +90,7 @@ from mycad.core.sketch_constraints import (
+     SketchConstraint,
+     SketchGeometryReference,
+ )
++from mycad.core.text_interchange import reconcile_text_styles
+ from mycad.core.viewport_protocol import (
+     CandidateInteractionScene,
+     PlanarFaceFrame,
+@@ -693,6 +696,9 @@ def commit_new_sketch(
+     cross_tangent_pairs: tuple[DraftTangentPair, ...] = (),
+     associative_arrays: tuple[AssociativeRectArray, ...] = (),
+     imported_styles: DimensionStyleTable | None = None,
++    imported_texts: tuple[DrawingText, ...] = (),
++    imported_text_styles: TextStyleTable | None = None,
++    imported_rasters: tuple[DrawingRaster, ...] = (),
+ ) -> object:
+     """Commit a sketch, upgrading the archive for points or inferred tangencies."""
+     has_tangency = any(item.kind == "tangent" for item in sketch.constraints)
+@@ -710,6 +716,9 @@ def commit_new_sketch(
+     if (
+         not cross_tangent_pairs
+         and imported_styles is None
++        and not imported_texts
++        and not imported_rasters
++        and imported_text_styles is None
+         and not associative_arrays
+         and not has_tangency
+         and not has_geometric_relations
+@@ -720,6 +729,87 @@ def commit_new_sketch(
+         and not any(isinstance(entity, PointEntity) for entity in sketch.entities)
+     ):
+         return loaded.bus.execute("sketch.create", sketch.to_state_mapping(), confirmed_by)
++    layer_appends: tuple[ReplayAppend, ...] = ()
++    text_appends: tuple[ReplayAppend, ...] = ()
++    raster_appends: tuple[ReplayAppend, ...] = ()
++    if imported_texts or imported_rasters:
++        layers = services.kernel.drawing_layers
++        known_layers = {layer.name.casefold() for layer in layers.layers}
++        for layer in sketch.layers.layers:
++            if layer.name.casefold() not in known_layers:
++                layers = layers.add(layer)
++                known_layers.add(layer.name.casefold())
++        if imported_styles is not None and not sketch.entities:
++            layer_appends = (
++                ReplayAppend(
++                    "drawing.clipboard.prepare",
++                    services.registry.get("drawing.clipboard.prepare").version,
++                    {
++                        "layers": layers.to_mapping(),
++                        "dimension_layer": services.kernel.dimension_layer,
++                        "clipboard_styles": imported_styles.to_mapping(),
++                    },
++                    confirmed_by,
++                ),
++            )
++        elif layers != services.kernel.drawing_layers:
++            layer_appends = (
++                ReplayAppend(
++                    "drawing.layers.set",
++                    1,
++                    {
++                        "layers": layers.to_mapping(),
++                        "dimension_layer": services.kernel.dimension_layer,
++                    },
++                    confirmed_by,
++                ),
++            )
++        # Geometry must inherit the target layer definitions as well.
++        sketch = replace(sketch, layers=layers)
++        try:
++            styles, imported_texts = reconcile_text_styles(
++                imported_texts,
++                imported_text_styles or services.kernel.drawing_text_styles,
++                services.kernel.drawing_text_styles,
++            )
++        except (ValueError, KeyError) as exc:
++            raise ValidationError(str(exc), command_id="drawing.text.batch") from exc
++        identities = {text.text_id for text in services.kernel.drawing_texts}
++        remapped: list[DrawingText] = []
++        for text in imported_texts:
++            identity = uuid4().hex if text.text_id in identities else text.text_id
++            identities.add(identity)
++            remapped.append(replace(text, text_id=identity))
++        text_appends = (
++            (
++                ReplayAppend(
++                    "drawing.text.batch",
++                    1,
++                    {
++                        "add": [text.to_mapping() for text in remapped],
++                        "styles": styles.to_mapping(),
++                    },
++                    confirmed_by,
++                ),
++            )
++            if imported_texts
++            else ()
++        )
++        image_identities = {image.image_id for image in services.kernel.drawing_rasters}
++        images: list[DrawingRaster] = []
++        for image in imported_rasters:
++            identity = uuid4().hex if image.image_id in image_identities else image.image_id
++            image_identities.add(identity)
++            images.append(replace(image, image_id=identity))
++        if images:
++            raster_appends = (
++                ReplayAppend(
++                    "drawing.raster.batch",
++                    services.registry.get("drawing.raster.batch").version,
++                    {"action": "add", "images": [image.to_mapping(version=2) for image in images]},
++                    confirmed_by,
++                ),
++            )
+     cross_relations = _draft_cross_relations(services.kernel.sketches, sketch, cross_tangent_pairs)
+     candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+     params = sketch.to_state_mapping()
+@@ -732,103 +822,110 @@ def commit_new_sketch(
+     candidate.stage(
+         ReplayChangeSet(
+             (),
+-            (
+-                ReplayAppend(
+-                    "sketch.create",
+-                    45
+-                    if imported_styles is not None
+-                    else 32
+-                    if any(item.style_name is not None for item in sketch.constraints)
+-                    else 30
+-                    if any(item.text_override is not None for item in sketch.constraints)
+-                    else 28
+-                    if any(item.projection_axis is not None for item in sketch.constraints)
+-                    else 27
+-                    if has_rectangle_segment_tangency(sketch)
+-                    or relations_use_rectangle_segments(
+-                        (*services.kernel.sketches, sketch), cross_relations
+-                    )
+-                    else 26
+-                    if any(
+-                        output.rotation_deg != 0
+-                        for array in associative_arrays
+-                        for output in array.extra_outputs
+-                    )
+-                    else 25
+-                    if any(
+-                        output.offset_mm != (0, 0)
+-                        for array in associative_arrays
+-                        for output in array.extra_outputs
+-                    )
+-                    else 24
+-                    if any(array.extra_outputs for array in associative_arrays)
+-                    else 23
+-                    if any(has_shared_replacement_anchor(array) for array in associative_arrays)
+-                    else 22
+-                    if has_interleaved_array_dependencies(
+-                        (*services.kernel.associative_arrays, *associative_arrays)
+-                    )
+-                    else 21
+-                    if any(has_internal_replacements(array) for array in associative_arrays)
+-                    else 20
+-                    if any(
+-                        member.replacement is not None
+-                        for array in associative_arrays
+-                        for member in array.members
+-                    )
+-                    else 19
+-                    if any(
+-                        member.erased_neighbors is not None
+-                        for array in associative_arrays
+-                        for member in array.members
+-                    )
+-                    else 18
+-                    if any(
+-                        member.erased_index is not None
+-                        for array in associative_arrays
+-                        for member in array.members
+-                    )
+-                    else 17
+-                    if any(
+-                        member.rotation_deg != 0
+-                        for array in associative_arrays
+-                        for member in array.members
+-                    )
+-                    else 16
+-                    if any(
+-                        member.offset_mm != (0, 0)
+-                        for array in associative_arrays
+-                        for member in array.members
+-                    )
+-                    else 15
+-                    if any(array.base_point is not None for array in associative_arrays)
+-                    else 14
+-                    if any(array.angle_deg != 0 for array in associative_arrays)
+-                    else 13
+-                    if any(c.first_endpoint or c.second_endpoint for c in sketch.constraints)
+-                    else 12
+-                    if any(r.first_endpoint or r.second_endpoint for r in cross_relations)
+-                    else 11
+-                    if associative_arrays
+-                    else 10
+-                    if any(
+-                        ref.segment_index is not None
+-                        for relation in cross_relations
+-                        for ref in (relation.first, relation.second)
+-                    )
+-                    else 9
+-                    if has_geometric_relations
+-                    else 8
+-                    if has_curves
+-                    else 7
+-                    if cross_relations
+-                    else 6
+-                    if has_tangency
+-                    else 5,
+-                    params,
+-                    confirmed_by,
+-                ),
+-            ),
++            layer_appends
++            + (
++                (
++                    ReplayAppend(
++                        "sketch.create",
++                        45
++                        if imported_styles is not None
++                        else 32
++                        if any(item.style_name is not None for item in sketch.constraints)
++                        else 30
++                        if any(item.text_override is not None for item in sketch.constraints)
++                        else 28
++                        if any(item.projection_axis is not None for item in sketch.constraints)
++                        else 27
++                        if has_rectangle_segment_tangency(sketch)
++                        or relations_use_rectangle_segments(
++                            (*services.kernel.sketches, sketch), cross_relations
++                        )
++                        else 26
++                        if any(
++                            output.rotation_deg != 0
++                            for array in associative_arrays
++                            for output in array.extra_outputs
++                        )
++                        else 25
++                        if any(
++                            output.offset_mm != (0, 0)
++                            for array in associative_arrays
++                            for output in array.extra_outputs
++                        )
++                        else 24
++                        if any(array.extra_outputs for array in associative_arrays)
++                        else 23
++                        if any(has_shared_replacement_anchor(array) for array in associative_arrays)
++                        else 22
++                        if has_interleaved_array_dependencies(
++                            (*services.kernel.associative_arrays, *associative_arrays)
++                        )
++                        else 21
++                        if any(has_internal_replacements(array) for array in associative_arrays)
++                        else 20
++                        if any(
++                            member.replacement is not None
++                            for array in associative_arrays
++                            for member in array.members
++                        )
++                        else 19
++                        if any(
++                            member.erased_neighbors is not None
++                            for array in associative_arrays
++                            for member in array.members
++                        )
++                        else 18
++                        if any(
++                            member.erased_index is not None
++                            for array in associative_arrays
++                            for member in array.members
++                        )
++                        else 17
++                        if any(
++                            member.rotation_deg != 0
++                            for array in associative_arrays
++                            for member in array.members
++                        )
++                        else 16
++                        if any(
++                            member.offset_mm != (0, 0)
++                            for array in associative_arrays
++                            for member in array.members
++                        )
++                        else 15
++                        if any(array.base_point is not None for array in associative_arrays)
++                        else 14
++                        if any(array.angle_deg != 0 for array in associative_arrays)
++                        else 13
++                        if any(c.first_endpoint or c.second_endpoint for c in sketch.constraints)
++                        else 12
++                        if any(r.first_endpoint or r.second_endpoint for r in cross_relations)
++                        else 11
++                        if associative_arrays
++                        else 10
++                        if any(
++                            ref.segment_index is not None
++                            for relation in cross_relations
++                            for ref in (relation.first, relation.second)
++                        )
++                        else 9
++                        if has_geometric_relations
++                        else 8
++                        if has_curves
++                        else 7
++                        if cross_relations
++                        else 6
++                        if has_tangency
++                        else 5,
++                        params,
++                        confirmed_by,
++                    ),
++                )
++                if sketch.entities or not (imported_texts or imported_rasters)
++                else ()
++            )
++            + text_appends
++            + raster_appends,
+             False,
+             target_archive_version=(8 if imported_styles is not None else 6)
+             if loaded.document.archive_version < (8 if imported_styles is not None else 6)
+diff --git a/src/mycad/builtin_commands/specs.py b/src/mycad/builtin_commands/specs.py
+index 8031b3e..1868fc9 100644
+--- a/src/mycad/builtin_commands/specs.py
++++ b/src/mycad/builtin_commands/specs.py
+@@ -26,6 +26,7 @@ from mycad.builtin_commands.bound_hole_spec import BOUND_HOLE_SPEC
+ from mycad.builtin_commands.datum_specs import DATUM_SPECS, PLANE
+ from mycad.builtin_commands.drawing_specs import DRAWING_COMMAND_SPECS
+ from mycad.builtin_commands.reference_specs import REFERENCE_COMMAND_SPECS
++from mycad.builtin_commands.text_specs import TEXT_COMMAND_SPECS
+ from mycad.commands.spec import CliSyntax, CommandSpec
+ 
+ __all__ = ["BUILTIN_COMMAND_SPECS"]
+@@ -4467,6 +4468,7 @@ def _with_color_styles(
+ 
+ 
+ BUILTIN_COMMAND_SPECS = (
++    *TEXT_COMMAND_SPECS,
+     *_BEFORE_DIMENSION_LAYER_SPECS,
+     replace(
+         next(spec for spec in _BEFORE_DIMENSION_LAYER_SPECS if spec.id == "drawing.layers.set"),
+diff --git a/src/mycad/core/bus.py b/src/mycad/core/bus.py
+index e5b54f2..f0c0983 100644
+--- a/src/mycad/core/bus.py
++++ b/src/mycad/core/bus.py
+@@ -421,6 +421,11 @@ class CommandBus:
+ 
+         for append in changes.appends:
+             spec = self._registry.get(append.command_id, append.version)
++            if append.command_id.startswith(("drawing.text.", "drawing.text_styles.")) and (
++                self._document.document_type != "drawing2d"
++                or self._document.document_kind != "sketch"
++            ):
++                raise ValidationError("文字只支持独立二维草图文档。")
+             if (
+                 append.command_id.startswith("drawing.raster.")
+                 or "raster_batch" in append.params
+@@ -1199,6 +1204,10 @@ class CommandBus:
+         if command_id == "drawing.tangency.add" and version is None:
+             version = 1
+         spec = self._registry.get(command_id, version)
++        if command_id.startswith(("drawing.text.", "drawing.text_styles.")) and (
++            self._document.document_type != "drawing2d" or self._document.document_kind != "sketch"
++        ):
++            raise ValidationError("文字只支持独立二维草图文档。")
+         if (
+             record
+             and command_id.startswith("drawing.raster.")
+diff --git a/src/mycad/core/document_kinds.py b/src/mycad/core/document_kinds.py
+index 423274a..4126b6b 100644
+--- a/src/mycad/core/document_kinds.py
++++ b/src/mycad/core/document_kinds.py
+@@ -23,6 +23,11 @@ NATIVE_ARCHIVE_SUFFIXES = (".my2d", ".my3d", ".mc.json")
+ DRAWING2D_COMMAND_IDS = frozenset(
+     {
+         "drawing.layers.set",
++        "drawing.text.add",
++        "drawing.text.update",
++        "drawing.text.remove",
++        "drawing.text.batch",
++        "drawing.text_styles.set",
+         "drawing.dimension_styles.set",
+         "drawing.clipboard.prepare",
+         "drawing.fillet_radius.set",
+diff --git a/src/mycad/formats/providers/dxf_provider.py b/src/mycad/formats/providers/dxf_provider.py
+index c8ef372..f78ce70 100644
+--- a/src/mycad/formats/providers/dxf_provider.py
++++ b/src/mycad/formats/providers/dxf_provider.py
+@@ -29,6 +29,7 @@ from mycad.core.cross_sketch_tangency import (
+     project_tangent_entity,
+ )
+ from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
++from mycad.core.drawing_text import DrawingText, TextStyleTable
+ from mycad.core.exceptions import ValidationError
+ from mycad.core.polyline_curves import polyline_curve_segments
+ from mycad.core.ports import ExportableKernel
+@@ -54,6 +55,7 @@ from mycad.core.sketch_layers import (
+     SketchLinetype,
+ )
+ from mycad.formats.base import FormatProvider
++from mycad.formats.text_exchange import read_texts_dxf, write_texts_dxf
+ 
+ _APPID = "MYCAD"
+ _DIMENSION_SNAPSHOT_APPID = "MYCAD_DIMENSION_SNAPSHOT"
+@@ -201,6 +203,8 @@ class DxfSketchImport:
+     sketch: Sketch
+     report: DxfExchangeReport
+     dimension_styles: tuple[tuple[str, DimensionStyle], ...] = ()
++    texts: tuple[DrawingText, ...] = ()
++    text_styles: TextStyleTable | None = None
+ 
+ 
+ @runtime_checkable
+@@ -217,6 +221,15 @@ class _DimensionStyleSource(Protocol):
+     def drawing_dimension_styles(self) -> DimensionStyleTable: ...
+ 
+ 
++@runtime_checkable
++class _TextSource(Protocol):
++    @property
++    def drawing_texts(self) -> tuple[DrawingText, ...]: ...
++
++    @property
++    def drawing_text_styles(self) -> TextStyleTable: ...
++
++
+ @runtime_checkable
+ class _ArraySource(Protocol):
+     @property
+@@ -1444,7 +1457,13 @@ def _write_dxf(geometry: ExportableKernel, path: Path) -> DxfExchangeReport:
+     styles = (
+         geometry.drawing_dimension_styles if isinstance(geometry, _DimensionStyleSource) else None
+     )
+-    report = write_sketches_dxf(geometry.sketches, path, dimension_styles=styles)
++    report = write_sketches_dxf(
++        geometry.sketches,
++        path,
++        dimension_styles=styles,
++        texts=geometry.drawing_texts if isinstance(geometry, _TextSource) else (),
++        text_styles=geometry.drawing_text_styles if isinstance(geometry, _TextSource) else None,
++    )
+     if isinstance(geometry, _CrossTangencySource) and geometry.cross_sketch_tangencies:
+         report = DxfExchangeReport(
+             report.action,
+@@ -1738,14 +1757,19 @@ def _max_plane_distance(sketch: Sketch, reference: WorkPlaneFrame) -> float:
+ 
+ 
+ def write_sketches_dxf(
+-    sketches: tuple[Sketch, ...], path: Path, *, dimension_styles: DimensionStyleTable | None = None
++    sketches: tuple[Sketch, ...],
++    path: Path,
++    *,
++    dimension_styles: DimensionStyleTable | None = None,
++    texts: tuple[DrawingText, ...] = (),
++    text_styles: TextStyleTable | None = None,
+ ) -> DxfExchangeReport:
+     """Write coplanar sketch geometry without merging source identities."""
+-    if not sketches:
+-        raise ValidationError("DXF 导出至少需要一张草图。")
++    if not sketches and not texts:
++        raise ValidationError("DXF 导出至少需要一张草图或一个文字对象。")
+     if len({sketch.sketch_id for sketch in sketches}) != len(sketches):
+         raise ValidationError("DXF 导出的草图身份不能重复。")
+-    reference = sketches[0].frame
++    reference = sketches[0].frame if sketches else WorkPlaneFrame.xy()
+     for sketch in sketches[1:]:
+         source_normal = sketch.frame.normal
+         target_normal = reference.normal
+@@ -1782,7 +1806,10 @@ def write_sketches_dxf(
+     document.appids.new(_APPID, dxfattribs=None)
+     document.appids.new(_DIMENSION_SNAPSHOT_APPID, dxfattribs=None)
+     document.appids.new(_DIMENSION_STYLE_APPID, dxfattribs=None)
+-    _write_layers(document, SketchLayerTable(tuple(layers.values())))
++    _write_layers(
++        document, SketchLayerTable(tuple(layers.values())) if layers else SketchLayerTable()
++    )
++    warnings.extend(write_texts_dxf(document, texts, text_styles))
+     modelspace = document.modelspace()
+     exported_dimensions = 0
+     for sketch, measurement_angles in projected:
+@@ -1840,7 +1867,7 @@ def write_sketches_dxf(
+                         "跨原点修改后需检查符号"
+                     )
+     document.saveas(path)
+-    if not any(sketch.entities for sketch in sketches):
++    if not texts and not any(sketch.entities for sketch in sketches):
+         warnings.append("草图中没有可导出的二维图元")
+     if reference != WorkPlaneFrame.xy():
+         warnings.append("工作平面位姿未写入 DXF，图元按草图局部坐标投影到 XY")
+@@ -1850,7 +1877,7 @@ def write_sketches_dxf(
+         "导出",
+         document.dxfversion,
+         "mm",
+-        sum(len(sketch.entities) for sketch in sketches) + exported_dimensions,
++        sum(len(sketch.entities) for sketch in sketches) + exported_dimensions + len(texts),
+         tuple(warnings),
+     )
+ 
+@@ -1922,6 +1949,8 @@ def read_sketch_dxf(path: Path, *, unit_override: str | None = None) -> DxfSketc
+     scale, unit_name = _unit_scale(document.header.get("$INSUNITS", 0), unit_override)
+     warnings: list[str] = []
+     layers = _read_layers(document, warnings)
++    texts, text_styles, text_warnings = read_texts_dxf(document, scale)
++    warnings.extend(text_warnings)
+     entities: list[SketchEntity] = []
+     dimension_mappings: list[tuple[str, object, _DxfEntity]] = []
+     known_sketch_ids: set[str] = set()
+@@ -1930,6 +1959,8 @@ def read_sketch_dxf(path: Path, *, unit_override: str | None = None) -> DxfSketc
+     modelspace = document.modelspace()
+     known_layer_names = {layer.name.casefold(): layer.name for layer in layers.layers}
+     for entity in modelspace:
++        if entity.dxftype() in ("TEXT", "MTEXT"):
++            continue
+         layer_name = str(entity.dxf.layer)
+         values = _xdata_values(entity)
+         if entity.dxftype() in ("DIMENSION", "ARC_DIMENSION"):
+@@ -2198,16 +2229,16 @@ def read_sketch_dxf(path: Path, *, unit_override: str | None = None) -> DxfSketc
+         constraints=tuple(constraints),
+         layers=layers,
+     )
+-    if not entities:
++    if not entities and not texts:
+         warnings.append("文件中没有可导入的受支持二维图元")
+     report = DxfExchangeReport(
+         "导入",
+         document.dxfversion,
+         unit_name,
+-        len(entities) + len(constraints),
++        len(entities) + len(constraints) + len(texts),
+         tuple(warnings),
+     )
+-    return DxfSketchImport(sketch, report, tuple(imported_styles))
++    return DxfSketchImport(sketch, report, tuple(imported_styles), texts, text_styles)
+ 
+ 
+ def _dxf_arc_angles(entity: ArcEntity) -> tuple[float, float]:
+diff --git a/src/mycad/geom/kernel.py b/src/mycad/geom/kernel.py
+index 14cf30a..f116160 100644
+--- a/src/mycad/geom/kernel.py
++++ b/src/mycad/geom/kernel.py
+@@ -97,6 +97,7 @@ from mycad.core.drawing_projection import (
+ )
+ from mycad.core.drawing_quick_regions import SampledMeasuredRegion
+ from mycad.core.drawing_raster import DrawingRaster
++from mycad.core.drawing_text import DrawingText, TextStyleTable
+ from mycad.core.exceptions import (
+     GeometryBuildError,
+     GeomVersionError,
+@@ -332,6 +333,8 @@ class BuildKernel:
+         self._drawing_layers_override: SketchLayerTable | None = None
+         self._dimension_layer = "DIM"
+         self._drawing_dimension_styles = DimensionStyleTable((DimensionStyle("标准"),), "标准")
++        self._drawing_texts: dict[str, DrawingText] = {}
++        self._drawing_text_styles = TextStyleTable()
+         self._drawing_fillet_baseline = 1.0
+         self._drawing_fillet_radius = 1.0
+         self._drawing_chamfer_angle_baseline = 45.0
+@@ -400,6 +403,8 @@ class BuildKernel:
+         self._drawing_layers_override = None
+         self._dimension_layer = "DIM"
+         self._drawing_dimension_styles = DimensionStyleTable((DimensionStyle("标准"),), "标准")
++        self._drawing_texts = {}
++        self._drawing_text_styles = TextStyleTable()
+         self._drawing_fillet_baseline = 1.0
+         self._drawing_fillet_radius = 1.0
+         self._drawing_chamfer_angle_baseline = 45.0
+@@ -464,6 +469,8 @@ class BuildKernel:
+         self._drawing_layers_override = candidate._drawing_layers_override
+         self._dimension_layer = candidate._dimension_layer
+         self._drawing_dimension_styles = candidate._drawing_dimension_styles
++        self._drawing_texts = dict(candidate._drawing_texts)
++        self._drawing_text_styles = candidate._drawing_text_styles
+         self._drawing_fillet_baseline = candidate._drawing_fillet_baseline
+         self._drawing_fillet_radius = candidate._drawing_fillet_radius
+         self._drawing_chamfer_angle_baseline = candidate._drawing_chamfer_angle_baseline
+@@ -645,6 +652,9 @@ class BuildKernel:
+                 (f"{command_id}:{len(self._snapshots)}", self._geometry_revision, self._part)
+             )
+             return
++        if command_id.startswith(("drawing.text.", "drawing.text_styles.")):
++            self._apply_drawing_text(command_id, checked)
++            return
+         if command_id == "drawing.raster.batch":
+             try:
+                 action = checked.get("action")
+@@ -2911,6 +2921,18 @@ class BuildKernel:
+                 "drawing.array.remove",
+             ):
+                 continue
++            if command_id.startswith(("drawing.text.", "drawing.text_styles.")):
++                # Text cannot affect solved geometry. The final immutable state is
++                # copied below; historical layers may already have been removed.
++                candidate._drawing_revision += 1
++                candidate._snapshots.append(
++                    (
++                        f"{command_id}:{len(candidate._snapshots)}",
++                        candidate._geometry_revision,
++                        candidate._part,
++                    )
++                )
++                continue
+             if command_id == "drawing.dimension_styles.set":
+                 # Keep historical style availability for later sketch creation;
+                 # final sketches already carry the final formatting values.
+@@ -2967,6 +2989,8 @@ class BuildKernel:
+                 )
+         candidate._drawing_layers_override = self._drawing_layers_override
+         candidate._drawing_rasters = dict(self._drawing_rasters)
++        candidate._drawing_texts = dict(self._drawing_texts)
++        candidate._drawing_text_styles = self._drawing_text_styles
+         candidate._dimension_layer = self._dimension_layer
+         candidate._drawing_dimension_styles = self._drawing_dimension_styles
+         candidate._drawing_fillet_radius = self._drawing_fillet_radius
+@@ -3108,6 +3132,68 @@ class BuildKernel:
+             if constraint.precision != style.precision or constraint.scale != style.scale:
+                 raise ValidationError("尺寸格式与关联标注样式不一致。", command_id=command_id)
+ 
++    @property
++    def drawing_texts(self) -> tuple[DrawingText, ...]:
++        """Independent immutable model-space text in insertion order."""
++        return tuple(self._drawing_texts.values())
++
++    @property
++    def drawing_text_styles(self) -> TextStyleTable:
++        return self._drawing_text_styles
++
++    def _apply_drawing_text(self, command_id: str, params: Mapping[str, object]) -> None:
++        """Validate the entire candidate before publishing any text or style changes."""
++        candidate = dict(self._drawing_texts)
++        styles = self._drawing_text_styles
++        try:
++            if command_id == "drawing.text_styles.set":
++                styles = TextStyleTable.from_mapping(params)
++                batch: Mapping[str, object] = {}
++            elif command_id == "drawing.text.batch":
++                batch = params
++                if "styles" in batch:
++                    styles = TextStyleTable.from_mapping(batch["styles"])
++            elif command_id == "drawing.text.remove":
++                batch = {"remove": [params["text_id"]]}
++            else:
++                batch = {"add" if command_id == "drawing.text.add" else "update": [params]}
++            seen: set[str] = set()
++            for action in ("remove", "update", "add"):
++                raw_items = batch.get(action, [])
++                if not isinstance(raw_items, list):
++                    raise ValueError("文字批操作必须是数组。")
++                for raw in cast("list[object]", raw_items):
++                    item = None if action == "remove" else DrawingText.from_mapping(raw)
++                    identity = raw if item is None else item.text_id
++                    if not isinstance(identity, str) or identity in seen:
++                        raise ValueError("文字身份重复或无效。")
++                    seen.add(identity)
++                    existing = candidate.get(identity)
++                    if (existing is None) != (action == "add"):
++                        raise ValueError("文字不存在或身份已被使用。")
++                    if existing is not None:
++                        layer = self.drawing_layers.get(existing.layer_name)
++                        if layer.locked or layer.frozen:
++                            raise ValueError("锁定或冻结图层上的文字不能修改。")
++                    if item is None:
++                        del candidate[identity]
++                    else:
++                        layer = self.drawing_layers.get(item.layer_name)
++                        if layer.locked or layer.frozen:
++                            raise ValueError("不能在锁定或冻结图层上写入文字。")
++                        candidate[identity] = item
++            for item in candidate.values():
++                styles.get(item.style_id)
++                self.drawing_layers.get(item.layer_name)
++        except (KeyError, ValueError, TypeError) as exc:
++            raise ValidationError(f"文字或样式无效：{exc}", command_id=command_id) from exc
++        self._drawing_texts = candidate
++        self._drawing_text_styles = styles
++        self._drawing_revision += 1
++        self._snapshots.append(
++            (f"{command_id}:{len(self._snapshots)}", self._geometry_revision, self._part)
++        )
++
+     def _set_drawing_layers(self, params: Mapping[str, object]) -> None:
+         table = SketchLayerTable.from_mapping(params.get("layers"))
+         target = params.get("dimension_layer", "DIM")
+@@ -3157,6 +3243,11 @@ class BuildKernel:
+             for constraint in sketch.constraints:
+                 if constraint.layer_name is not None:
+                     table.get(constraint.layer_name)
++        for text in self._drawing_texts.values():
++            try:
++                table.get(text.layer_name)
++            except KeyError as exc:
++                raise ValidationError("图层仍被文字使用，不能删除。") from exc
+         for image in self._drawing_rasters.values():
+             try:
+                 table.get(image.layer_name)
+diff --git a/src/mycad/ui/drawing2d_command_bar.py b/src/mycad/ui/drawing2d_command_bar.py
+index ee01132..f8d6d86 100644
+--- a/src/mycad/ui/drawing2d_command_bar.py
++++ b/src/mycad/ui/drawing2d_command_bar.py
+@@ -580,6 +580,10 @@ class Drawing2DCommandBar(QWidget):
+                 "CHAMFERC",
+                 "CHAMFERD",
+                 "CHAMMODE",
++                "TEXT",
++                "DTEXT",
++                "MTEXT",
++                "STYLE",
+                 "DIMSTYLE",
+                 "D",
+                 "DIST",
+@@ -1341,6 +1345,8 @@ class Drawing2DCommandBar(QWidget):
+         QCoreApplication.sendEvent(self._canvas, event)
+ 
+     def cancel(self) -> None:
++        if self._canvas.text_tools is not None:
++            self._canvas.text_tools.cancel()
+         if self._end_readonly_workflow():
+             self.status.setText("命令已取消。")
+             self.input.setFocus()
+@@ -2721,6 +2727,16 @@ class Drawing2DCommandBar(QWidget):
+         self._history_draft = ""
+         self._record_history(f"命令: {text}")
+         upper = text.upper()
++        if self._canvas.text_tools is not None:
++            try:
++                handled = self._canvas.text_tools.handle_command(text)
++            except ValueError as exc:
++                self.status.setText(str(exc))
++                return
++            if handled:
++                self.input.clear()
++                self.status.setText(self._canvas.message)
++                return
+         if self._measurement_mode:
+             if self._measurement_mode == "options":
+                 if upper in {"Q", "QUICK"}:
+diff --git a/src/mycad/ui/main_window.py b/src/mycad/ui/main_window.py
+index c51767b..c6912a0 100644
+--- a/src/mycad/ui/main_window.py
++++ b/src/mycad/ui/main_window.py
+@@ -111,6 +111,14 @@ from mycad.core.document_kinds import (
+     DocumentType,
+ )
+ from mycad.core.drawing_raster import DrawingRaster
++from mycad.core.drawing_text import (
++    DrawingText,
++    TextStyleTable,
++    mirror_text,
++    move_text,
++    rotate_text,
++    scale_text,
++)
+ from mycad.core.exceptions import InvalidHistoryError, MycadError, ValidationError
+ from mycad.core.identity import BodyId
+ from mycad.core.persistence import LoadedDocument, save_document
+@@ -175,6 +183,7 @@ from mycad.ui.drawing_clipboard import (
+ )
+ from mycad.ui.drawing_dimension_styles import DrawingDimensionStylesDialog
+ from mycad.ui.drawing_templates import DrawingTemplateChoiceDialog
++from mycad.ui.drawing_text_tools import TEXT_CLIPBOARD_MIME, DrawingTextTools
+ from mycad.ui.drawing_workbench import DrawingWorkbench
+ from mycad.ui.dxf_output_preview import DxfOutputPreviewDialog
+ from mycad.ui.execution import ExecutionResult, SerializedExecutionUnit
+@@ -1224,6 +1233,12 @@ class MainWindow(QMainWindow):
+         self.act_options.triggered.connect(self._show_options)
+         self.act_units = self.menu_tools.addAction("单位")
+         self.act_units.triggered.connect(self._show_units)
++        self.act_text = self.menu_tools.addAction("单行文字 TEXT")
++        self.act_mtext = self.menu_tools.addAction("多行文字 MTEXT")
++        self.act_text_style = self.menu_tools.addAction("文字样式 STYLE…")
++        self.act_text.triggered.connect(lambda: self._start_drawing_text("text"))
++        self.act_mtext.triggered.connect(lambda: self._start_drawing_text("mtext"))
++        self.act_text_style.triggered.connect(lambda: self._start_drawing_text("style"))
+         self.act_drawing_dimension_styles = self.menu_tools.addAction("标注样式…")
+         self.act_drawing_dimension_styles.setEnabled(False)
+         self.act_drawing_dimension_styles.triggered.connect(self._show_drawing_dimension_styles)
+@@ -2496,6 +2511,8 @@ class MainWindow(QMainWindow):
+         dialog.restore_toolbar_layout(self._drafting_toolbar_state)
+         dialog.set_toolbars_locked(self.act_lock_toolbar.isChecked())
+         self._sketch_dialog = dialog
++        if dialog.canvas.select_committed_entities:
++            self._bind_drawing_text_tools(dialog)
+         dialog.canvas.changed.connect(self._sync_drawing_clipboard_actions)
+         dialog.plane_combo.currentTextChanged.connect(self._sync_camera_status)
+         dialog.set_context_sketches(self._services.kernel.sketches)
+@@ -2655,7 +2672,11 @@ class MainWindow(QMainWindow):
+             bool(
+                 ready
+                 and canvas is not None
+-                and (canvas.selected_entity_ids or canvas.selected_raster_id)
++                and (
++                    canvas.selected_entity_ids
++                    or canvas.selected_raster_id
++                    or (canvas.text_tools is not None and canvas.text_tools.selected_ids)
++                )
+             )
+         )
+         self.act_delete.setToolTip(
+@@ -2669,6 +2690,7 @@ class MainWindow(QMainWindow):
+                     canvas.selected_entity_ids
+                     or canvas.selected_constraint_ids
+                     or canvas.selected_raster_id
++                    or (canvas.text_tools is not None and canvas.text_tools.selected_ids)
+                 )
+             )
+         )
+@@ -2678,7 +2700,8 @@ class MainWindow(QMainWindow):
+                 ready
+                 and mime is not None
+                 and (
+-                    mime.hasFormat(DRAWING_CLIPBOARD_MIME)
++                    mime.hasFormat(TEXT_CLIPBOARD_MIME)
++                    or mime.hasFormat(DRAWING_CLIPBOARD_MIME)
+                     or mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME)
+                     or mime.hasFormat(DRAWING_RASTER_GROUP_MIME)
+                     or mime.hasImage()
+@@ -2706,6 +2729,12 @@ class MainWindow(QMainWindow):
+ 
+     def _sync_workspace_actions(self) -> None:
+         self._sync_drawing_clipboard_actions()
++        for action in (self.act_text, self.act_mtext, self.act_text_style):
++            action.setEnabled(
++                self.active_workspace == "sketch"
++                and self._loaded is not None
++                and self._loaded.document.document_kind == "sketch"
++            )
+         self.act_drawing_dimension_styles.setEnabled(
+             self.active_workspace == "sketch"
+             and self._loaded is not None
+@@ -2856,6 +2885,101 @@ class MainWindow(QMainWindow):
+             editor.set_document_layers(
+                 services.kernel.drawing_layers, services.kernel.dimension_layer
+             )
++            if editor.canvas.text_tools is not None:
++                editor.canvas.text_tools.sync(
++                    services.kernel.drawing_texts, services.kernel.drawing_text_styles
++                )
++
++    def _bind_drawing_text_tools(self, editor: SketchEditorDialog) -> None:
++        loaded, services = self._loaded, self._services
++        if loaded is None or services is None:
++            return
++        tools = DrawingTextTools(editor.canvas, editor)
++        tools.sync(services.kernel.drawing_texts, services.kernel.drawing_text_styles)
++        editor.parameter_tabs.addTab(tools.panel, "文字")
++
++        def execute(command: str, params: dict[str, object]) -> bool:
++            unit = self.execution_unit
++            if (
++                self._loaded is not loaded
++                or self._services is not services
++                or self._sketch_dialog is not editor
++            ):
++                raise ValueError("图纸已切换；文字未修改。")
++            if unit is not None and (unit.is_busy or unit.is_notifying_result):
++                raise ValueError("应用正在执行命令；请稍后修改文字。")
++            try:
++                loaded.bus.execute(command, params, "local")
++            except MycadError as exc:
++                raise ValueError(str(exc)) from exc
++            editor.layer_history_boundaries[loaded.document.command_count] = (
++                editor.canvas.history_position
++            )
++            editor.layer_history_redo.clear()
++            editor.canvas.discard_redo_history()
++            self._sync_drawing_layers()
++            self._refresh_document_choice()
++            self._sync_drawing_clipboard_actions()
++            return True
++
++        tools.execute = execute
++
++        def paste_commit(
++            sketch: Sketch,
++            texts: tuple[DrawingText, ...],
++            styles: TextStyleTable,
++            images: tuple[DrawingRaster, ...],
++            dimension_styles: DimensionStyleTable | None,
++        ) -> bool:
++            unit = self.execution_unit
++            if (
++                self._loaded is not loaded
++                or self._services is not services
++                or self._sketch_dialog is not editor
++            ):
++                raise ValueError("图纸已切换；剪贴板对象未提交。")
++            if unit is not None and (unit.is_busy or unit.is_notifying_result):
++                raise ValueError("应用正在执行命令；请稍后粘贴。")
++            try:
++                mycad_app.commit_new_sketch(
++                    services,
++                    loaded,
++                    sketch,
++                    session_identity=self._session_id,
++                    imported_styles=dimension_styles,
++                    imported_texts=texts,
++                    imported_text_styles=styles,
++                    imported_rasters=images,
++                )
++            except MycadError as exc:
++                raise ValueError(str(exc)) from exc
++            editor.layer_history_boundaries[loaded.document.command_count] = (
++                editor.canvas.history_position
++            )
++            editor.layer_history_redo.clear()
++            editor.canvas.discard_redo_history()
++            self._sync_drawing_layers()
++            self._refresh_document_choice()
++            self._sync_drawing_clipboard_actions()
++            return True
++
++        tools.paste_commit = paste_commit
++        for label, kind in (("单行文字", "text"), ("多行文字", "mtext"), ("文字样式", "style")):
++            action = editor.drawing_toolbar.addAction(label)
++            action.triggered.connect(
++                lambda _checked=False, value=kind: self._start_drawing_text(value)
++            )
++
++    def _start_drawing_text(self, kind: str) -> None:
++        editor = self.active_sketch_dialog()
++        if editor is None or editor.canvas.text_tools is None:
++            return
++        tools = editor.canvas.text_tools
++        editor.parameter_tabs.setCurrentWidget(tools.panel)
++        if kind == "style":
++            tools.open_styles()
++        else:
++            tools.begin("mtext" if kind == "mtext" else "text")
+ 
+     def _show_drawing_dimension_styles(self) -> None:
+         editor = self.active_sketch_dialog()
+@@ -3265,6 +3389,51 @@ class MainWindow(QMainWindow):
+             if angle is not None
+             else "移动"
+         )
++        text_tools = editor.canvas.text_tools
++        selected_texts = text_tools.selected() if text_tools is not None else ()
++        if text_tools is not None and text_tools.selection_error():
++            editor.status_label.setText(text_tools.selection_error())
++            return
++        if selected_texts and (
++            editor.canvas.mixed_move is not None
++            or editor.canvas.pending_cross_tangencies
++            or editor.canvas.pending_associative_arrays
++        ):
++            editor.status_label.setText("请先完成关联草稿，再变换文字与图形。")
++            return
++        text_batch: dict[str, object] | None = None
++        if selected_texts:
++            changed_texts: list[DrawingText] = []
++            try:
++                if not erase:
++                    for text in selected_texts:
++                        if mirror_end is not None:
++                            changed_texts.append(mirror_text(text, displacement, mirror_end))
++                        elif angle is not None:
++                            changed_texts.append(rotate_text(text, angle, displacement))
++                        elif scale is not None:
++                            changed_texts.append(
++                                scale_text(
++                                    text, scale, displacement, services.kernel.drawing_text_styles
++                                )
++                            )
++                        else:
++                            for index in range(1, copy_count if copy_source else 2):
++                                changed_texts.append(
++                                    move_text(
++                                        text, (displacement[0] * index, displacement[1] * index)
++                                    )
++                                )
++                if copy_source:
++                    changed_texts = [replace(text, text_id=uuid4().hex) for text in changed_texts]
++                text_batch = {
++                    "add": [text.to_mapping() for text in changed_texts] if copy_source else [],
++                    "update": [] if copy_source else [text.to_mapping() for text in changed_texts],
++                    "remove": [text.text_id for text in selected_texts] if erase else [],
++                }
++            except ValueError as exc:
++                editor.status_label.setText(str(exc))
++                return
+         draft_ids = tuple(
+             entity.entity_id for entity in editor.canvas.entities if entity.entity_id in selected
+         )
+@@ -3376,7 +3545,7 @@ class MainWindow(QMainWindow):
+             or (scale is not None and pending_source_ids.intersection(selected))
+         ):
+             can_transform_three = bool(
+-                image_ids
++                (image_ids or selected_texts)
+                 and draft_ids
+                 and editor.canvas.mixed_move is None
+                 and (
+@@ -3585,7 +3754,7 @@ class MainWindow(QMainWindow):
+                 for constraint in sketch.constraints
+             )
+         )
+-        if not sketches or not committed_ids.issubset(
++        if (not sketches and committed_ids) or not committed_ids.issubset(
+             entity.entity_id for sketch in sketches for entity in sketch.entities
+         ):
+             editor.status_label.setText("选择的图元已变化；所选对象保持不变。")
+@@ -3618,6 +3787,9 @@ class MainWindow(QMainWindow):
+             ]
+             owning = [(array, refs) for array, refs in owning if refs]
+             if owning:
++                if selected_texts:
++                    editor.status_label.setText("请先单独删除阵列成员，再删除文字。")
++                    return
+                 if image_ids:
+                     editor.status_label.setText("图片与阵列成员暂不能同时删除；对象未修改。")
+                     return
+@@ -3795,7 +3967,7 @@ class MainWindow(QMainWindow):
+                     "constraints": frozen["constraints"],
+                 }
+             )
+-        if not revisions:
++        if not revisions and text_batch is None:
+             editor.status_label.setText(f"{action}未改变图元。")
+             return
+         relations = services.kernel.cross_sketch_tangencies
+@@ -4092,6 +4264,7 @@ class MainWindow(QMainWindow):
+             raster_updates=() if copy_source else tuple(raster_updates),
+             raster_additions=tuple(raster_updates) if copy_source else (),
+             draft_candidate=draft_candidate,
++            text_batch=text_batch,
+             draft_remove_constraint_ids=draft_remove_constraint_ids,
+             preserve_pending_tangencies=preserve_pending_transform,
+             copy_omitted_constraints=copied_without_constraints,
+@@ -5224,6 +5397,7 @@ class MainWindow(QMainWindow):
+         preserve_pending_tangencies: bool = False,
+         copy_omitted_constraints: bool = False,
+         copy_omitted_array: bool = False,
++        text_batch: dict[str, object] | None = None,
+     ) -> None:
+         loaded, services, unit = self._loaded, self._services, self.execution_unit
+         if loaded is None or services is None or unit is None or session_id != self._session_id:
+@@ -5243,7 +5417,14 @@ class MainWindow(QMainWindow):
+ 
+         def update() -> object:
+             nonlocal committed_revision
+-            if not revisions and raster_updates:
++            text_appends = (
++                (ReplayAppend("drawing.text.batch", 1, text_batch, "local"),)
++                if text_batch is not None
++                else ()
++            )
++            if not revisions and (
++                raster_updates or raster_additions or raster_remove_ids or text_batch is not None
++            ):
+                 candidate = mycad_app.create_replay_candidate(
+                     services, loaded, session_identity=session_id
+                 )
+@@ -5251,17 +5432,27 @@ class MainWindow(QMainWindow):
+                     ReplayChangeSet(
+                         (),
+                         (
+-                            ReplayAppend(
+-                                "drawing.raster.batch",
+-                                1,
+-                                {
+-                                    "action": "update",
+-                                    "images": [
+-                                        image.to_mapping(version=2) for image in raster_updates
+-                                    ],
+-                                },
+-                                "local",
++                            *(
++                                (
++                                    ReplayAppend(
++                                        "drawing.raster.batch",
++                                        1,
++                                        {"action": "remove", "image_ids": list(raster_remove_ids)}
++                                        if raster_remove_ids
++                                        else {
++                                            "action": "add" if raster_additions else "update",
++                                            "images": [
++                                                image.to_mapping(version=2)
++                                                for image in (raster_additions or raster_updates)
++                                            ],
++                                        },
++                                        "local",
++                                    ),
++                                )
++                                if raster_remove_ids or raster_additions or raster_updates
++                                else ()
+                             ),
++                            *text_appends,
+                         ),
+                         False,
+                         8 if loaded.document.archive_version < 8 else None,
+@@ -5499,6 +5690,7 @@ class MainWindow(QMainWindow):
+                             params,
+                             "local",
+                         ),
++                        *text_appends,
+                     ),
+                     False,
+                     8
+@@ -11463,6 +11655,8 @@ class MainWindow(QMainWindow):
+             return
+         if self.document_session is None or self._services is None:
+             return
++        if self._pending_drawing_text_blocks_navigation():
++            return
+         if (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -11675,6 +11869,9 @@ class MainWindow(QMainWindow):
+         entry = session.find(identity)
+         if entry is None:
+             return
++        if entry is not session.active and self._pending_drawing_text_blocks_navigation():
++            self._refresh_document_choice()
++            return
+         if entry is not session.active and (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -12899,6 +13096,13 @@ class MainWindow(QMainWindow):
+             self._sync_drawing_layers()
+ 
+     def request_undo(self) -> None:
++        if (
++            self._sketch_dialog is not None
++            and self._sketch_dialog.canvas.text_tools is not None
++            and self._sketch_dialog.canvas.text_tools.pending
++        ):
++            self.status_command.setText("请先完成或取消文字编辑，再撤销文档操作。")
++            return
+         if (
+             self.active_workspace == "sketch"
+             and self.execution_unit is not None
+@@ -12942,6 +13146,11 @@ class MainWindow(QMainWindow):
+                 "drawing.layers.set",
+                 "drawing.clipboard.prepare",
+                 "drawing.dimension_styles.set",
++                "drawing.text.add",
++                "drawing.text.update",
++                "drawing.text.remove",
++                "drawing.text.batch",
++                "drawing.text_styles.set",
+                 "drawing.raster.add",
+                 "drawing.raster.update",
+                 "drawing.raster.remove",
+@@ -13134,6 +13343,13 @@ class MainWindow(QMainWindow):
+             self.status_command.setText(f"撤销失败：{err}")
+ 
+     def request_redo(self) -> None:
++        if (
++            self._sketch_dialog is not None
++            and self._sketch_dialog.canvas.text_tools is not None
++            and self._sketch_dialog.canvas.text_tools.pending
++        ):
++            self.status_command.setText("请先完成或取消文字编辑，再重做文档操作。")
++            return
+         if (
+             self.active_workspace == "sketch"
+             and self.execution_unit is not None
+@@ -13417,6 +13633,8 @@ class MainWindow(QMainWindow):
+     # ------------------------------------------------------------------
+ 
+     def _on_new_document(self) -> None:
++        if self._pending_drawing_text_blocks_navigation():
++            return
+         if (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -13455,6 +13673,8 @@ class MainWindow(QMainWindow):
+         dialog.deleteLater()
+ 
+     def _on_new_drawing_document(self) -> None:
++        if self._pending_drawing_text_blocks_navigation():
++            return
+         if (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -13489,7 +13709,12 @@ class MainWindow(QMainWindow):
+         ):
+             return
+         self._replace_document(
+-            mycad_app.new_document(self._services, document_type=document_type), None
++            (
++                mycad_app.new_workspace_document(self._services, kind="sketch")
++                if document_type == "drawing2d"
++                else mycad_app.new_document(self._services, document_type=document_type)
++            ),
++            None,
+         )
+ 
+     def _on_import_dxf_sketch(self) -> None:
+@@ -13540,7 +13765,7 @@ class MainWindow(QMainWindow):
+                 self._show_error("无法读取 DXF 草图：返回结果无效。")
+                 return
+             imported = result.value
+-            if not imported.sketch.entities:
++            if not imported.sketch.entities and not imported.texts:
+                 self._show_error(f"DXF 中没有可导入的支持图元：{imported.report}")
+                 return
+             existing_sketch_ids = {
+@@ -13592,7 +13817,7 @@ class MainWindow(QMainWindow):
+                 )
+             preview = (
+                 f"{report}\n\n将把 {len(sketch.entities)} 个支持图元作为一张 XY 草图追加到当前文档。"
+-                f"\n恢复关联尺寸 {len(sketch.constraints)} 个。"
++                f"\n恢复关联尺寸 {len(sketch.constraints)} 个；文字 {len(imported.texts)} 个。"
+                 f"\n恢复图纸样式关联 {sum(c.style_name is not None for c in sketch.constraints)} 个。"
+                 "\n确认前不会修改命令历史或模型。"
+             )
+@@ -13614,6 +13839,8 @@ class MainWindow(QMainWindow):
+                     sketch,
+                     session_identity=session_id,
+                     imported_styles=imported_styles,
++                    imported_texts=imported.texts,
++                    imported_text_styles=imported.text_styles,
+                 )
+ 
+             def finish_submit(submit_result: ExecutionResult) -> None:
+@@ -13624,7 +13851,7 @@ class MainWindow(QMainWindow):
+                     self.viewport.refresh()
+                 self.status_command.setText(
+                     f"DXF 草图已导入并写入命令历史：{len(sketch.entities)} 个图元，"
+-                    f"{len(sketch.constraints)} 个关联尺寸；可撤销、重做和保存重放。"
++                    f"{len(sketch.constraints)} 个关联尺寸，{len(imported.texts)} 个文字；可撤销、重做和保存重放。"
+                 )
+ 
+             if not unit.submit(
+@@ -13644,6 +13871,8 @@ class MainWindow(QMainWindow):
+             self.status_command.setText("应用工作线程忙碌，DXF 尚未读取；请稍后重试。")
+ 
+     def _on_open_document(self) -> None:
++        if self._pending_drawing_text_blocks_navigation():
++            return
+         if (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -13675,6 +13904,8 @@ class MainWindow(QMainWindow):
+         self.open_document_path(Path(selected).absolute())
+ 
+     def open_document_path(self, path: Path, *, old_recent_path: Path | None = None) -> None:
++        if self._pending_drawing_text_blocks_navigation():
++            return
+         if (
+             self._active_modeling_command is not None
+             or self.datum_task is not None
+@@ -13945,6 +14176,7 @@ class MainWindow(QMainWindow):
+         draft = self._sketch_dialog
+         if draft is None or not (
+             draft.canvas.entities
++            or (draft.canvas.text_tools is not None and draft.canvas.text_tools.pending)
+             or draft.canvas.has_pending_geometry
+             or draft.canvas.mixed_move is not None
+         ):
+@@ -14295,6 +14527,16 @@ class MainWindow(QMainWindow):
+         else:
+             self.status_command.setText("应用工作线程忙碌，DXF 尚未导出；请稍后重试。")
+ 
++    def _pending_drawing_text_blocks_navigation(self) -> bool:
++        if (
++            self._sketch_dialog is None
++            or self._sketch_dialog.canvas.text_tools is None
++            or not self._sketch_dialog.canvas.text_tools.pending
++        ):
++            return False
++        self.status_command.setText("二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消，再切换文档。")
++        return True
++
+     def _has_unsubmitted_geometry(
+         self, *, include_sketch: bool = True, include_history: bool = True
+     ) -> bool:
+@@ -14307,6 +14549,15 @@ class MainWindow(QMainWindow):
+         if self.bound_hole_task is not None:
+             self.status_command.setText("绑定孔尚未确认，请先完成或取消当前命令。")
+             return True
++        if (
++            self._sketch_dialog is not None
++            and self._sketch_dialog.canvas.text_tools is not None
++            and self._sketch_dialog.canvas.text_tools.pending
++        ):
++            self.status_command.setText(
++                "二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消，再保存或切换文档。"
++            )
++            return True
+         if include_sketch and self._has_unsubmitted_sketch():
+             return True
+         if self.drawing_workbench.notes.pending:
+@@ -14336,6 +14587,10 @@ class MainWindow(QMainWindow):
+         draft = self._sketch_dialog
+         if draft is None:
+             return False
++        if draft.canvas.text_tools is not None and draft.canvas.text_tools.pending:
++            self.status_command.setText("二维文字尚未提交：Ctrl+Enter 完成或 Esc 取消。")
++            draft.status_label.setText(self.status_command.text())
++            return True
+         if not (
+             draft.canvas.entities
+             or draft.canvas.has_pending_geometry
+diff --git a/src/mycad/ui/preferences.py b/src/mycad/ui/preferences.py
+index 7fbcc7c..d3381ca 100644
+--- a/src/mycad/ui/preferences.py
++++ b/src/mycad/ui/preferences.py
+@@ -3,7 +3,17 @@
+ """Application preferences for the independent drawing workspace."""
+ 
+ from PySide6.QtCore import QSettings
+-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QWidget
++from PySide6.QtWidgets import (
++    QCheckBox,
++    QComboBox,
++    QDialog,
++    QDialogButtonBox,
++    QFormLayout,
++    QPushButton,
++    QWidget,
++)
++
++from mycad.ui.font_resources import FontResourcesDialog
+ 
+ CURSOR_STYLE_KEY = "drawing2d/cursorStyle"
+ CONSTRAINT_MARKERS_KEY = "drawing2d/constraintMarkersVisible"
+@@ -38,6 +48,10 @@ class CursorSettingsDialog(QDialog):
+         self.constraint_markers.setChecked(markers_visible)
+         self.constraint_markers.setToolTip("控制重合、水平、垂直等几何约束符号的显示。")
+         layout.addRow("二维工作区", self.constraint_markers)
++        self.font_resources = QPushButton("字体管理…", self)
++        self.font_resources.setObjectName("fontResourcesButton")
++        self.font_resources.clicked.connect(self._open_font_resources)
++        layout.addRow("应用字体", self.font_resources)
+         buttons = QDialogButtonBox(
+             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
+         )
+@@ -47,3 +61,6 @@ class CursorSettingsDialog(QDialog):
+ 
+     def selected_style(self) -> str:
+         return "full" if self.cursor_style.currentData() == "full" else "short"
++
++    def _open_font_resources(self) -> None:
++        FontResourcesDialog(self).exec()
+diff --git a/src/mycad/ui/sketch_editor.py b/src/mycad/ui/sketch_editor.py
+index b737383..53de87e 100644
+--- a/src/mycad/ui/sketch_editor.py
++++ b/src/mycad/ui/sketch_editor.py
+@@ -239,6 +239,7 @@ from mycad.ui.drawing_clipboard import (
+     reconcile_clipboard_styles,
+ )
+ from mycad.ui.drawing_offset import signed_offset_distance, through_offset_distance
++from mycad.ui.drawing_text_tools import TEXT_CLIPBOARD_MIME, DrawingTextTools
+ from mycad.ui.layer_panel import DrawingLayerPanel
+ from mycad.ui.quick_select import QuickSelectDialog
+ from mycad.ui.sketch_dynamic_input import SketchDynamicInput
+@@ -1032,6 +1033,7 @@ class SketchCanvas(QWidget):
+         self.active_layer_name = "0"
+         self.document_layer_table: SketchLayerTable | None = None
+         self.drawing_dimension_styles: DimensionStyleTable | None = None
++        self.text_tools: DrawingTextTools | None = None
+         self.preserve_document_layers = False
+         self._undo_history: list[_DraftState] = []
+         self._redo_history: list[_DraftState] = []
+@@ -1571,6 +1573,10 @@ class SketchCanvas(QWidget):
+                 points.extend(
+                     self.screen_to_local(point) for line in layout.lines for point in line
+                 )
++        if self.text_tools is not None:
++            for text in self.text_tools.texts:
++                if not self.layer_table.get(text.layer_name).frozen:
++                    points.extend(self.text_tools.model_corners(text))
+         if not points:
+             self._scale = 5.0
+             self._pan = QPointF()
+@@ -2255,6 +2261,10 @@ class SketchCanvas(QWidget):
+         return layer.displayed and not layer.locked
+ 
+     def set_tool(self, tool: str) -> bool:
++        if self.text_tools is not None and self.text_tools.pending and tool != "选择元素":
++            self.message = "请先完成或取消文字编辑。"
++            self.changed.emit()
++            return False
+         if self._array_spacing_drag is not None and self._array_spacing_drag.committing:
+             self.message = "阵列修改正在提交；完成后可撤销。"
+             self.changed.emit()
+@@ -2711,6 +2721,11 @@ class SketchCanvas(QWidget):
+ 
+     def delete_selected(self) -> bool:
+         """Erase draft selection and its dependent relations as one undo step."""
++        if self.text_tools is not None and self.text_tools.selected_ids:
++            if self.selected_entity_ids or self.selected_raster_ids or self.selected_constraint_ids:
++                self.committed_delete_requested.emit(tuple(self.selected_entity_ids))
++                return True
++            return self.text_tools.delete()
+         if self.has_pending_geometry or self.has_active_edit_gesture:
+             self.message = "请先完成当前操作，或按 Esc 取消预览，再删除所选对象。"
+             self.changed.emit()
+@@ -6574,6 +6589,8 @@ class SketchCanvas(QWidget):
+         }
+ 
+     def _select_at(self, point: Point2D, *, additive: bool, subtractive: bool = False) -> None:
++        if self.text_tools is not None and not additive and not subtractive:
++            self.text_tools.selected_ids.clear()
+         identity = self._hit_entity_at(point)
+         if not additive and not subtractive:
+             self.selected_entity_ids.clear()
+@@ -6725,6 +6742,8 @@ class SketchCanvas(QWidget):
+         self.update()
+ 
+     def _begin_selection_box(self, event: QMouseEvent) -> None:
++        if self.text_tools is not None:
++            self.text_tools.selection_original = set(self.text_tools.selected_ids)
+         self._selection_anchor = event.position()
+         self._selection_corner = event.position()
+         self._selection_waiting_click = False
+@@ -6744,6 +6763,8 @@ class SketchCanvas(QWidget):
+         self.selected_entity_ids = set(self._selection_original)
+         self.selected_constraint_ids = set(self._selection_original_constraints)
+         self.selected_raster_ids = set(self._selection_original_raster_ids)
++        if self.text_tools is not None:
++            self.text_tools.selected_ids = set(self.text_tools.selection_original)
+         self._selection_anchor = None
+         self._selection_waiting_click = False
+         self.message = "已取消框选。"
+@@ -6757,6 +6778,8 @@ class SketchCanvas(QWidget):
+             return
+         self.selected_segment_indices.clear()
+         self._selected_segment_sources.clear()
++        if self.text_tools is not None:
++            self.text_tools.select_box(anchor, position, self._selection_modifiers)
+         crossing = position.x() < anchor.x()
+         first, second = self.screen_to_local(anchor), self.screen_to_local(position)
+         identities = {
+@@ -8324,7 +8347,11 @@ class SketchCanvas(QWidget):
+         self._mirror_selected_sources = ()
+         self._copy_repeat = self.copy_mode == 0
+         self._transform_angle_text = ""
+-        self._transform_selecting = not bool(self.selected_entity_ids or self.selected_raster_id)
++        self._transform_selecting = not bool(
++            self.selected_entity_ids
++            or self.selected_raster_id
++            or (self.text_tools is not None and self.text_tools.selected_ids)
++        )
+         self._transform_base = None
+         self._transform_preview = ()
+         self._copy_placements.clear()
+@@ -8563,6 +8590,20 @@ class SketchCanvas(QWidget):
+ 
+     def transform_selection_error(self, operation: str) -> str:
+         """Explain why the selection cannot be transformed without changing geometry."""
++        if self.text_tools is not None and self.text_tools.selected_ids:
++            error = self.text_tools.selection_error()
++            if error:
++                return error
++            if operation not in {
++                "move",
++                "copy",
++                "rotate",
++                "scale",
++                "mirror",
++                "erase",
++                "delete_mixed",
++            }:
++                return "所选文字不支持此操作。"
+         if self._selected_committed_entities() and operation not in {
+             "move",
+             "copy",
+@@ -8631,6 +8672,8 @@ class SketchCanvas(QWidget):
+ 
+     def copy_to_clipboard(self) -> bool:
+         """Copy selected drawing entities and their wholly internal relations."""
++        if self.text_tools is not None and self.text_tools.selected_ids:
++            return self.text_tools.copy()
+         if (
+             not self.select_committed_entities
+             or self.has_pending_geometry
+@@ -8790,6 +8833,8 @@ class SketchCanvas(QWidget):
+         return True
+ 
+     def begin_clipboard_paste(self) -> bool:
++        if self.text_tools is not None and self.text_tools.begin_paste():
++            return True
+         """Begin an insertion gesture without modifying the current draft."""
+         if (
+             not self.select_committed_entities
+@@ -9174,6 +9219,7 @@ class SketchCanvas(QWidget):
+         if self._transform_selecting and (
+             self.selected_entity_ids
+             or self.selected_raster_id
++            or (self.text_tools is not None and self.text_tools.selected_ids)
+             or (self._transform_operation == "erase" and self.selected_constraint_ids)
+         ):
+             if (
+@@ -9535,6 +9581,46 @@ class SketchCanvas(QWidget):
+         return self.apply_scale_factor(length / self._scale_reference_length)
+ 
+     def apply_scale_factor(self, factor: float) -> bool:
++        if not self._transform_revision_current():
++            return False
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and (self.selected_entity_ids or self.selected_raster_ids)
++            and self._transform_base is not None
++        ):
++            if not math.isfinite(factor) or factor <= 0:
++                return False
++            ids, base, copy_source = (
++                tuple(self.selected_entity_ids),
++                self._transform_base,
++                self._scale_copy,
++            )
++            self.cancel_transform()
++            if copy_source:
++                self.committed_scale_copy_requested.emit(ids, base, factor)
++            else:
++                self.committed_scale_requested.emit(ids, base, factor)
++            return True
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and not self.selected_entity_ids
++            and not self.selected_raster_ids
++            and self._transform_base is not None
++        ):
++            if not math.isfinite(factor) or factor <= 0:
++                return False
++            result = self.text_tools.transform(
++                "scale",
++                self._transform_base,
++                self._transform_base,
++                scale=factor,
++                copy=self._scale_copy,
++            )
++            if result:
++                self.cancel_transform()
++            return result
+         if not self._transform_revision_current() or self.scale_center is None:
+             return False
+         if self.selected_raster_id is not None and not self.selected_entity_ids:
+@@ -9691,6 +9777,46 @@ class SketchCanvas(QWidget):
+ 
+     def apply_rotation_angle(self, angle_deg: float) -> bool:
+         """Apply an explicit relative angle about the currently picked center."""
++        if not self._transform_revision_current():
++            return False
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and (self.selected_entity_ids or self.selected_raster_ids)
++            and self._transform_base is not None
++        ):
++            if not math.isfinite(angle_deg):
++                return False
++            ids, base, copy_source = (
++                tuple(self.selected_entity_ids),
++                self._transform_base,
++                self._rotation_copy,
++            )
++            self.cancel_transform()
++            if copy_source:
++                self.committed_rotation_copy_requested.emit(ids, base, angle_deg)
++            else:
++                self.committed_rotation_requested.emit(ids, base, angle_deg)
++            return True
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and not self.selected_entity_ids
++            and not self.selected_raster_ids
++            and self._transform_base is not None
++        ):
++            if not math.isfinite(angle_deg):
++                return False
++            result = self.text_tools.transform(
++                "rotate",
++                self._transform_base,
++                self._transform_base,
++                angle=angle_deg,
++                copy=self._rotation_copy,
++            )
++            if result:
++                self.cancel_transform()
++            return result
+         if not self._transform_revision_current():
+             return False
+         if self._transform_operation != "rotate" or self._transform_base is None:
+@@ -10245,6 +10371,69 @@ class SketchCanvas(QWidget):
+                     else:
+                         self._show_transform_candidate(candidate, commit=False)
+             return
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and (self.selected_entity_ids or self.selected_raster_ids)
++        ):
++            if commit:
++                base = self._transform_base
++                operation = self._transform_operation
++                ids = tuple(self.selected_entity_ids)
++                if operation in {"move", "copy"}:
++                    delta = (point[0] - base[0], point[1] - base[1])
++                    self.cancel_transform()
++                    if operation == "copy":
++                        self.committed_mixed_copy_requested.emit(ids, delta)
++                    else:
++                        self.committed_move_requested.emit(ids, delta)
++                elif operation == "rotate":
++                    angle = math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
++                    self.apply_rotation_angle(angle - (self.rotation_reference_angle or 0))
++                elif operation == "scale":
++                    self.apply_scale_factor(
++                        math.dist(base, point) / (self._scale_reference_length or 1)
++                    )
++                elif operation == "mirror":
++                    keep = self._transform_keep_source
++                    self.cancel_transform()
++                    if keep:
++                        self.committed_mirror_copy_requested.emit(ids, base, point)
++                    else:
++                        self.committed_mirror_requested.emit(ids, base, point)
++            return
++        if (
++            self.text_tools is not None
++            and self.text_tools.selected_ids
++            and not self.selected_entity_ids
++            and not self.selected_raster_ids
++        ):
++            if commit:
++                base = self._transform_base
++                assert base is not None
++                operation = self._transform_operation or "move"
++                copy_source = (
++                    self._rotation_copy
++                    or self._scale_copy
++                    or (operation == "mirror" and self._transform_keep_source)
++                )
++                factor = (
++                    math.dist(base, point) / (self._scale_reference_length or 1)
++                    if operation == "scale"
++                    else None
++                )
++                angle = (
++                    math.degrees(math.atan2(point[1] - base[1], point[0] - base[0]))
++                    - (self.rotation_reference_angle or 0)
++                    if operation == "rotate"
++                    else None
++                )
++                if self.text_tools.transform(
++                    operation, base, point, copy=copy_source, scale=factor, angle=angle
++                ):
++                    self.cancel_transform()
++                    self.point_accepted.emit(point)
++            return
+         if self.selected_raster_id is not None and not self.selected_entity_ids:
+             if commit and self._transform_operation == "mirror" and self._mirror_ask_erase:
+                 if math.dist(self._transform_base, point) <= 1e-9:
+@@ -13902,6 +14091,9 @@ class SketchCanvas(QWidget):
+             self._drawing_dark_theme = dark
+             self.update()
+ 
++    def text_color(self, layer: SketchLayer) -> QColor:
++        return self._drawing_color(QColor(*layer.color_rgb))
++
+     def _drawing_color(self, color: QColor) -> QColor:
+         if not self._drawing_dark_theme:
+             return color
+@@ -14809,6 +15001,8 @@ class SketchCanvas(QWidget):
+             painter.drawLine(origin.x(), 0, origin.x(), self.height())
+         for raster in self.drawing_rasters:
+             self._draw_raster(painter, raster)
++        if self.text_tools is not None:
++            self.text_tools.draw(painter)
+         if self.tool in {"修剪", "延伸"}:
+             painter.save()
+             painter.setPen(QPen(QColor(130, 110, 160), 1.0, Qt.PenStyle.DashLine))
+@@ -15206,8 +15400,18 @@ class SketchCanvas(QWidget):
+         painter.drawText(base + QPoint(8, 17), "O · UCS" if at_origin else "UCS · 原点屏外")
+         painter.restore()
+ 
++    @override
++    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
++        if self.text_tools is not None and self.text_tools.double_click(event):
++            event.accept()
++            return
++        super().mouseDoubleClickEvent(event)
++
+     @override
+     def mousePressEvent(self, event: QMouseEvent) -> None:
++        if self.text_tools is not None and self.text_tools.mouse_press(event):
++            event.accept()
++            return
+         if event.button() == Qt.MouseButton.RightButton and self.clipboard_paste_active:
+             self._suppress_clipboard_context = True
+             self._clipboard_paste = None
+@@ -15951,13 +16155,20 @@ class SketchCanvas(QWidget):
+             )
+         )
+         copy_action = menu.addAction("复制\tCtrl+C")
+-        copy_action.setEnabled(bool(self.selected_entity_ids or self.selected_raster_id))
++        copy_action.setEnabled(
++            bool(
++                self.selected_entity_ids
++                or self.selected_raster_id
++                or (self.text_tools is not None and self.text_tools.selected_ids)
++            )
++        )
+         paste_action = menu.addAction("粘贴\tCtrl+V")
+         mime = cast("QMimeData | None", QApplication.clipboard().mimeData())
+         paste_action.setEnabled(
+             mime is not None
+             and (
+-                mime.hasFormat(DRAWING_CLIPBOARD_MIME)
++                mime.hasFormat(TEXT_CLIPBOARD_MIME)
++                or mime.hasFormat(DRAWING_CLIPBOARD_MIME)
+                 or mime.hasFormat(DRAWING_MIXED_CLIPBOARD_MIME)
+                 or mime.hasFormat(DRAWING_RASTER_GROUP_MIME)
+                 or mime.hasImage()
+@@ -16022,6 +16233,11 @@ class SketchCanvas(QWidget):
+ 
+     @override
+     def keyPressEvent(self, event: QKeyEvent) -> None:
++        if event.key() == Qt.Key.Key_Escape and self.text_tools is not None:
++            if self.text_tools.cancel():
++                event.accept()
++                return
++            self.text_tools.selected_ids.clear()
+         if event.matches(QKeySequence.StandardKey.Copy) and self.select_committed_entities:
+             self.copy_to_clipboard()
+             event.accept()
+@@ -17523,7 +17739,8 @@ class SketchEditorDialog(QDialog):
+ 
+     def _navigation_busy(self) -> bool:
+         return (
+-            self.canvas.has_pending_geometry
++            (self.canvas.text_tools is not None and self.canvas.text_tools.pending)
++            or self.canvas.has_pending_geometry
+             or self.canvas.has_active_edit_gesture
+             or self.dimensions.mode is not None
+             or self.dimensions.candidate is not None
+@@ -18148,6 +18365,9 @@ class SketchEditorDialog(QDialog):
+         panel.show()
+ 
+     def finish_sketch(self) -> None:
++        if self.canvas.text_tools is not None and self.canvas.text_tools.pending:
++            self.status_label.setText("请先 Ctrl+Enter 完成文字，或 Esc 取消文字编辑，再完成草图。")
++            return
+         if self.canvas.has_active_edit_gesture:
+             self.status_label.setText("先松开鼠标确认当前草稿预览，或按 Esc 取消后再完成草图。")
+             return
+diff --git a/tests/builtin_commands/test_specs.py b/tests/builtin_commands/test_specs.py
+index bb55620..d12a168 100644
+--- a/tests/builtin_commands/test_specs.py
++++ b/tests/builtin_commands/test_specs.py
+@@ -28,8 +28,13 @@ from mycad.core.exceptions import UnknownCommandError, ValidationError
+ 
+ REPO = Path(__file__).resolve().parents[2]
+ 
+-#: Appendix A.1 ids followed by individually released P2 drawing/modeling commands.
++#: Catalog order: text additions precede the Appendix A.1 and released P2 commands.
+ EXPECTED_IDS: tuple[str, ...] = (
++    "drawing.text.add",
++    "drawing.text.update",
++    "drawing.text.remove",
++    "drawing.text.batch",
++    "drawing.text_styles.set",
+     "feature.box",
+     "feature.cylinder",
+     "feature.sphere",
+@@ -86,6 +91,8 @@ EXPECTED_IDS: tuple[str, ...] = (
+     "reference.detach",
+     "drawing.array.batch_override",
+     "drawing.raster.batch",
++    "drawing.dimension_styles.set",
++    "drawing.clipboard.prepare",
+ )
+ 
+ 
+@@ -939,6 +946,13 @@ def test_affected_objects_static_shape() -> None:
+         "drawing.raster.update",
+         "drawing.raster.remove",
+         "drawing.raster.batch",
++        "drawing.dimension_styles.set",
++        "drawing.clipboard.prepare",
++        "drawing.text.add",
++        "drawing.text.update",
++        "drawing.text.remove",
++        "drawing.text.batch",
++        "drawing.text_styles.set",
+         "datum.coordinate_system.create",
+         "datum.plane.create",
+     }
+diff --git a/tests/cli/test_commands_plugins.py b/tests/cli/test_commands_plugins.py
+index ae4f3cd..e0ceaa1 100644
+--- a/tests/cli/test_commands_plugins.py
++++ b/tests/cli/test_commands_plugins.py
+@@ -66,12 +66,12 @@ def test_commands_lists_all_released_builtins(
+     monkeypatch.setattr(EntryPointDiscoverer, "discover", _no_plugins)
+     assert main(["commands"]) == 0
+     lines = capsys.readouterr().out.splitlines()
+-    assert len(lines) == 56
++    assert len(lines) == 63
+     rows = [line.split("\t") for line in lines]
+     assert all(len(row) == 3 for row in rows)
+     verbs = [row[0] for row in rows]
+     assert verbs == sorted(verbs)
+-    assert verbs.count("") == 29
++    assert verbs.count("") == 36
+     assert [row[1] for row in rows if not row[0]] == [
+         "datum.coordinate_system.create",
+         "datum.plane.create",
+@@ -87,6 +87,8 @@ def test_commands_lists_all_released_builtins(
+         "drawing.array.rotate",
+         "drawing.array.update",
+         "drawing.chamfer_values.set",
++        "drawing.clipboard.prepare",
++        "drawing.dimension_styles.set",
+         "drawing.fillet_radius.set",
+         "drawing.layers.set",
+         "drawing.raster.add",
+@@ -96,6 +98,11 @@ def test_commands_lists_all_released_builtins(
+         "drawing.sketch.revise",
+         "drawing.tangency.add",
+         "drawing.tangency.remove",
++        "drawing.text.add",
++        "drawing.text.batch",
++        "drawing.text.remove",
++        "drawing.text.update",
++        "drawing.text_styles.set",
+         "reference.attach",
+         "reference.detach",
+         "reference.update",
+@@ -115,7 +122,7 @@ def test_commands_json_shape(
+     payload = json.loads(raw)
+     assert set(payload) == {"commands"}
+     commands = payload["commands"]
+-    assert len(commands) == 56
++    assert len(commands) == 63
+     verbs = [entry["verb"] for entry in commands]
+     assert verbs == sorted(verbs)
+     assert [entry["id"] for entry in commands if not entry["verb"]] == [
+@@ -133,6 +140,8 @@ def test_commands_json_shape(
+         "drawing.array.rotate",
+         "drawing.array.update",
+         "drawing.chamfer_values.set",
++        "drawing.clipboard.prepare",
++        "drawing.dimension_styles.set",
+         "drawing.fillet_radius.set",
+         "drawing.layers.set",
+         "drawing.raster.add",
+@@ -142,6 +151,11 @@ def test_commands_json_shape(
+         "drawing.sketch.revise",
+         "drawing.tangency.add",
+         "drawing.tangency.remove",
++        "drawing.text.add",
++        "drawing.text.batch",
++        "drawing.text.remove",
++        "drawing.text.update",
++        "drawing.text_styles.set",
+         "reference.attach",
+         "reference.detach",
+         "reference.update",
+@@ -171,7 +185,7 @@ def test_commands_lists_plugin_contributions(
+     monkeypatch.setattr(EntryPointDiscoverer, "discover", _one_plugin)
+     assert main(["commands"]) == 0
+     rows = [line.split("\t") for line in capsys.readouterr().out.splitlines()]
+-    assert len(rows) == 57
++    assert len(rows) == 64
+     assert "demo.ping" in {row[1] for row in rows}
+     verbs = [row[0] for row in rows]
+     assert verbs == sorted(verbs)

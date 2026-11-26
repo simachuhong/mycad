@@ -1,0 +1,256 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "40000000000000000000000000000002",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "40000000000000000000000000000001",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "line",
+            "start_mm": [
+              0.0,
+              0.0
+            ],
+            "end_mm": [
+              40.0,
+              0.0
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-20T19:48:42.016843+00:00",
+      "confirmed_by": "local",
+      "instance_id": "204790bc81574658b529ed062302f9ac"
+    },
+    {
+      "id": "drawing.raster.add",
+      "version": 1,
+      "params": {
+        "image_id": "40000000000000000000000000000003",
+        "png_base64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAoCAYAAABOzvzpAAAAjElEQVR4nO3QsQ2EMADAwIzz0zHTD/YbfE0NG6SLLggXLi1ZHr//ec34HN8pT/eHDtB+A3SA9hugA7TfAB2g/bF74Gq/ATpA+w3QAdpvgA7QfgN2D1ztN0AHaL8BOkD7DdAB2m/A7oGr/QboAO03QAdovwE6QPsN2D1wtd8AHaD9BugA7TdAB2j/9QNuTzOxtHYtGhsAAAAASUVORK5CYII=",
+        "origin_mm": [
+          0.0,
+          15.0
+        ],
+        "width_mm": 20.0,
+        "height_mm": 12.5,
+        "layer_name": "0"
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-20T19:48:42.018014+00:00",
+      "confirmed_by": "local",
+      "instance_id": "bb1b5f22e9ab4800b41c2f892a46e417"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 29,
+      "params": {
+        "add_frames": [
+          {
+            "frame_id": "40000000000000000000000000000004",
+            "rows": [
+              {
+                "characteristic": "position",
+                "value": 0.1,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              30.0,
+              20.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          }
+        ],
+        "add_datums": [
+          {
+            "datum_id": "40000000000000000000000000000005",
+            "label": "A",
+            "position_mm": [
+              50.0,
+              15.0
+            ],
+            "target_mm": [
+              40.0,
+              0.0
+            ],
+            "layer_name": "0",
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-20T19:48:42.019147+00:00",
+      "confirmed_by": "local",
+      "instance_id": "af6304fea9604756bbebe40007a593b5"
+    },
+    {
+      "id": "drawing.reference_dimensions.batch",
+      "version": 10,
+      "params": {
+        "add": [
+          {
+            "dimension_id": "40000000000000000000000000000006",
+            "kind": "rotated",
+            "first_mm": [
+              0.0,
+              0.0
+            ],
+            "second_mm": [
+              40.0,
+              0.0
+            ],
+            "location_mm": [
+              0.0,
+              8.0
+            ],
+            "angle_deg": 0.0,
+            "nominal": 40.0,
+            "tolerance": {
+              "mode": "none",
+              "upper_deviation": 0.0,
+              "lower_deviation": 0.0,
+              "precision": 2,
+              "text_factor": 1.0,
+              "alignment": "middle"
+            },
+            "layer_name": "0",
+            "precision": 2,
+            "linear_factor": 1.0,
+            "text_override": ""
+          }
+        ]
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-20T19:48:42.020325+00:00",
+      "confirmed_by": "local",
+      "instance_id": "2aae3d7b12664c2aa03000ee0925769c"
+    },
+    {
+      "id": "drawing.group.create",
+      "version": 1,
+      "params": {
+        "group_id": "40000000000000000000000000000007",
+        "members": [
+          {
+            "kind": "geometry",
+            "object_id": "40000000000000000000000000000001",
+            "sketch_id": "40000000000000000000000000000002"
+          },
+          {
+            "kind": "raster",
+            "object_id": "40000000000000000000000000000003",
+            "sketch_id": null
+          },
+          {
+            "kind": "tolerance",
+            "object_id": "40000000000000000000000000000004",
+            "sketch_id": null
+          },
+          {
+            "kind": "datum",
+            "object_id": "40000000000000000000000000000005",
+            "sketch_id": null
+          },
+          {
+            "kind": "reference_dimension",
+            "object_id": "40000000000000000000000000000006",
+            "sketch_id": null
+          }
+        ],
+        "name": "MIXED_ANNOTATIONS_IMAGE",
+        "description": "",
+        "selectable": true
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-20T19:48:42.022347+00:00",
+      "confirmed_by": "local",
+      "instance_id": "2431bc96e8894e649e4bd122a9e320b6"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "a96e9628c3a5418ab28170058c18c3f3",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

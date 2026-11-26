@@ -21,8 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from mycad.core.dimension_styles import DimensionStyle, DimensionStyleTable
+from mycad.core.drawing_text import TextStyleTable
 from mycad.core.sketch_layers import STANDARD_LINEWEIGHTS_MM
 from mycad.ui.dimension_colors import dimension_color_combo
+from mycad.ui.dimension_tolerance_editor import DimensionToleranceEditor
+from mycad.ui.font_manager import FontManager
 
 
 class DrawingDimensionStylesDialog(QDialog):
@@ -33,12 +36,16 @@ class DrawingDimensionStylesDialog(QDialog):
         table: DimensionStyleTable,
         used_names: frozenset[str],
         parent: QWidget | None = None,
+        *,
+        text_styles: TextStyleTable | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("图纸标注样式")
         self._styles = {style.name.casefold(): style for style in table.styles}
         self._current = table.current_name
         self._used = {name.casefold() for name in used_names}
+        self._text_styles = text_styles
+        self._font_manager = FontManager() if text_styles is not None else None
         root = QVBoxLayout(self)
         scroll = QScrollArea(self)
         scroll.setObjectName("dimensionStyleScroll")
@@ -63,6 +70,26 @@ class DrawingDimensionStylesDialog(QDialog):
         self.scale.setRange(0.1, 100)
         form.addRow("小数位数", self.precision)
         form.addRow("标注比例", self.scale)
+        self.text_style = QComboBox()
+        self.text_style.addItem("默认字体", None)
+        if text_styles is not None:
+            for style in text_styles.styles:
+                self.text_style.addItem(style.name, style.style_id)
+        for style in table.styles:
+            if (
+                style.text_style_id is not None
+                and self.text_style.findData(style.text_style_id) < 0
+            ):
+                self.text_style.addItem(f"不可用：{style.text_style_id}", style.text_style_id)
+        form.addRow("文字样式", self.text_style)
+        self.font_notice = QLabel()
+        self.font_notice.setWordWrap(True)
+        form.addRow("字体提示", self.font_notice)
+        self.text_style.currentIndexChanged.connect(self._update_font_notice)
+        self.linear_tolerance = DimensionToleranceEditor()
+        self.angular_tolerance = DimensionToleranceEditor()
+        form.addRow("长度公差 (mm)", self.linear_tolerance)
+        form.addRow("角度公差 (°)", self.angular_tolerance)
         self.arrow_first = QComboBox()
         self.arrow_second = QComboBox()
         for combo in (self.arrow_first, self.arrow_second):
@@ -74,7 +101,6 @@ class DrawingDimensionStylesDialog(QDialog):
                 ("无", "none"),
             ):
                 combo.addItem(label, value)
-        self.arrow_first.currentIndexChanged.connect(self.arrow_second.setCurrentIndex)
         form.addRow("第一箭头", self.arrow_first)
         form.addRow("第二箭头", self.arrow_second)
         self.arrow_size = QDoubleSpinBox()
@@ -174,10 +200,34 @@ class DrawingDimensionStylesDialog(QDialog):
     def _update_current_label(self) -> None:
         self.current_label.setText(f"当前样式：{self._current}")
 
+    def _update_font_notice(self) -> None:
+        identity = self.text_style.currentData()
+        if not isinstance(identity, str):
+            self.font_notice.clear()
+            return
+        if self._text_styles is None or self._font_manager is None:
+            self.font_notice.setText("所选文字样式不可用，请选择有效样式。")
+            return
+        try:
+            style = self._text_styles.get(identity)
+        except KeyError:
+            self.font_notice.setText("所选文字样式不可用，请选择有效样式。")
+            return
+        replacement = self._font_manager.substitution(style)
+        notices: list[str] = []
+        if replacement:
+            notices.append(f"字体不可用，将使用 {replacement} 替代。")
+        if not 0.01 <= style.width_factor <= 40:
+            notices.append("画布标注宽度因子限于 0.01–40，原值会保留。")
+        self.font_notice.setText(" ".join(notices))
+
     def _select(self, name: str) -> None:
         style = self._styles.get(name.casefold())
         if style is not None:
             self.precision.setValue(style.precision)
+            self.text_style.setCurrentIndex(self.text_style.findData(style.text_style_id))
+            self.linear_tolerance.set_value(style.linear_tolerance)
+            self.angular_tolerance.set_value(style.angular_tolerance)
             self.scale.setValue(style.scale)
             self.arrow_first.setCurrentIndex(self.arrow_first.findData(style.arrow_first))
             self.arrow_second.setCurrentIndex(self.arrow_second.findData(style.arrow_second))
@@ -242,6 +292,9 @@ class DrawingDimensionStylesDialog(QDialog):
                 self.suppress_extension_second.isChecked(),
                 self.suppress_dimension_first.isChecked(),
                 self.suppress_dimension_second.isChecked(),
+                linear_tolerance=self.linear_tolerance.value(),
+                angular_tolerance=self.angular_tolerance.value(),
+                text_style_id=self.text_style.currentData(),
             )
         except ValueError as exc:
             self.message.setText(str(exc))

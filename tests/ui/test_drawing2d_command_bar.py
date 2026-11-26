@@ -5756,3 +5756,140 @@ def test_rotate_reference_points_option_requires_complete_reference(qtbot: QtBot
     bar.input.setText("P")
     QTest.keyClick(bar.input, Qt.Key.Key_Return)
     assert canvas.rotation_target_points_active
+
+
+def test_offset_toolbar_exposes_one_unselected_interactive_command(qtbot: QtBot) -> None:
+    from PySide6.QtWidgets import QToolButton
+
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    buttons = [
+        button
+        for button in editor.modify_toolbar.findChildren(QToolButton)
+        if button.text() in {"偏移", "侧向偏移", "偏置"}
+    ]
+    assert len(buttons) == 1
+    assert buttons[0].text() == "偏置"
+    assert buttons[0].isEnabled()
+    buttons[0].click()
+    assert editor.canvas.interactive_offset_needs_distance
+
+
+def test_offset_toolbar_reselects_previously_selected_object(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.resize(1200, 800)
+    editor.show()
+    canvas = editor.canvas
+    source = LineEntity(uuid4().hex, (0, 0), (10, 0))
+    assert canvas.replace_draft_entities((source,))
+    canvas.selected_entity_ids = {source.entity_id}
+    editor.interactive_offset_button.click()
+    assert canvas.interactive_offset_needs_distance
+    assert not canvas.selected_entity_ids
+    command = editor.drawing_command_bar.input
+    command.setText("1")
+    QTest.keyClick(command, Qt.Key.Key_Return)
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((5, 0)))
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((5, 1)))
+    assert len(canvas.entities) == 2, canvas.message
+
+
+@pytest.mark.parametrize("default_distance", [-1.0, 2.0])
+def test_offset_toolbar_direct_pick_previews_and_places(
+    qtbot: QtBot, default_distance: float
+) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.resize(1200, 800)
+    editor.show()
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_grid_snapping_enabled(False)
+    canvas.set_offset_default_distance(default_distance)
+    line = LineEntity(uuid4().hex, (0, 0), (20, 0))
+    assert canvas.replace_draft_entities((line,))
+    editor.interactive_offset_button.click()
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((10, 0)))
+    assert canvas.selected_entity_ids == {line.entity_id}, canvas.message
+    side = canvas.local_to_screen((10, 3))
+    QTest.mouseMove(canvas, canvas.local_to_screen((10, 0)))
+    QTest.mouseMove(canvas, side)
+    preview = canvas.transform_preview_entities
+    assert len(preview) == 1, canvas.message
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=side)
+    assert tuple(canvas.entities) == (line, *preview)
+
+
+def test_offset_toolbar_direct_pick_saved_object(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity, Sketch, WorkPlaneFrame
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.resize(1200, 800)
+    editor.show()
+    canvas = editor.canvas
+    canvas.set_snapping_enabled(False)
+    canvas.set_grid_snapping_enabled(False)
+    line = LineEntity(uuid4().hex, (0, 0), (20, 0))
+    frame = WorkPlaneFrame.xy()
+    canvas.set_background_sketches((Sketch(uuid4().hex, frame, (line,)),), frame)
+    editor.interactive_offset_button.click()
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((10, 0)))
+    assert canvas.selected_entity_ids == {line.entity_id}, canvas.message
+    QTest.mouseMove(canvas, canvas.local_to_screen((10, 0)))
+    side = canvas.local_to_screen((10, 3))
+    QTest.mouseMove(canvas, side)
+    preview = canvas.transform_preview_entities
+    assert len(preview) == 1, canvas.message
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=side)
+    assert tuple(canvas.entities) == preview
+    assert canvas.background_entities[0][0] == line
+
+
+def test_offset_prompts_reveal_available_options(qtbot: QtBot) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from mycad.core.sketch import LineEntity
+    from mycad.ui.sketch_editor import SketchEditorDialog
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    line = LineEntity("32a414514ad84ea192c54b6f88b00685", (0, 0), (20, 0))
+    editor.canvas.replace_draft_entities((line,))
+    editor.interactive_offset_button.click()
+    assert all(option in editor.canvas.message for option in ("T", "E", "L"))
+    command = editor.drawing_command_bar.input
+    command.setText("2")
+    QTest.keyClick(command, Qt.Key.Key_Return)
+    QTest.mouseClick(
+        editor.canvas, Qt.MouseButton.LeftButton, pos=editor.canvas.local_to_screen((10, 0))
+    )
+    assert all(option in editor.canvas.message for option in ("M", "U"))

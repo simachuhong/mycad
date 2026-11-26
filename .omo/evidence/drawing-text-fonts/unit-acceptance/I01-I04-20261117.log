@@ -1,0 +1,45 @@
+..........F......                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_five_commands_audit_fields_survive_save_and_replay ____________
+
+tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-754/test_five_commands_audit_field0')
+
+    def test_five_commands_audit_fields_survive_save_and_replay(tmp_path: Path) -> None:
+        services = app.build_app(discoverers=[])
+        loaded = app.new_workspace_document(services, kind="sketch")
+        style = TextStyle("cn", "中文", "Missing font", height_mm=4, width_factor=0.8)
+        styles = TextStyleTable((TextStyle(), style), "cn")
+        first = DrawingText(uuid4().hex, "中文 ABC", (10, 20), style_id="cn", rotation_deg=30)
+        second = DrawingText(
+            uuid4().hex,
+            "第一行\n\n第三行",
+            (3, 4),
+            kind="mtext",
+            style_id="cn",
+            align="middle_right",
+            box_width_mm=40,
+            line_spacing=1.5,
+        )
+        sequence = (
+            ("drawing.text_styles.set", styles.to_mapping()),
+            ("drawing.text.add", first.to_mapping()),
+            ("drawing.text.update", replace(first, text="新内容").to_mapping()),
+            ("drawing.text.batch", {"add": [second.to_mapping()]}),
+            ("drawing.text.remove", {"text_id": first.text_id}),
+        )
+        for command, params in sequence:
+            loaded.bus.execute(command, params, "qa-local")
+        records = loaded.document.commands
+        assert [record.id for record in records] == [command for command, _params in sequence]
+        assert [record.version for record in records] == [1] * 5
+        assert [record.params for record in records] == [params for _command, params in sequence]
+>       assert [record.ordinal for record in records] == list(range(1, 6))
+E       assert [0, 1, 2, 3, 4] == [1, 2, 3, 4, 5]
+E         
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/app/test_drawing_text_acceptance.py:77: AssertionError
+=========================== short test summary info ============================
+FAILED tests/app/test_drawing_text_acceptance.py::test_five_commands_audit_fields_survive_save_and_replay
+1 failed, 16 passed in 10.99s

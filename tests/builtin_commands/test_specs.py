@@ -28,8 +28,26 @@ from mycad.core.exceptions import UnknownCommandError, ValidationError
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Appendix A.1 ids followed by individually released P2 drawing/modeling commands.
+#: Catalog order: text additions precede the Appendix A.1 and released P2 commands.
 EXPECTED_IDS: tuple[str, ...] = (
+    "drawing.block.create",
+    "drawing.block.update",
+    "drawing.block.remove",
+    "drawing.block_instance.insert",
+    "drawing.block_instance.update",
+    "drawing.block_instance.explode",
+    "drawing.block_instance.remove",
+    "drawing.group.create",
+    "drawing.group.update",
+    "drawing.group.remove",
+    "drawing.objects.batch",
+    "drawing.text.add",
+    "drawing.text.update",
+    "drawing.text.remove",
+    "drawing.text.batch",
+    "drawing.text_styles.set",
+    "drawing.tolerance.batch",
+    "drawing.reference_dimensions.batch",
     "feature.box",
     "feature.cylinder",
     "feature.sphere",
@@ -86,6 +104,9 @@ EXPECTED_IDS: tuple[str, ...] = (
     "reference.detach",
     "drawing.array.batch_override",
     "drawing.raster.batch",
+    "drawing.dimension_styles.set",
+    "drawing.clipboard.prepare",
+    "drawing.curve_identity.upgrade",
 )
 
 
@@ -793,6 +814,93 @@ def test_sketch_constraint_add_v2_accepts_formatting_and_v1_remains_frozen() -> 
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("command_id", "previous", "current"),
+    [
+        ("drawing.sketch.revise", 55, 56),
+        ("drawing.tangency.add", 11, 12),
+        ("sketch.constraint.add", 9, 10),
+        ("sketch.constraint.update", 7, 8),
+        ("drawing.array.reset", 4, 5),
+        ("drawing.array.replace", 8, 9),
+        ("drawing.array.resize", 15, 16),
+        ("drawing.array.rotate", 2, 3),
+        ("drawing.array.batch_override", 1, 2),
+    ],
+)
+def test_attachment_protection_command_versions_preserve_schema(
+    command_id: str, previous: int, current: int
+) -> None:
+    registry = _builtin_registry()
+    old = registry.get(command_id, previous)
+    new = registry.get(command_id, current)
+    latest_versions = {
+        "drawing.sketch.revise": 81,
+        "drawing.tangency.add": 13,
+        "sketch.constraint.add": 11,
+        "sketch.constraint.update": 9,
+    }
+    assert registry.get(command_id).version == latest_versions.get(command_id, current)
+    assert new.params_schema == old.params_schema
+    assert new.min_archive_version == old.min_archive_version
+    assert new.undo_compensation == old.undo_compensation
+
+
+def test_polyline_topology_revision_has_new_version_and_schema() -> None:
+    registry = _builtin_registry()
+    old = registry.get("drawing.sketch.revise", 56)
+    new = registry.get("drawing.sketch.revise", 57)
+    assert registry.get("drawing.sketch.revise").version == 81
+    assert new.params_schema != old.params_schema
+    assert new.min_archive_version == old.min_archive_version
+    assert new.undo_compensation == old.undo_compensation
+    next_version = registry.get("drawing.sketch.revise", 58)
+    assert next_version.params_schema == new.params_schema
+    assert next_version.min_archive_version == new.min_archive_version
+    assert next_version.undo_compensation == new.undo_compensation
+    replacement_version = registry.get("drawing.sketch.revise", 59)
+    assert replacement_version.params_schema == new.params_schema
+    assert replacement_version.min_archive_version == new.min_archive_version
+    assert replacement_version.undo_compensation == new.undo_compensation
+    extra_version = registry.get("drawing.sketch.revise", 60)
+    assert extra_version.params_schema == new.params_schema
+    assert extra_version.min_archive_version == new.min_archive_version
+    assert extra_version.undo_compensation == new.undo_compensation
+    reordered_extra_version = registry.get("drawing.sketch.revise", 61)
+    assert reordered_extra_version.params_schema == new.params_schema
+    assert reordered_extra_version.min_archive_version == new.min_archive_version
+    assert reordered_extra_version.undo_compensation == new.undo_compensation
+    independent_extra_version = registry.get("drawing.sketch.revise", 62)
+    assert independent_extra_version.params_schema == new.params_schema
+    assert independent_extra_version.min_archive_version == new.min_archive_version
+    assert independent_extra_version.undo_compensation == new.undo_compensation
+    protected_raster_version = registry.get("drawing.sketch.revise", 63)
+    assert protected_raster_version.params_schema == new.params_schema
+    identity_revision = registry.get("drawing.sketch.revise", 64)
+    assert identity_revision.params_schema != new.params_schema
+    assert (
+        registry.get("drawing.sketch.revise", 65).params_schema == identity_revision.params_schema
+    )
+    for version in range(66, 80):
+        spec = registry.get("drawing.sketch.revise", version)
+        assert spec.params_schema == identity_revision.params_schema
+        assert spec.min_archive_version == identity_revision.min_archive_version
+        assert spec.undo_compensation == identity_revision.undo_compensation
+    explicit_removal = registry.get("drawing.sketch.revise", 80)
+    assert explicit_removal.params_schema != identity_revision.params_schema
+    assert explicit_removal.min_archive_version == 8
+    rectangle_rebind = registry.get("drawing.sketch.revise", 81)
+    assert rectangle_rebind.params_schema == explicit_removal.params_schema
+    assert rectangle_rebind.min_archive_version == 8
+    assert rectangle_rebind.undo_compensation == explicit_removal.undo_compensation
+    identity_create = registry.get("sketch.create", 57)
+    imported_identity_create = registry.get("sketch.create", 58)
+    assert registry.get("sketch.create").version == 58
+    assert imported_identity_create.params_schema == identity_create.params_schema
+    assert imported_identity_create.min_archive_version == identity_create.min_archive_version
+    assert imported_identity_create.undo_compensation == identity_create.undo_compensation
+
+
 def test_registry_holds_the_appendix_a1_ids_and_released_p2_ids() -> None:
     registry = _builtin_registry()
     assert _registered_ids(registry) == sorted(EXPECTED_IDS)
@@ -939,6 +1047,15 @@ def test_affected_objects_static_shape() -> None:
         "drawing.raster.update",
         "drawing.raster.remove",
         "drawing.raster.batch",
+        "drawing.dimension_styles.set",
+        "drawing.clipboard.prepare",
+        "drawing.text.add",
+        "drawing.text.update",
+        "drawing.text.remove",
+        "drawing.text.batch",
+        "drawing.text_styles.set",
+        "drawing.tolerance.batch",
+        "drawing.reference_dimensions.batch",
         "datum.coordinate_system.create",
         "datum.plane.create",
     }
@@ -1039,3 +1156,17 @@ def test_cli_aliases_are_pairwise_distinct() -> None:
 def test_cut_verb_is_exclusive_to_boolean_cut() -> None:
     claimants = [spec.id for spec in BUILTIN_COMMAND_SPECS if "cut" in spec.cli.verb_aliases]
     assert claimants == ["modify.boolean_cut"]
+
+
+def test_tolerance_and_text_style_current_versions_keep_prior_schemas() -> None:
+    registry = _builtin_registry()
+    tolerance = registry.get("drawing.tolerance.batch")
+    assert tolerance.version == 31
+    for version in (25, 26, 27, 28, 29, 30):
+        old = registry.get("drawing.tolerance.batch", version)
+        assert old.params_schema == tolerance.params_schema
+        assert old.min_archive_version == tolerance.min_archive_version
+        assert old.undo_compensation == tolerance.undo_compensation
+    style = registry.get("drawing.text_styles.set")
+    assert style.version == 2
+    assert style.params_schema != registry.get("drawing.text_styles.set", 1).params_schema

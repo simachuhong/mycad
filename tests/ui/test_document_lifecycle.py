@@ -677,6 +677,7 @@ def test_dxf_import_restores_explicit_projection_dimension(
 
         class MutableTextAttributes(Protocol):
             text_midpoint: tuple[float, float, float]
+            dimtype: int
 
         class DimensionEntity(Protocol):
             dxf: MutableTextAttributes
@@ -694,6 +695,7 @@ def test_dxf_import_restores_explicit_projection_dimension(
         document = cast("DxfReader", vars(dxf_filemanagement)["readfile"])(source)
         native = next(item for item in document.modelspace() if item.dxftype() == "DIMENSION")
         native.dxf.text_midpoint = (35, 22, 0)
+        native.dxf.dimtype |= 128
         document.saveas(source)
     _patch_open_path(monkeypatch, source)
     previews: list[str] = []

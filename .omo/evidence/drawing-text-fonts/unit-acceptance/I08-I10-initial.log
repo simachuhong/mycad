@@ -1,0 +1,38 @@
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+__________ test_pending_text_blocks_switch_and_close_until_cancelled ___________
+
+qtbot = <pytestqt.qtbot.QtBot object at 0x7ddb2d91f0b0>
+
+    def test_pending_text_blocks_switch_and_close_until_cancelled(qtbot: QtBot) -> None:
+        services = app.build_app(discoverers=())
+        session = DocumentSession()
+        window = MainWindow(services=services, document_session=session)
+        qtbot.addWidget(window)
+        window.show()
+        first = window.new_session_document("sketch")
+        second = window.new_session_document("sketch")
+        window.activate_session_document(first.loaded.document.document_id)
+        editor = window.active_sketch_dialog()
+        assert editor is not None and editor.canvas.text_tools is not None
+        tools = editor.canvas.text_tools
+        assert tools.begin("text")
+        tools.place((1, 2))
+        tools.editor.setPlainText("尚未提交")
+        before = first.loaded.document.commands
+        window.request_redo()
+        assert tools.pending and tools.editor.toPlainText() == "尚未提交"
+        assert "文字" in window.status_command.text()
+        window.activate_session_document(second.loaded.document.document_id)
+>       assert session.active is first
+E       assert SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7ddb2d91f350>, kern...<mycad.ui.plan_draft.PlanDraftController(0x47748dc0) at 0x7ddb2d9b5c40>, reference_locations={}, reference_messages=()) is SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7ddb2d91f350>, kern...<mycad.ui.plan_draft.PlanDraftController(0x4706f100) at 0x7ddb2d9f2cc0>, reference_locations={}, reference_messages=())
+E        +  where SessionDocument(services=AppServices(registry=<mycad.commands.registry.CommandRegistry object at 0x7ddb2d91f350>, kern...<mycad.ui.plan_draft.PlanDraftController(0x47748dc0) at 0x7ddb2d9b5c40>, reference_locations={}, reference_messages=()) = <mycad.ui.document_session.DocumentSession object at 0x7ddb30bb93a0>.active
+
+tests/ui/test_text_entry_acceptance.py:93: AssertionError
+----------------------------- Captured Qt messages -----------------------------
+QtWarningMsg: QOpenGLWidget is not supported on this platform.
+QtWarningMsg: This plugin does not support propagateSizeHints()
+QtWarningMsg: This plugin does not support propagateSizeHints()
+=========================== short test summary info ============================
+FAILED tests/ui/test_text_entry_acceptance.py::test_pending_text_blocks_switch_and_close_until_cancelled
+1 failed, 1 passed in 17.25s

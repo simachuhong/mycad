@@ -9,6 +9,69 @@ from pytestqt.qtbot import QtBot
 from mycad.ui.sketch_editor import SketchEditorDialog
 
 
+def test_idle_right_click_repeats_previous_drawing_command(qtbot: QtBot) -> None:
+    from PySide6.QtCore import QCoreApplication, QPoint
+    from PySide6.QtGui import QContextMenuEvent
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    canvas = editor.canvas
+    command = editor.drawing_command_bar.input
+    command.setText("LINE")
+    QTest.keyClick(command, Qt.Key.Key_Return)
+    assert canvas.tool == "直线"
+    assert canvas.set_tool("选择元素")
+    assert canvas.tool == "选择元素"
+    QTest.mouseClick(canvas, Qt.MouseButton.RightButton)
+    assert canvas.tool == "直线"
+    point = QPoint(25, 25)
+    event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, canvas.mapToGlobal(point))
+    QCoreApplication.sendEvent(canvas, event)
+    assert event.isAccepted()
+
+
+def test_idle_right_click_without_previous_command_prompts_for_command(qtbot: QtBot) -> None:
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    assert editor.canvas.set_tool("选择元素")
+    QTest.mouseClick(editor.canvas, Qt.MouseButton.RightButton)
+    assert "请输入命令" in editor.drawing_command_bar.status.text()
+
+
+def test_idle_right_click_repeats_zoom_after_completing_it(qtbot: QtBot) -> None:
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    command = editor.drawing_command_bar.input
+    command.setText("ZOOM")
+    QTest.keyClick(command, Qt.Key.Key_Return)
+    command.setText("2X")
+    QTest.keyClick(command, Qt.Key.Key_Return)
+    QTest.mouseClick(editor.canvas, Qt.MouseButton.RightButton)
+    assert "ZOOM" in editor.drawing_command_bar.status.text()
+    assert "指定窗口" in editor.drawing_command_bar.status.text()
+
+
+def test_command_input_starts_on_new_line_after_previous_message(qtbot: QtBot) -> None:
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.show()
+    command = editor.drawing_command_bar
+    field = command.input
+    field.setText("ZOOM")
+    QTest.keyClick(field, Qt.Key.Key_Return)
+    QTest.keyClicks(field, "2X")
+    lines = field.toPlainText().splitlines()
+    assert lines[-1] == "命令: 2X"
+    assert "ZOOM" in "\n".join(lines[:-1])
+    command.status.setText("请选择下一点。")
+    lines = field.toPlainText().splitlines()
+    assert lines[-2:] == ["请选择下一点。", "命令: 2X"]
+    assert field.text() == "2X"
+
+
 def test_layer_and_properties_commands_open_existing_panels(qtbot: QtBot) -> None:
     editor = SketchEditorDialog(select_committed_entities=True)
     qtbot.addWidget(editor)
@@ -504,6 +567,10 @@ def test_zoom_window_preview_tracks_pan_and_clears_on_leave_and_commit(qtbot: Qt
 
 
 def test_zoom_window_preview_handles_far_coordinate(qtbot: QtBot) -> None:
+    import math
+
+    from PySide6.QtCore import QRectF
+
     editor = SketchEditorDialog(select_committed_entities=True)
     qtbot.addWidget(editor)
     editor.show()
@@ -517,5 +584,71 @@ def test_zoom_window_preview_handles_far_coordinate(qtbot: QtBot) -> None:
     assert not image.isNull()
     bar.input.setText("0,0")
     QTest.keyClick(bar.input, Qt.Key.Key_Return)
-    assert "超出视图范围" in bar.status.text()
+    assert "窗口缩放完成" in bar.status.text()
+    assert math.isfinite(canvas.view_scale) and canvas.view_scale > 0
+    viewport = QRectF(canvas.rect()).adjusted(-1, -1, 1, 1)
+    assert viewport.contains(canvas.local_to_screen_precise((0, 0)))
+    assert viewport.contains(canvas.local_to_screen_precise((1e300, 1e300)))
+    assert not canvas.grab().isNull()
     assert not canvas.entities
+
+
+def test_pan_and_zoom_window_on_far_visible_block_remain_usable(qtbot: QtBot) -> None:
+    from uuid import uuid4
+
+    import pytest
+    from PySide6.QtCore import QPointF
+
+    from mycad.core.drawing_blocks import BlockDefinition, BlockInstance
+    from mycad.core.drawing_text import TextStyleTable
+    from mycad.core.sketch import PolylineEntity, RectangleEntity
+
+    editor = SketchEditorDialog(select_committed_entities=True)
+    qtbot.addWidget(editor)
+    editor.resize(1200, 800)
+    editor.show()
+    canvas, bar = editor.canvas, editor.drawing_command_bar
+    rectangle = RectangleEntity(uuid4().hex, (1e9, 1e9), (1e9 + 1, 1e9 + 2))
+    definition = BlockDefinition(uuid4().hex, "Far", (rectangle,), ())
+    instance = BlockInstance(uuid4().hex, definition.definition_id, (5, 7), 30)
+    canvas.set_drawing_blocks((definition,), (instance,), TextStyleTable())
+    canvas.fit_view()
+    entity = canvas.drawing_block_view().geometry[0].entity
+    assert isinstance(entity, PolylineEntity)
+    center = tuple(sum(point[axis] for point in entity.points_mm) / 4 for axis in (0, 1))
+    tracked = (center[0], center[1])
+    original = canvas.local_to_screen_precise(tracked)
+    scale = canvas.view_scale
+
+    def submit(*commands: str) -> None:
+        for command in commands:
+            bar.input.setText(command)
+            QTest.keyClick(bar.input, Qt.Key.Key_Return)
+
+    submit("PAN", "0,0", "1,0")
+    assert "视图平移完成" in bar.status.text()
+    panned = canvas.local_to_screen_precise(tracked)
+    assert panned.x() - original.x() == pytest.approx(scale, abs=1e-4)
+    left = min(point[0] for point in entity.points_mm) - 1
+    right = max(point[0] for point in entity.points_mm) + 1
+    bottom = min(point[1] for point in entity.points_mm) - 1
+    top = max(point[1] for point in entity.points_mm) + 1
+    submit("ZOOM", "W", f"{left!r},{bottom!r}", f"{right!r},{top!r}")
+    assert "窗口缩放完成" in bar.status.text()
+    assert canvas.rect().contains(canvas.local_to_screen(tracked))
+    before = canvas.local_to_screen_precise(tracked)
+    far_x, far_y = tracked[0] + 1e7, tracked[1] + 1e7
+    submit("ZOOM", "W", f"{far_x!r},{far_y!r}", f"{far_x + 10!r},{far_y + 10!r}")
+    assert "超出视图范围" in bar.status.text()
+    assert canvas.local_to_screen_precise(tracked) == before
+    QTest.keyClick(bar.input, Qt.Key.Key_Escape)
+    submit("PAN", "0,0", "1e300,0")
+    assert "超出可用范围" in bar.status.text()
+    assert canvas.local_to_screen_precise(tracked) == before
+    assert canvas.history_position == 0 and not canvas.entities
+    QTest.keyClick(bar.input, Qt.Key.Key_Escape)
+    center_model = canvas.screen_to_local(QPointF(canvas.width() / 2, canvas.height() / 2))
+    assert canvas.pan_view_between((0, 0), center_model)
+    centered_origin = canvas.local_to_screen_precise((0, 0))
+    assert centered_origin.x() == pytest.approx(canvas.width() / 2, abs=1e-4)
+    assert centered_origin.y() == pytest.approx(canvas.height() / 2, abs=1e-4)

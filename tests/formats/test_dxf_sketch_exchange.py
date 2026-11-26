@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -38,8 +38,11 @@ from mycad.geom.kernel import BuildKernel
 SKETCH_ID = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
 
 
-def test_dimension_text_override_exports_native_and_roundtrips(tmp_path: Path) -> None:
+@pytest.mark.parametrize("text", ["宽 <> mm", "⌀<> mm", "±<> mm"])
+def test_dimension_text_override_exports_native_and_roundtrips(tmp_path: Path, text: str) -> None:
     from uuid import uuid4
+
+    from ezdxf.tools.text import plain_mtext
 
     line = LineEntity(uuid4().hex, (0, 0), (25, 0))
     dimension = SketchConstraint(
@@ -49,12 +52,14 @@ def test_dimension_text_override_exports_native_and_roundtrips(tmp_path: Path) -
         25,
         "mm",
         driving=False,
-        text_override="宽 <> mm",
+        text_override=text,
     )
     target = tmp_path / "text-override.dxf"
     write_sketch_dxf(Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line,), (dimension,)), target)
     native = next(e for e in _read_test_dxf(target).modelspace() if e.dxftype() == "DIMENSION")
-    assert native.dxf.text == "宽 <> mm"
+    assert native.dxf.text == text
+    labels = [item.dxf.text for item in native.virtual_entities() if item.dxftype() == "MTEXT"]
+    assert [plain_mtext(label) for label in labels] == ["(" + text.replace("<>", "25.00") + ")"]
     assert read_sketch_dxf(target).sketch.constraints == (dimension,)
 
 
@@ -423,6 +428,7 @@ def test_dxf_projection_dimension_handles_externally_modified_geometry(
         entity for entity in document.modelspace() if entity.dxftype() == "DIMENSION"
     )
     native_dimension.dxf.text_midpoint = (30, 22, 0)
+    native_dimension.dxf.dimtype |= 128
     cast("_TestDocument", document).saveas(target)
     imported = read_sketch_dxf(target)
     assert any(
@@ -687,6 +693,7 @@ def test_dxf_import_detects_external_dimension_edits(tmp_path: Path, change: str
     native = next(item for item in document.modelspace() if item.dxftype() == "DIMENSION")
     if change == "location":
         native.dxf.text_midpoint = (35, 22, 0)
+        native.dxf.dimtype |= 128
     elif change == "definition":
         native.dxf.defpoint2 = (5, 0, 0)
     else:
@@ -753,6 +760,7 @@ def test_dxf_external_dimension_text_location_uses_declared_units(tmp_path: Path
     document = _read_test_dxf(target)
     native = next(item for item in document.modelspace() if item.dxftype() == "DIMENSION")
     native.dxf.text_midpoint = (3, 2, 0)
+    native.dxf.dimtype |= 128
     mutable_document = cast("_TestDocument", document)
     mutable_document.header["$INSUNITS"] = 1
     mutable_document.saveas(target)
@@ -1050,7 +1058,17 @@ def test_dxf_import_preserves_legacy_dimension_snapshot(tmp_path: Path, version:
         "style:dimsd1",
         "style:dimsd2",
     }
-    v7_fields = {"style:dimsd1", "style:dimsd2"}
+    v8_fields = {
+        "style:dimtol",
+        "style:dimlim",
+        "style:dimtp",
+        "style:dimtm",
+        "style:dimtfac",
+        "style:dimtdec",
+        "style:dimtolj",
+    }
+    new_fields |= v8_fields
+    v7_fields = v8_fields | {"style:dimsd1", "style:dimsd2"}
     v6_fields = v7_fields | {"style:dimse1", "style:dimse2"}
     v5_fields = v6_fields | {"style:dimltype", "style:dimltex1", "style:dimltex2"}
     v4_fields = v5_fields | {"style:dimlwd", "style:dimlwe"}
@@ -1287,6 +1305,7 @@ class _TestDocument(Protocol):
 
 
 class _DxfDimensionAttributes(Protocol):
+    dimtype: int
     end: tuple[float, float, float]
     defpoint2: tuple[float, float, float]
     text_midpoint: tuple[float, float, float]
@@ -2385,3 +2404,47 @@ def test_dxf_discards_dimension_if_rendering_fails(
     assert any("未导出" in warning for warning in report.warnings)
     document = _read_test_dxf(path)
     assert all(entity.dxftype() != "DIMENSION" for entity in document.modelspace())
+
+
+def test_default_layer_color_uses_background_adaptive_dxf_aci7(tmp_path: Path) -> None:
+    from typing import Any
+
+    default = SketchLayer("DEFAULT")
+    custom = SketchLayer("CUSTOM", color_rgb=(39, 46, 52))
+    hidden = SketchLayer("HIDDEN", visible=False, locked=True, frozen=True)
+    sketch = Sketch(
+        SKETCH_ID,
+        WorkPlaneFrame.xy(),
+        (
+            LineEntity(
+                "1b1b1b1b-1b1b-4b1b-8b1b-1b1b1b1b1b1b", (0, 0), (10, 0), layer_name="DEFAULT"
+            ),
+        ),
+        layers=SketchLayerTable().add(default).add(custom).add(hidden),
+    )
+    path = tmp_path / "adaptive-layer.dxf"
+    write_sketch_dxf(sketch, path)
+    document = cast("Callable[[Path], Any]", vars(_filemanagement)["readfile"])(path)
+    for name in ("0", "DEFAULT"):
+        layer = document.layers.get(name)
+        assert layer.dxf.color == 7
+        assert not layer.dxf.hasattr("true_color")
+    assert document.layers.get("CUSTOM").dxf.true_color == 0x272E34
+    imported = read_sketch_dxf(path)
+    assert imported.sketch.layers.get("0").color_rgb == SketchLayer("0").color_rgb
+    assert imported.sketch.layers.get("DEFAULT") == default
+    assert imported.sketch.layers.get("CUSTOM") == custom
+    assert imported.sketch.layers.get("HIDDEN") == hidden
+
+
+def test_external_aci7_is_adaptive_but_explicit_true_white_stays_white(tmp_path: Path) -> None:
+    document = _new_dxf("R2010", units=4)
+    document.layers.new("ADAPTIVE", dxfattribs={"color": 7})
+    document.layers.new("WHITE", dxfattribs={"color": 7, "true_color": 0xFFFFFF})
+    document.modelspace().add_line((0, 0), (10, 0), dxfattribs={"layer": "ADAPTIVE"})
+    document.modelspace().add_line((0, 5), (10, 5), dxfattribs={"layer": "WHITE"})
+    path = tmp_path / "external-colors.dxf"
+    document.saveas(path)
+    imported = read_sketch_dxf(path)
+    assert imported.sketch.layers.get("ADAPTIVE").color_rgb == SketchLayer("0").color_rgb
+    assert imported.sketch.layers.get("WHITE").color_rgb == (255, 255, 255)

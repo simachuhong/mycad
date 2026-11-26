@@ -1,0 +1,170 @@
+{
+  "purpose": "Structural display samples only; no GB/ISO validity is asserted.",
+  "symbol_order": [
+    {
+      "index": 1,
+      "characteristic": "straightness",
+      "position_mm": [
+        0.0,
+        100.0
+      ]
+    },
+    {
+      "index": 2,
+      "characteristic": "flatness",
+      "position_mm": [
+        55.0,
+        100.0
+      ]
+    },
+    {
+      "index": 3,
+      "characteristic": "circularity",
+      "position_mm": [
+        110.0,
+        100.0
+      ]
+    },
+    {
+      "index": 4,
+      "characteristic": "cylindricity",
+      "position_mm": [
+        0.0,
+        85.0
+      ]
+    },
+    {
+      "index": 5,
+      "characteristic": "line_profile",
+      "position_mm": [
+        55.0,
+        85.0
+      ]
+    },
+    {
+      "index": 6,
+      "characteristic": "surface_profile",
+      "position_mm": [
+        110.0,
+        85.0
+      ]
+    },
+    {
+      "index": 7,
+      "characteristic": "parallelism",
+      "position_mm": [
+        0.0,
+        70.0
+      ]
+    },
+    {
+      "index": 8,
+      "characteristic": "perpendicularity",
+      "position_mm": [
+        55.0,
+        70.0
+      ]
+    },
+    {
+      "index": 9,
+      "characteristic": "angularity",
+      "position_mm": [
+        110.0,
+        70.0
+      ]
+    },
+    {
+      "index": 10,
+      "characteristic": "position",
+      "position_mm": [
+        0.0,
+        55.0
+      ]
+    },
+    {
+      "index": 11,
+      "characteristic": "concentricity",
+      "position_mm": [
+        55.0,
+        55.0
+      ]
+    },
+    {
+      "index": 12,
+      "characteristic": "symmetry",
+      "position_mm": [
+        110.0,
+        55.0
+      ]
+    },
+    {
+      "index": 13,
+      "characteristic": "circular_runout",
+      "position_mm": [
+        0.0,
+        40.0
+      ]
+    },
+    {
+      "index": 14,
+      "characteristic": "total_runout",
+      "position_mm": [
+        55.0,
+        40.0
+      ]
+    }
+  ],
+  "multiline_position_mm": [
+    0,
+    20
+  ],
+  "multiline_rows": [
+    {
+      "characteristic": "position",
+      "value": 0.12,
+      "precision": 2,
+      "diameter": true,
+      "modifier": "M",
+      "datums": [
+        {
+          "label": "A",
+          "datum_id": "8d9beb669bc35cc3a7242aa650fb1c4b",
+          "modifier": ""
+        },
+        {
+          "label": "B",
+          "datum_id": "23f63cf508bf58e2b16dda9c2d10a688",
+          "modifier": "L"
+        },
+        {
+          "label": "C",
+          "datum_id": "e183826c631a5e0ab5fde0138ae96c4a",
+          "modifier": ""
+        }
+      ]
+    },
+    {
+      "characteristic": "parallelism",
+      "value": 0.08,
+      "precision": 2,
+      "diameter": false,
+      "modifier": "L",
+      "datums": [
+        {
+          "label": "A",
+          "datum_id": "8d9beb669bc35cc3a7242aa650fb1c4b",
+          "modifier": ""
+        }
+      ]
+    }
+  ],
+  "warning": [
+    "公差框以原生 TOLERANCE 导出；LibreCAD 2.2 实测不显示该实体，其他 CAD 的显示和编辑能力请另行核验。",
+    "基准标识以图形块导出；其他软件不可作为结构化基准编辑。"
+  ],
+  "sha256": {
+    "review-sample.my2d": "5e6374ca0a35abd7ee93d25f0a967899f8850f82d23f73215aeaec0881ad92e7",
+    "review-sample.dxf": "c1bf931e9caa5651eef534a257aebbe144638740ccfc549b2e770018a9c651f9",
+    "review-sample.svg": "5fd60cc3da1b8e68cf40b05bc4e67caa82ad4d73ccf5f9e4ba258b889bf24c09"
+  }
+}

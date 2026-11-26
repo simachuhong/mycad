@@ -28,6 +28,7 @@ _ENTITY_NAMES = {
     "LineEntity": "直线",
     "CircleEntity": "圆",
     "ArcEntity": "圆弧",
+    "EllipseEntity": "椭圆",
     "PolylineEntity": "多段线",
     "RectangleEntity": "矩形",
     "SplineEntity": "样条",

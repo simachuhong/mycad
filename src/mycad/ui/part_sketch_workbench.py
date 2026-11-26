@@ -37,6 +37,7 @@ from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     Point3D,
@@ -1457,7 +1458,7 @@ class PartSketchWorkbench(QDialog):
                 points = ((u1, v1), (u2, v1), (u2, v2), (u1, v2), (u1, v1))
             elif isinstance(entity, PolylineEntity):
                 points = polyline_sampled_points(entity)
-            elif isinstance(entity, SplineEntity):
+            elif isinstance(entity, SplineEntity | EllipseEntity):
                 points = entity.sampled_points()
             else:
                 start = 0.0 if isinstance(entity, CircleEntity) else entity.start_angle_deg
@@ -1767,6 +1768,8 @@ class PartSketchWorkbench(QDialog):
                                 ),
                             )
                         )
+            elif isinstance(entity, EllipseEntity):
+                handles = []
             else:
                 points = (
                     entity.points_mm

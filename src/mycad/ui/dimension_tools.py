@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast, override
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QSettings, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSpinBox,
     QToolButton,
@@ -29,10 +30,14 @@ from PySide6.QtWidgets import (
 from mycad.core.angular_dimension import AngularSector, angular_sector
 from mycad.core.cross_sketch_tangency import project_coplanar_vector
 from mycad.core.dimension_styles import DimensionStyle
+from mycad.core.dimension_tolerance import DimensionTolerance
+from mycad.core.drawing_groups import DrawingObjectRef
+from mycad.core.exceptions import ValidationError
 from mycad.core.polyline_curves import polyline_arc_segment
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -49,6 +54,7 @@ from mycad.core.sketch_constraints import (
 )
 from mycad.ui.cad_icons import set_button_icon
 from mycad.ui.dimension_presets import DimensionPresetDialog
+from mycad.ui.dimension_tolerance_editor import DimensionToleranceDialog
 
 if TYPE_CHECKING:
     from mycad.ui.sketch_editor import DimensionLayout, SketchEditorDialog
@@ -80,6 +86,8 @@ def _point_segment_distance(p: Point2D, a: Point2D, b: Point2D) -> float:
 
 def _point_references(entity: SketchEntity) -> tuple[SketchGeometryReference, ...]:
     identity = entity.entity_id
+    if isinstance(entity, EllipseEntity):
+        return ()
     if isinstance(entity, PointEntity):
         return (SketchGeometryReference(identity, "vertex", 0),)
     if isinstance(entity, CircleEntity):
@@ -154,6 +162,7 @@ class DimensionTools(QObject):
         self._follow_drawing_style = False
         self._previous_format: tuple[int, float] | None = None
         self.drawing_style_manager: Callable[[], None] | None = None
+        self.independent_edit_guard: Callable[[DrawingObjectRef], None] | None = None
         self._new_dimension_driving = True
         self._new_anchor_mode = "auto"
         self.references: list[SketchGeometryReference] = []
@@ -252,10 +261,38 @@ class DimensionTools(QObject):
         self.text_override.setObjectName("dimensionTextOverride")
         # Qt counts UTF-16 units; a Unicode character may occupy two units.
         self.text_override.setMaxLength(512)
-        self.text_override.setPlaceholderText("标注文字")
-        self.text_override.setToolTip("留空显示默认尺寸；<> 代表实际数值，文字不会改变驱动值。")
+        self.text_override.setPlaceholderText("如 ⌀<> mm")
+        self.text_override.setToolTip(
+            "留空显示默认尺寸；<> 代表实际数值，例如 ⌀<> mm、±<> mm。"
+            "可用右侧“符号”菜单插入，文字不会改变驱动值。"
+        )
         self.text_override.setMaximumWidth(150)
         self.text_override_label = QLabel("文字")
+        self.symbol_button = QToolButton()
+        self.symbol_button.setObjectName("dimensionTextSymbols")
+        self.symbol_button.setText("符号")
+        self.symbol_button.setToolTip("插入标注符号；文字为空时自动保留实际数值占位符 <>")
+        self.symbol_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        symbol_menu = QMenu(self.symbol_button)
+        for symbol, label in (
+            ("⌀", "直径"),
+            ("±", "正负"),
+            ("°", "度"),
+            ("□", "方形"),
+            ("R", "半径"),
+            ("SR", "球面半径"),
+            ("S⌀", "球面直径"),
+            ("⌒", "弧长"),
+            ("×", "乘号"),
+        ):
+            action = symbol_menu.addAction(f"{symbol}  {label}")
+            action.setData(symbol)
+            action.triggered.connect(
+                lambda _checked=False, value=symbol: self._insert_text_symbol(value)
+            )
+        self.symbol_button.setMenu(symbol_menu)
+        self.tolerance_button = QPushButton("公差…")
+        self.tolerance_button.setToolTip("设置此尺寸的公差，或继承图纸标注样式")
         self.apply_button = QPushButton("确认修改")
         self.cancel_button = QPushButton("取消 / Esc")
         for widget in (
@@ -267,6 +304,8 @@ class DimensionTools(QObject):
             self.scale,
             self.text_override_label,
             self.text_override,
+            self.symbol_button,
+            self.tolerance_button,
             self.apply_button,
             self.cancel_button,
         ):
@@ -286,6 +325,7 @@ class DimensionTools(QObject):
         self.precision.valueChanged.connect(self._format_changed)
         self.scale.valueChanged.connect(self._format_changed)
         self.text_override.textChanged.connect(self._text_override_changed)
+        self.tolerance_button.clicked.connect(self._edit_tolerance)
         self.apply_button.clicked.connect(self.apply_edit)
         self.cancel_button.clicked.connect(self.cancel)
         self.canvas.installEventFilter(self)
@@ -323,6 +363,17 @@ class DimensionTools(QObject):
             position_mm=moved(dimension.position_mm),
             text_position_mm=moved(dimension.text_position_mm),
         )
+
+    def candidate_reference(self) -> DrawingObjectRef | None:
+        """Identify the source of the dimension currently shown as a candidate."""
+        if self.original is None or self.candidate is None:
+            return None
+        return DrawingObjectRef("dimension", self.candidate.constraint_id, self.original.sketch_id)
+
+    @property
+    def presentation_only(self) -> bool:
+        """Whether the current gesture edits only dimension placement."""
+        return self._presentation_only
 
     def _sketches(self) -> tuple[Sketch, ...]:
         visible = set(self.canvas.dimension_entities())
@@ -859,34 +910,37 @@ class DimensionTools(QObject):
 
     def _dimension_at(self, point: Point2D) -> tuple[Sketch, SketchConstraint, str] | None:
         screen = QPointF(self.canvas.local_to_screen(point))
-        entities = self.canvas.dimension_entities()
-        label_rectangles = self.canvas.dimension_label_rectangles()
-        visible_ids = {dimension.constraint_id for dimension in self.canvas.visible_dimensions()}
-        candidates: list[tuple[Sketch, SketchConstraint, DimensionLayout | None]] = []
+        label_rectangles = self.canvas.dimension_label_rectangles_by_constraint()
+        shown_by_ref = {
+            ref: item
+            for item in self.canvas.visible_dimensions()
+            if (ref := self.canvas.dimension_reference(item)) is not None
+        }
+        candidates: list[
+            tuple[Sketch, SketchConstraint, DimensionLayout | None, QRectF | None]
+        ] = []
         for sketch in self._sketches():
             for dimension in reversed(sketch.constraints):
-                if (
-                    dimension.kind not in DIMENSION_KINDS
-                    or dimension.constraint_id not in visible_ids
-                ):
+                if dimension.kind not in DIMENSION_KINDS:
                     continue
-                layer = self.canvas.annotation_layer(dimension)
+                shown = shown_by_ref.get(
+                    DrawingObjectRef("dimension", dimension.constraint_id, sketch.sketch_id)
+                )
+                if shown is None:
+                    continue
+                layer = self.canvas.annotation_layer(shown)
                 if not layer.displayed or layer.locked:
                     continue
+                entities = self.canvas.dimension_entities_for_constraint(shown)
                 if any(ref.entity_id not in entities for ref in dimension.references):
                     continue
-                previous = self.original
-                self.original = sketch
-                shown = self._display(dimension)
-                self.original = previous
                 layout = self.canvas.dimension_layout(shown, entities)
-                candidates.append((sketch, dimension, layout))
-        for sketch, dimension, _layout in candidates:
-            label_rect = label_rectangles.get(dimension.constraint_id)
+                candidates.append((sketch, dimension, layout, label_rectangles.get(id(shown))))
+        for sketch, dimension, _layout, label_rect in candidates:
             if label_rect is not None and label_rect.adjusted(-4, -4, 4, 4).contains(screen):
                 return (sketch, dimension, "text")
         local_point = (screen.x(), screen.y())
-        for sketch, dimension, layout in candidates:
+        for sketch, dimension, layout, _label_rect in candidates:
             if layout is None:
                 continue
             draggable_lines = (
@@ -902,6 +956,12 @@ class DimensionTools(QObject):
                 if _point_segment_distance(local_point, (a.x(), a.y()), (b.x(), b.y())) <= 5:
                     return (sketch, dimension, "line")
         return None
+
+    def annotation_dimension_at(
+        self, point: Point2D
+    ) -> tuple[Sketch, SketchConstraint, str] | None:
+        """Find a visible, editable sketch dimension for annotation attachment."""
+        return self._dimension_at(point)
 
     def edit(self, sketch: Sketch, dimension: SketchConstraint) -> None:
         layer = self.canvas.annotation_layer(dimension)
@@ -919,6 +979,9 @@ class DimensionTools(QObject):
             ref.entity_id for ref in dimension.references if ref.entity_id in selectable
         }
         self.canvas.selected_constraint_ids = {dimension.constraint_id}
+        self.canvas.selected_dimension_refs = {
+            DrawingObjectRef("dimension", dimension.constraint_id, sketch.sketch_id)
+        }
         self.canvas.changed.emit()
         self.anchor_combo.blockSignals(True)
         self.anchor_combo.setCurrentIndex(self.anchor_combo.findData(dimension.anchor_mode))
@@ -1024,12 +1087,39 @@ class DimensionTools(QObject):
             if self._editing and self.candidate.driving and self._input_valid:
                 self._queue_preview()
 
+    def _insert_text_symbol(self, symbol: str) -> None:
+        if not self.text_override.text():
+            kind = self.candidate.kind if self.candidate is not None else self.mode
+            suffix = "°" if kind == "angle" else " mm"
+            self.text_override.setText(f"{symbol}<>{suffix}")
+            self.text_override.setCursorPosition(len(symbol))
+        else:
+            self.text_override.insert(symbol)
+        self.text_override.setFocus()
+
     def _text_override_changed(self, text: str) -> None:
         if len(text) > 256 or (text and not text.isprintable()):
             self._input_valid = False
             self.apply_button.setEnabled(False)
             self._status("标注文字须为 256 字以内的可显示字符")
             return
+        if self.candidate is not None:
+            style = self.canvas.dimension_style_for_constraint(self.candidate)
+            inherited = (
+                DimensionTolerance()
+                if style is None
+                else (
+                    style.angular_tolerance
+                    if self.candidate.kind == "angle"
+                    else style.linear_tolerance
+                )
+            )
+            tolerance = self.candidate.tolerance or inherited
+            if tolerance.mode != "none" and text and text.count("<>") != 1:
+                self._input_valid = False
+                self.apply_button.setEnabled(False)
+                self._status("启用公差时，标注文字必须包含且只包含一个 <> 占位符。")
+                return
         self._input_valid = True
         if self.candidate is not None:
             self.candidate = replace(self.candidate, text_override=text or None)
@@ -1041,8 +1131,58 @@ class DimensionTools(QObject):
             else:
                 self.apply_button.setEnabled(True)
 
+    def _edit_tolerance(self) -> None:
+        if self.candidate is None:
+            return
+        original = self.candidate
+        style = self.canvas.dimension_style_for_constraint(original)
+        default = (
+            DimensionTolerance()
+            if style is None
+            else (style.angular_tolerance if original.kind == "angle" else style.linear_tolerance)
+        )
+        dialog = DimensionToleranceDialog(
+            original.tolerance, default, self.editor, nominal=original.value
+        )
+        if dialog.exec() != int(QDialog.DialogCode.Accepted) or self.candidate != original:
+            return
+        selected = dialog.selected_value()
+        active = default if selected is None else selected
+        if (
+            active.mode != "none"
+            and original.text_override is not None
+            and original.text_override.count("<>") != 1
+        ):
+            self._status("启用公差时，标注文字必须包含且只包含一个 <> 占位符。")
+            return
+        self.candidate = replace(original, tolerance=selected)
+        self.canvas.dimension_candidate = self._display(self.candidate)
+        self.canvas.update()
+        if self._editing and self.candidate.driving:
+            self._preview_result = None
+            self._queue_preview()
+        else:
+            self.apply_button.setEnabled(True)
+
     def _value_changed(self, *_args: object) -> None:
         if self.candidate is None or self.original is None:
+            return
+        text = self.text_override.text()
+        style = self.canvas.dimension_style_for_constraint(self.candidate)
+        inherited = (
+            DimensionTolerance()
+            if style is None
+            else (
+                style.angular_tolerance
+                if self.candidate.kind == "angle"
+                else style.linear_tolerance
+            )
+        )
+        tolerance = self.candidate.tolerance or inherited
+        if tolerance.mode != "none" and text and text.count("<>") != 1:
+            self._input_valid = False
+            self.apply_button.setEnabled(False)
+            self._status("启用公差时，标注文字必须包含且只包含一个 <> 占位符。")
             return
         if len(self.text_override.text()) > 256 or (
             self.text_override.text() and not self.text_override.text().isprintable()
@@ -1094,7 +1234,20 @@ class DimensionTools(QObject):
         self.diagnostics_label.setText("求解中…")
         self.apply_button.setText("预览中…")
         self.apply_button.setEnabled(False)
-        if self.original.sketch_id == self.editor.draft_sketch_id:
+        collection = self.canvas.collection_session
+        try:
+            linked_collection = collection is not None and any(
+                self.original.sketch_id in (relation.first.sketch_id, relation.second.sketch_id)
+                for relation in collection.snapshot.cross_tangencies
+            )
+        except ValidationError as exc:
+            self._preview_timer.stop()
+            self._preview_result = None
+            self.diagnostics_label.setText(str(exc))
+            self.apply_button.setText("无法预览")
+            self._status(str(exc))
+            return
+        if self.original.sketch_id == self.editor.draft_sketch_id and not linked_collection:
             result = self.editor.preview_dimension(self.original, self.candidate)
             self.complete_preview(self._preview_generation, self.original, self.candidate, result)
         else:
@@ -1151,6 +1304,17 @@ class DimensionTools(QObject):
     def apply_edit(self) -> None:
         if self.original is None or self.candidate is None or self._busy:
             return
+        collection = self.canvas.collection_session
+        if collection is not None:
+            try:
+                collection.checkpoint()
+            except ValidationError as exc:
+                self._preview_timer.stop()
+                self._preview_result = None
+                self.editor.clear_dimension_preview()
+                self.apply_button.setEnabled(False)
+                self._status(str(exc))
+                return
         if not self._presentation_only:
             self._value_changed()
         if not self._input_valid:
@@ -1160,6 +1324,22 @@ class DimensionTools(QObject):
             self.cancel()
             self._status("草图已改变，请重新拾取尺寸")
             return
+        previous = next(
+            (
+                item
+                for item in original.constraints
+                if item.constraint_id == candidate.constraint_id
+            ),
+            None,
+        )
+        if previous is not None and previous != candidate and self.independent_edit_guard:
+            try:
+                self.independent_edit_guard(
+                    DrawingObjectRef("dimension", candidate.constraint_id, original.sketch_id)
+                )
+            except (ValueError, ValidationError) as exc:
+                self._status(str(exc))
+                return
         previewed = self.accepted_preview(original, candidate)
         if candidate.driving and not self._presentation_only and previewed is None:
             self._queue_preview()
@@ -1182,7 +1362,9 @@ class DimensionTools(QObject):
             )
             self.apply_button.show()
             return
-        if original.sketch_id != self.editor.draft_sketch_id:
+        if original.sketch_id != self.editor.draft_sketch_id or (
+            self.canvas.collection_session is not None and self.canvas.dimension_linked_sources
+        ):
             self._busy = True
             self.apply_button.setEnabled(False)
             self.committed_requested.emit(original, candidate)
@@ -1203,12 +1385,14 @@ class DimensionTools(QObject):
             # The next explicit click is the branch-change confirmation.
             return
         self._busy = True
-        accepted = self.canvas.apply_constraint_solution(original, result.sketch)
+        accepted = self.canvas.apply_constraint_solution(
+            original, result.sketch, confirmed_constraint=candidate, solve_result=result
+        )
         self._busy = False
         if accepted:
             self.complete_commit(original, candidate, result)
         else:
-            self._status("草稿已改变，请重新拾取尺寸")
+            self._status(self.canvas.message or "草稿已改变，请重新拾取尺寸")
 
     def complete_commit(
         self, original: Sketch, candidate: SketchConstraint, result: SketchConstraintSolveResult
@@ -1303,6 +1487,13 @@ class DimensionTools(QObject):
             return False
         if event.type() == QEvent.Type.MouseMove:
             self.canvas.track_crosshair_pointer(event.position().toPoint())
+        tolerance = self.canvas.geometric_tolerance_tools
+        if (
+            tolerance is not None
+            and tolerance.pending
+            and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick)
+        ):
+            return False
         point = self.canvas.screen_to_local(event.position())
         if (
             event.type() == QEvent.Type.MouseButtonDblClick
@@ -1383,6 +1574,12 @@ class DimensionTools(QObject):
             self._dragging = None
             if not self._drag_moved:
                 identity = self.candidate.constraint_id if self.candidate is not None else None
+                reference = (
+                    DrawingObjectRef("dimension", identity, self.original.sketch_id)
+                    if identity is not None and self.original is not None
+                    else None
+                )
+                previous_refs = set(self.canvas.selected_dimension_refs)
                 self.cancel()
                 if identity is not None:
                     modifiers = event.modifiers()
@@ -1392,14 +1589,33 @@ class DimensionTools(QObject):
                     )
                     if not additive and not subtractive:
                         self.canvas.selected_constraint_ids.clear()
+                        previous_refs.clear()
                         self.canvas.selected_entity_ids.clear()
                         self.canvas.selected_raster_ids.clear()
-                    if subtractive or (
+                    known_refs = {item for item in previous_refs if item.object_id == identity}
+                    if reference is not None and known_refs and (additive or subtractive):
+                        if subtractive or reference in known_refs:
+                            previous_refs.discard(reference)
+                            if not any(item.object_id == identity for item in previous_refs):
+                                self.canvas.selected_constraint_ids.discard(identity)
+                        else:
+                            previous_refs.add(reference)
+                    elif subtractive or (
                         additive and identity in self.canvas.selected_constraint_ids
                     ):
                         self.canvas.selected_constraint_ids.discard(identity)
+                        previous_refs = {
+                            item for item in previous_refs if item.object_id != identity
+                        }
                     else:
                         self.canvas.selected_constraint_ids.add(identity)
+                        if reference is not None:
+                            previous_refs.add(reference)
+                    self.canvas.selected_dimension_refs = {
+                        item
+                        for item in previous_refs
+                        if item.object_id in self.canvas.selected_constraint_ids
+                    }
                     self.canvas.changed.emit()
                     self.canvas.update()
                 return True

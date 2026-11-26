@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from pytestqt.qtbot import QtBot
@@ -62,7 +63,10 @@ def test_edit_reference_dimension_text_without_changing_geometry(qtbot: QtBot) -
     assert editor.canvas.entities == [line]
 
 
-def test_saved_dimension_text_edit_replays_and_undoes(qtbot: QtBot, tmp_path: Path) -> None:
+@pytest.mark.parametrize("text", ["宽 <> mm", "⌀<> mm", "±<> mm"])
+def test_saved_dimension_text_edit_replays_and_undoes(
+    qtbot: QtBot, tmp_path: Path, text: str
+) -> None:
     line = LineEntity(uuid4().hex, (0, 0), (25, 0))
     dimension = SketchConstraint(
         uuid4().hex,
@@ -85,11 +89,11 @@ def test_saved_dimension_text_edit_replays_and_undoes(qtbot: QtBot, tmp_path: Pa
     editor, unit = window.active_sketch_dialog(), window.execution_unit
     assert editor is not None and unit is not None
     editor.dimensions.edit(sketch, dimension)
-    editor.dimensions.text_override.setText("宽 <> mm")
+    editor.dimensions.text_override.setText(text)
     editor.dimensions.apply_edit()
     qtbot.waitUntil(lambda: not unit.is_busy and len(loaded.document.commands) == 2, timeout=10000)
     updated = services.kernel.sketches[0]
-    assert updated.constraints[0].text_override == "宽 <> mm"
+    assert updated.constraints[0].text_override == text
     assert updated.entities == (line,) and updated.constraints[0].value == 25
     target = tmp_path / "saved-text.my2d"
     save_document(loaded.document, target)
@@ -306,7 +310,10 @@ def test_dimlinear_shows_endpoint_snap_while_picking_second_point(qtbot: QtBot) 
     assert changes.at(changes.count() - 1)[2] == ""
 
 
-def test_option_text_and_scale_survive_drawing_save_and_dxf(qtbot: QtBot, tmp_path: Path) -> None:
+@pytest.mark.parametrize("text", ["宽 <> mm", "⌀<> mm", "±<> mm"])
+def test_option_text_and_scale_survive_drawing_save_and_dxf(
+    qtbot: QtBot, tmp_path: Path, text: str
+) -> None:
     from mycad.formats.providers.dxf_provider import read_sketch_dxf, write_sketch_dxf
 
     services = app.build_app(discoverers=())
@@ -327,10 +334,10 @@ def test_option_text_and_scale_survive_drawing_save_and_dxf(qtbot: QtBot, tmp_pa
     editor.dimensions.scale.setValue(2)
     for point in ((0, 0), (25, 0)):
         QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen(point))
-    editor.dimensions.text_override.setText("宽 <> mm")
+    editor.dimensions.text_override.setText(text)
     QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=canvas.local_to_screen((10, 10)))
     draft = canvas.constraints[0]
-    assert (draft.value, draft.scale, draft.text_override) == (25, 2, "宽 <> mm")
+    assert (draft.value, draft.scale, draft.text_override) == (25, 2, text)
     editor.finish_sketch()
     qtbot.waitUntil(
         lambda: window.active_sketch_dialog() is not editor and not unit.is_busy, timeout=10000
@@ -343,9 +350,9 @@ def test_option_text_and_scale_survive_drawing_save_and_dxf(qtbot: QtBot, tmp_pa
     app.open_app_document(reopened_services, target)
     sketch = reopened_services.kernel.sketches[0]
     dimension = sketch.constraints[0]
-    assert (dimension.value, dimension.scale, dimension.text_override) == (25, 2, "宽 <> mm")
-    assert draft_dimensions(sketch)[0].text == "宽 25.00 mm [参考]"
+    assert (dimension.value, dimension.scale, dimension.text_override) == (25, 2, text)
+    assert draft_dimensions(sketch)[0].text == text.replace("<>", "25.00") + " [参考]"
     dxf = tmp_path / "dimension-options.dxf"
     write_sketch_dxf(sketch, dxf)
     imported = read_sketch_dxf(dxf).sketch.constraints[0]
-    assert (imported.value, imported.scale, imported.text_override) == (25, 2, "宽 <> mm")
+    assert (imported.value, imported.scale, imported.text_override) == (25, 2, text)

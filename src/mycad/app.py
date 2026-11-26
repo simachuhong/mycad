@@ -14,6 +14,7 @@ import importlib.metadata
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -54,12 +55,24 @@ from mycad.core.cross_sketch_tangency import (
     unique_unchanged_polyline_segment,
     validate_tangency_component,
 )
+from mycad.core.detached_dimension import DetachedDimension
 from mycad.core.dimension_styles import DimensionStyleTable
 from mycad.core.document import Document, ExecutedCommand
 from mycad.core.document_kinds import DocumentKind, DocumentType, native_suffix
 from mycad.core.document_migration import migrate_archive
 from mycad.core.document_references import archive_fingerprint
+from mycad.core.drawing_collection_state import DrawingCollectionSnapshot
+from mycad.core.drawing_groups import DrawingObjectRef
+from mycad.core.drawing_raster import DrawingRaster
+from mycad.core.drawing_text import DrawingText, TextStyleTable
 from mycad.core.exceptions import ValidationError
+from mycad.core.geometric_tolerance import (
+    AnnotationAttachment,
+    DatumAttachment,
+    DatumIdentifier,
+    FeatureControlFrame,
+)
+from mycad.core.geometric_tolerance_copy import translate_frame
 from mycad.core.handlers import BuiltinModelingHandler, CommandHandler
 from mycad.core.identity import BodyId, TopologyId
 from mycad.core.persistence import LoadedDocument, document_payload, load_document_payload
@@ -75,10 +88,12 @@ from mycad.core.replay_proposal import (
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     PointEntity,
     PolylineEntity,
     Sketch,
     SketchEntity,
+    SplineEntity,
     WorkPlaneFrame,
     new_sketch_identity,
 )
@@ -88,6 +103,7 @@ from mycad.core.sketch_constraints import (
     SketchConstraint,
     SketchGeometryReference,
 )
+from mycad.core.text_interchange import reconcile_text_style_ids, reconcile_text_styles
 from mycad.core.viewport_protocol import (
     CandidateInteractionScene,
     PlanarFaceFrame,
@@ -137,7 +153,9 @@ __all__ = [
     "revisions_include_local_endpoint_constraints",
     "revisions_include_dimension_text",
     "revisions_include_dimension_styles",
+    "revisions_include_dimension_tolerances",
     "revisions_include_projection_axes",
+    "move_tolerance_selection",
     "stage_mixed_drawing_move",
     "stage_mixed_drawing_timeline",
     "ReplayCandidateSession",
@@ -165,6 +183,29 @@ class AppServices:
     kernel: BuildKernel
     formats: FormatProviderRegistry
     plugins: PluginManager
+
+
+def drawing_collection_snapshot(services: AppServices) -> DrawingCollectionSnapshot:
+    """Read a neutral collection projection from application services."""
+    kernel = services.kernel
+    return DrawingCollectionSnapshot(
+        sketches=kernel.sketches,
+        groups=kernel.drawing_groups,
+        texts=kernel.drawing_texts,
+        text_styles=kernel.drawing_text_styles,
+        dimension_styles=kernel.drawing_dimension_styles,
+        rasters=kernel.drawing_rasters,
+        frames=kernel.drawing_tolerance_frames,
+        datums=kernel.drawing_datum_identifiers,
+        reference_dimensions=kernel.drawing_reference_dimensions,
+        layers=kernel.drawing_layers,
+        dimension_layer=kernel.dimension_layer,
+        cross_tangencies=kernel.cross_sketch_tangencies,
+        associative_arrays=kernel.associative_arrays,
+        block_definitions=kernel.drawing_block_definitions,
+        block_instances=kernel.drawing_block_instances,
+        block_library_origins=kernel.drawing_block_library_origins,
+    )
 
 
 @dataclass(frozen=True)
@@ -218,6 +259,11 @@ class ReplayCandidateSession:
     def proposal(self) -> ReplayCandidateProposal | None:
         """Current frozen proposal, if one has been staged."""
         return self._proposal
+
+    @property
+    def staged_changes(self) -> ReplayChangeSet | None:
+        """Return a detached copy of the staged command changes."""
+        return deepcopy(self._changes)
 
     @property
     def latest_preview(self) -> ReplayCandidatePreview | None:
@@ -419,7 +465,18 @@ class ReplayCandidateSession:
         sketches: tuple[ViewportSketchData, ...] = ()
         if failure is None:
             kernel, bus = self._candidate_runtime(proposal, proposal.commands)
-            failure = bus.replay_for_candidate()
+            changes = self._changes
+            guard_ordinals = (
+                [edit.ordinal for edit in changes.replacements]
+                + [command.ordinal for command in proposal.commands[-len(changes.appends) :]]
+                if changes is not None and changes.appends
+                else [edit.ordinal for edit in changes.replacements]
+                if changes is not None
+                else []
+            )
+            failure = bus.replay_for_candidate(
+                guard_from_ordinal=min(guard_ordinals) if guard_ordinals else None
+            )
             if failure is None:
                 snapshots = kernel.viewport_data()
                 viewport = snapshots[-1] if snapshots else None
@@ -479,6 +536,138 @@ class ReplayCandidateSession:
         )
         self._latest_preview = result
         return result
+
+    def drawing_collection_snapshot(
+        self, *, current_session_identity: int
+    ) -> DrawingCollectionSnapshot:
+        """Return neutral collection state only from a current successful preview."""
+        self._check_session(current_session_identity)
+        kernel = self._candidate_kernel
+        if self._state != "succeeded" or kernel is None or not self._source_is_current():
+            raise ValidationError("candidate preview is unavailable or stale")
+        return drawing_collection_snapshot(replace(self._services, kernel=kernel))
+
+    def prepare_attached_collection_move(
+        self,
+        seeds: tuple[DrawingObjectRef, ...],
+        frame: WorkPlaneFrame,
+        delta: tuple[float, float],
+        *,
+        current_session_identity: int,
+    ) -> ReplayAppend:
+        """Prepare a group move using this candidate's annotation solver."""
+        from mycad.core.cross_sketch_tangency import project_coplanar_vector
+        from mycad.core.drawing_groups import expand_group_selection
+        from mycad.core.drawing_transactions import prepare_collection_translation
+
+        snapshot = self.drawing_collection_snapshot(
+            current_session_identity=current_session_identity
+        )
+        selected = expand_group_selection(seeds, snapshot.groups)
+        geometry = {
+            (item.sketch_id, item.object_id) for item in selected if item.kind == "geometry"
+        }
+        dimensions = {
+            (sketch.sketch_id, constraint.constraint_id)
+            for sketch in snapshot.sketches
+            for constraint in sketch.constraints
+            if constraint.kind in DIMENSION_KINDS
+            and any((sketch.sketch_id, ref.entity_id) in geometry for ref in constraint.references)
+        } | {(item.sketch_id, item.object_id) for item in selected if item.kind == "dimension"}
+
+        def target_moves(attachment: AnnotationAttachment | None) -> bool:
+            if attachment is None:
+                return False
+            if attachment.kind == "frame":
+                return DrawingObjectRef("tolerance", attachment.object_id) in selected
+            if attachment.kind == "reference_dimension":
+                return DrawingObjectRef("reference_dimension", attachment.object_id) in selected
+            return (attachment.sketch_id, attachment.object_id) in dimensions
+
+        def geometry_moves(attachment: DatumAttachment | None) -> bool:
+            return (
+                attachment is not None
+                and (attachment.sketch_id, attachment.reference.entity_id) in geometry
+            )
+
+        if any(
+            DrawingObjectRef("tolerance", item.frame_id) not in selected
+            and (
+                geometry_moves(item.leader_attachment)
+                or target_moves(item.leader_annotation_attachment)
+            )
+            for item in snapshot.frames
+        ) or any(
+            DrawingObjectRef("datum", item.datum_id) not in selected
+            and (geometry_moves(item.attachment) or target_moves(item.annotation_attachment))
+            for item in snapshot.datums
+        ):
+            raise ValidationError("存在未选中的附着标注，暂不能执行此移动。")
+        prepared = prepare_collection_translation(
+            snapshot, seeds, frame, delta, allow_attached=True
+        )
+        has_selected_attachment = any(
+            DrawingObjectRef("tolerance", item.frame_id) in selected
+            and (
+                item.leader_attachment is not None or item.leader_annotation_attachment is not None
+            )
+            for item in snapshot.frames
+        ) or any(
+            DrawingObjectRef("datum", item.datum_id) in selected
+            and (item.attachment is not None or item.annotation_attachment is not None)
+            for item in snapshot.datums
+        )
+        if not has_selected_attachment:
+            return prepared
+        prepared_operations = (
+            cast("list[dict[str, object]]", prepared.params["operations"])
+            if prepared.command_id == "drawing.objects.batch"
+            else [
+                {"id": prepared.command_id, "version": prepared.version, "params": prepared.params}
+            ]
+        )
+        block_operations = [
+            item for item in prepared_operations if item["id"] == "drawing.block_instance.update"
+        ]
+        kernel = self._candidate_kernel
+        if kernel is None:
+            raise ValidationError("暂存候选不可用。")
+        try:
+            drawing_delta = project_coplanar_vector(delta, frame, WorkPlaneFrame.xy())
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        result = move_tolerance_selection(
+            replace(self._services, kernel=kernel),
+            self._loaded,
+            tuple(item.object_id for item in selected if item.kind == "geometry"),
+            tuple(item.object_id for item in selected if item.kind == "tolerance"),
+            tuple(item.object_id for item in selected if item.kind == "datum"),
+            tuple(item.object_id for item in selected if item.kind == "reference_dimension"),
+            drawing_delta,
+            session_identity=current_session_identity,
+            text_ids=tuple(item.object_id for item in selected if item.kind == "text"),
+            raster_ids=tuple(item.object_id for item in selected if item.kind == "raster"),
+            _geometry_refs=tuple(item for item in selected if item.kind == "geometry"),
+            _prepare_only=True,
+        )
+        if not isinstance(result, tuple):
+            raise ValidationError("无法准备附着标注移动。")
+        items = cast(tuple[object, ...], result)
+        if not all(isinstance(item, ReplayAppend) for item in items):
+            raise ValidationError("无法准备附着标注移动。")
+        appends = cast(tuple[ReplayAppend, ...], items)
+        return ReplayAppend(
+            "drawing.objects.batch",
+            1,
+            {
+                "operations": [
+                    {"id": item.command_id, "version": item.version, "params": item.params}
+                    for item in appends
+                ]
+                + block_operations
+            },
+            "local",
+        )
 
     def interactive_face_binding(
         self,
@@ -574,7 +763,13 @@ class ReplayCandidateSession:
             raise ValidationError("candidate source document changed")
         return self._loaded.bus.authorize_replay_candidate(proposal)
 
-    def commit(self, grant: ReplayCommitGrant, *, current_session_identity: int) -> None:
+    def commit(
+        self,
+        grant: ReplayCommitGrant,
+        *,
+        current_session_identity: int,
+        drawing_write_guard: str | None = None,
+    ) -> None:
         """Commit this latest preview through its source Bus exactly once."""
         self._check_session(current_session_identity)
         proposal = self._proposal
@@ -592,7 +787,9 @@ class ReplayCandidateSession:
             self._loaded.bus.discard_replay_candidate(self._candidate_id)
             self._release_candidate()
             raise ValidationError("candidate source document changed")
-        self._loaded.bus.commit_replay_candidate(proposal, grant)
+        self._loaded.bus.commit_replay_candidate(
+            proposal, grant, drawing_write_guard=drawing_write_guard
+        )
         self._state = "committed"
         self._release_candidate()
 
@@ -693,6 +890,15 @@ def commit_new_sketch(
     cross_tangent_pairs: tuple[DraftTangentPair, ...] = (),
     associative_arrays: tuple[AssociativeRectArray, ...] = (),
     imported_styles: DimensionStyleTable | None = None,
+    imported_texts: tuple[DrawingText, ...] = (),
+    imported_text_styles: TextStyleTable | None = None,
+    imported_rasters: tuple[DrawingRaster, ...] = (),
+    imported_tolerance_frames: tuple[FeatureControlFrame, ...] = (),
+    imported_datums: tuple[DatumIdentifier, ...] = (),
+    imported_reference_dimensions: tuple[DetachedDimension, ...] = (),
+    preserve_existing_datum_refs: bool = False,
+    imported_curve_ids: bool = False,
+    persistent_batch: bool = False,
 ) -> object:
     """Commit a sketch, upgrading the archive for points or inferred tangencies."""
     has_tangency = any(item.kind == "tangent" for item in sketch.constraints)
@@ -707,19 +913,311 @@ def commit_new_sketch(
     has_curves = any(
         isinstance(entity, PolylineEntity) and entity.bulges for entity in sketch.entities
     )
+    has_ellipse = any(isinstance(entity, EllipseEntity) for entity in sketch.entities)
+    has_curve_point_ids = any(
+        isinstance(entity, PolylineEntity | SplineEntity) and entity.point_ids
+        for entity in sketch.entities
+    )
     if (
         not cross_tangent_pairs
         and imported_styles is None
+        and not imported_texts
+        and not imported_rasters
+        and not imported_tolerance_frames
+        and not imported_datums
+        and not imported_reference_dimensions
+        and imported_text_styles is None
         and not associative_arrays
         and not has_tangency
         and not has_geometric_relations
         and not has_curves
+        and not has_curve_point_ids
         and not any(item.projection_axis is not None for item in sketch.constraints)
         and not any(item.text_override is not None for item in sketch.constraints)
         and not any(item.style_name is not None for item in sketch.constraints)
+        and not any(item.tolerance is not None for item in sketch.constraints)
         and not any(isinstance(entity, PointEntity) for entity in sketch.entities)
     ):
-        return loaded.bus.execute("sketch.create", sketch.to_state_mapping(), confirmed_by)
+        return loaded.bus.execute(
+            "sketch.create",
+            sketch.to_state_mapping(),
+            confirmed_by,
+            version=53 if has_ellipse else None,
+        )
+    layer_appends: tuple[ReplayAppend, ...] = ()
+    text_appends: tuple[ReplayAppend, ...] = ()
+    font_style_appends: tuple[ReplayAppend, ...] = ()
+    working_text_styles = services.kernel.drawing_text_styles
+    if (
+        imported_styles is not None
+        and imported_text_styles is not None
+        and any(style.text_style_id is not None for style in imported_styles.styles)
+    ):
+        try:
+            if imported_text_styles.current_id != working_text_styles.current_id or any(
+                imported_text_styles.get(style.style_id) != style
+                for style in working_text_styles.styles
+            ):
+                raise ValueError("导入字体时不能修改已有文字样式。")
+            for style in imported_styles.styles:
+                if style.text_style_id is not None:
+                    imported_text_styles.get(style.text_style_id)
+        except (KeyError, ValueError) as exc:
+            raise ValidationError(str(exc), command_id="drawing.text_styles.set") from exc
+        if imported_text_styles != working_text_styles:
+            working_text_styles = imported_text_styles
+            font_style_appends = (
+                ReplayAppend(
+                    "drawing.text_styles.set", 1, working_text_styles.to_mapping(), confirmed_by
+                ),
+            )
+    raster_appends: tuple[ReplayAppend, ...] = ()
+    tolerance_appends: tuple[ReplayAppend, ...] = ()
+    reference_appends: tuple[ReplayAppend, ...] = ()
+    if (
+        imported_texts
+        or imported_rasters
+        or imported_tolerance_frames
+        or imported_datums
+        or imported_reference_dimensions
+    ):
+        layers = services.kernel.drawing_layers
+        known_layers = {layer.name.casefold() for layer in layers.layers}
+        for layer in sketch.layers.layers:
+            if layer.name.casefold() not in known_layers:
+                layers = layers.add(layer)
+                known_layers.add(layer.name.casefold())
+        if imported_styles is not None and not sketch.entities:
+            layer_appends = (
+                ReplayAppend(
+                    "drawing.clipboard.prepare",
+                    services.registry.get("drawing.clipboard.prepare").version,
+                    {
+                        "layers": layers.to_mapping(),
+                        "dimension_layer": services.kernel.dimension_layer,
+                        "clipboard_styles": imported_styles.to_mapping(),
+                    },
+                    confirmed_by,
+                ),
+            )
+        elif layers != services.kernel.drawing_layers:
+            layer_appends = (
+                ReplayAppend(
+                    "drawing.layers.set",
+                    1,
+                    {
+                        "layers": layers.to_mapping(),
+                        "dimension_layer": services.kernel.dimension_layer,
+                    },
+                    confirmed_by,
+                ),
+            )
+        # Geometry must inherit the target layer definitions as well.
+        sketch = replace(sketch, layers=layers)
+        try:
+            styles, imported_texts = reconcile_text_styles(
+                imported_texts,
+                imported_text_styles or working_text_styles,
+                working_text_styles,
+            )
+            annotation_font_ids = tuple(
+                item.text_style_id
+                for item in (*imported_tolerance_frames, *imported_datums)
+                if item.text_style_id is not None
+            )
+            styles, frame_font_map = reconcile_text_style_ids(
+                annotation_font_ids, imported_text_styles or working_text_styles, styles
+            )
+        except (ValueError, KeyError) as exc:
+            raise ValidationError(str(exc), command_id="drawing.text.batch") from exc
+        identities = {text.text_id for text in services.kernel.drawing_texts}
+        remapped: list[DrawingText] = []
+        for text in imported_texts:
+            identity = uuid4().hex if text.text_id in identities else text.text_id
+            identities.add(identity)
+            remapped.append(replace(text, text_id=identity))
+        text_appends = (
+            (
+                ReplayAppend(
+                    "drawing.text.batch",
+                    1,
+                    {
+                        "add": [text.to_mapping() for text in remapped],
+                        "styles": styles.to_mapping(),
+                    },
+                    confirmed_by,
+                ),
+            )
+            if imported_texts or styles != working_text_styles
+            else ()
+        )
+        image_identities = {image.image_id for image in services.kernel.drawing_rasters}
+        images: list[DrawingRaster] = []
+        for image in imported_rasters:
+            identity = uuid4().hex if image.image_id in image_identities else image.image_id
+            image_identities.add(identity)
+            images.append(replace(image, image_id=identity))
+        if images:
+            raster_appends = (
+                ReplayAppend(
+                    "drawing.raster.batch",
+                    services.registry.get("drawing.raster.batch").version,
+                    {"action": "add", "images": [image.to_mapping(version=2) for image in images]},
+                    confirmed_by,
+                ),
+            )
+        datum_ids = (
+            {datum.datum_id for datum in services.kernel.drawing_datum_identifiers}
+            | {frame.frame_id for frame in services.kernel.drawing_tolerance_frames}
+            | {item.dimension_id for item in services.kernel.drawing_reference_dimensions}
+        )
+        datum_map: dict[str, str] = {}
+        datums: list[DatumIdentifier] = []
+        for datum in imported_datums:
+            if datum.datum_id in datum_map:
+                raise ValidationError("导入的基准 ID 重复。", command_id="drawing.tolerance.batch")
+            identity = uuid4().hex if datum.datum_id in datum_ids else datum.datum_id
+            datum_ids.add(identity)
+            datum_map[datum.datum_id] = identity
+            datums.append(
+                replace(
+                    datum,
+                    datum_id=identity,
+                    text_style_id=(
+                        frame_font_map[datum.text_style_id]
+                        if datum.text_style_id is not None
+                        else None
+                    ),
+                )
+            )
+        reference_ids = {
+            dimension.dimension_id for dimension in services.kernel.drawing_reference_dimensions
+        }
+        reference_ids.update(datum_ids)
+        references: list[DetachedDimension] = []
+        reference_map: dict[str, str] = {}
+        for dimension in imported_reference_dimensions:
+            if dimension.dimension_id in reference_map:
+                raise ValidationError(
+                    "导入的参考尺寸 ID 重复。", command_id="drawing.reference_dimensions.batch"
+                )
+            identity = (
+                uuid4().hex if dimension.dimension_id in reference_ids else dimension.dimension_id
+            )
+            reference_ids.add(identity)
+            reference_map[dimension.dimension_id] = identity
+            references.append(replace(dimension, dimension_id=identity))
+        if references:
+            reference_appends = (
+                ReplayAppend(
+                    "drawing.reference_dimensions.batch",
+                    services.registry.get("drawing.reference_dimensions.batch").version,
+                    {"add": [dimension.to_mapping() for dimension in references]},
+                    confirmed_by,
+                ),
+            )
+        existing_datums = {
+            datum.datum_id: datum for datum in services.kernel.drawing_datum_identifiers
+        }
+        existing_datum_ids = set(existing_datums)
+        source_datums = {datum.datum_id: datum for datum in imported_datums}
+        frame_ids = {frame.frame_id for frame in services.kernel.drawing_tolerance_frames}
+        frame_ids.update(reference_ids)
+        frame_map: dict[str, str] = {}
+        for frame in imported_tolerance_frames:
+            if frame.frame_id in frame_map:
+                raise ValidationError(
+                    "导入的公差框 ID 重复。", command_id="drawing.tolerance.batch"
+                )
+            identity = uuid4().hex if frame.frame_id in frame_ids else frame.frame_id
+            frame_ids.add(identity)
+            frame_map[frame.frame_id] = identity
+
+        def rebind_annotation(ref: AnnotationAttachment | None) -> AnnotationAttachment | None:
+            if ref is None:
+                return None
+            if ref.kind == "frame":
+                mapped = frame_map.get(ref.object_id)
+            elif ref.kind == "reference_dimension":
+                mapped = reference_map.get(ref.object_id)
+            else:
+                mapped = (
+                    ref.object_id
+                    if ref.sketch_id == sketch.sketch_id
+                    and any(item.constraint_id == ref.object_id for item in sketch.constraints)
+                    else None
+                )
+            if mapped is not None:
+                return replace(ref, object_id=mapped)
+            return ref if preserve_existing_datum_refs else None
+
+        datums = [
+            replace(datum, annotation_attachment=rebind_annotation(datum.annotation_attachment))
+            for datum in datums
+        ]
+        frames: list[FeatureControlFrame] = []
+        for frame in imported_tolerance_frames:
+            for row in frame.rows:
+                for ref in row.datums:
+                    if ref.datum_id is None:
+                        continue
+                    source = source_datums.get(ref.datum_id)
+                    if source is None and preserve_existing_datum_refs:
+                        source = existing_datums.get(ref.datum_id)
+                    if source is not None and source.label != ref.label:
+                        raise ValidationError(
+                            "导入的基准引用标签与目标基准不一致。",
+                            command_id="drawing.tolerance.batch",
+                        )
+            identity = frame_map[frame.frame_id]
+            rows = tuple(
+                replace(
+                    row,
+                    datums=tuple(
+                        replace(
+                            ref,
+                            datum_id=datum_map.get(
+                                ref.datum_id,
+                                ref.datum_id
+                                if preserve_existing_datum_refs
+                                and ref.datum_id in existing_datum_ids
+                                else None,
+                            )
+                            if ref.datum_id is not None
+                            else None,
+                        )
+                        for ref in row.datums
+                    ),
+                )
+                for row in frame.rows
+            )
+            frames.append(
+                replace(
+                    frame,
+                    frame_id=identity,
+                    leader_annotation_attachment=rebind_annotation(
+                        frame.leader_annotation_attachment
+                    ),
+                    rows=rows,
+                    text_style_id=(
+                        frame_font_map[frame.text_style_id]
+                        if frame.text_style_id is not None
+                        else None
+                    ),
+                )
+            )
+        if frames or datums:
+            tolerance_appends = (
+                ReplayAppend(
+                    "drawing.tolerance.batch",
+                    services.registry.get("drawing.tolerance.batch").version,
+                    {
+                        "add_frames": [frame.to_mapping() for frame in frames],
+                        "add_datums": [datum.to_mapping() for datum in datums],
+                    },
+                    confirmed_by,
+                ),
+            )
     cross_relations = _draft_cross_relations(services.kernel.sketches, sketch, cross_tangent_pairs)
     candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
     params = sketch.to_state_mapping()
@@ -729,13 +1227,36 @@ def commit_new_sketch(
         params["cross_tangencies"] = [relation.to_mapping() for relation in cross_relations]
     if associative_arrays:
         params["associative_arrays"] = [array.to_mapping() for array in associative_arrays]
-    candidate.stage(
-        ReplayChangeSet(
-            (),
+    appends = (
+        font_style_appends
+        + layer_appends
+        + (
             (
                 ReplayAppend(
                     "sketch.create",
-                    45
+                    (58 if imported_curve_ids else 57)
+                    if has_curve_point_ids
+                    else 54
+                    if has_ellipse and imported_styles is not None
+                    else 53
+                    if has_ellipse
+                    else 49
+                    if imported_styles is not None
+                    and any(style.text_style_id is not None for style in imported_styles.styles)
+                    else 47
+                    if imported_styles is not None
+                    and (
+                        any(item.tolerance is not None for item in sketch.constraints)
+                        or any(
+                            style.linear_tolerance.mode != "none"
+                            or style.angular_tolerance.mode != "none"
+                            for style in imported_styles.styles
+                        )
+                    )
+                    else 46
+                    if any(item.tolerance is not None for item in sketch.constraints)
+                    and imported_styles is None
+                    else 45
                     if imported_styles is not None
                     else 32
                     if any(item.style_name is not None for item in sketch.constraints)
@@ -828,10 +1349,45 @@ def commit_new_sketch(
                     params,
                     confirmed_by,
                 ),
+            )
+            if sketch.entities
+            or not (
+                imported_texts
+                or imported_rasters
+                or imported_tolerance_frames
+                or imported_datums
+                or imported_reference_dimensions
+            )
+            else ()
+        )
+        + text_appends
+        + raster_appends
+        + reference_appends
+        + tolerance_appends
+    )
+    needs_batch = persistent_batch and len(appends) > 1
+    if needs_batch:
+        appends = (
+            ReplayAppend(
+                "drawing.objects.batch",
+                1,
+                {
+                    "operations": [
+                        {"id": item.command_id, "version": item.version, "params": item.params}
+                        for item in appends
+                    ]
+                },
+                confirmed_by,
             ),
+        )
+    target_version = 8 if needs_batch or imported_styles is not None or has_curve_point_ids else 6
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            appends,
             False,
-            target_archive_version=(8 if imported_styles is not None else 6)
-            if loaded.document.archive_version < (8 if imported_styles is not None else 6)
+            target_archive_version=target_version
+            if loaded.document.archive_version < target_version
             else None,
         ),
         current_session_identity=session_identity,
@@ -843,15 +1399,608 @@ def commit_new_sketch(
     return candidate.commit(grant, current_session_identity=session_identity)
 
 
+def upgrade_selected_curve_identities(
+    services: AppServices,
+    loaded: LoadedDocument,
+    entity_ids: tuple[str, ...],
+    *,
+    session_identity: int,
+) -> object:
+    """Upgrade selected legacy curves across sketches in one replayable operation."""
+    from mycad.core.geometric_tolerance_topology import prepare_curve_identity_upgrade
+
+    selected = set(entity_ids)
+    if not selected or len(selected) != len(entity_ids):
+        raise ValidationError("请选择需要升级的多段线或样条。")
+    found: set[str] = set()
+    appends: list[ReplayAppend] = []
+    for sketch in services.kernel.sketches:
+        chosen = tuple(item for item in sketch.entities if item.entity_id in selected)
+        if not chosen:
+            continue
+        for item in chosen:
+            if item.entity_id in found or not isinstance(item, PolylineEntity | SplineEntity):
+                raise ValidationError("所选对象必须是身份唯一的多段线或样条。")
+            found.add(item.entity_id)
+        legacy = tuple(
+            item.entity_id
+            for item in chosen
+            if isinstance(item, PolylineEntity | SplineEntity) and not item.point_ids
+        )
+        if not legacy:
+            continue
+        records = prepare_curve_identity_upgrade(sketch, legacy)
+        appends.append(
+            ReplayAppend(
+                "drawing.curve_identity.upgrade",
+                services.registry.get("drawing.curve_identity.upgrade").version,
+                {
+                    "sketch_id": sketch.sketch_id,
+                    "base_state_sha256": sketch.local_state_digest(),
+                    "records": [record.to_mapping() for record in records],
+                },
+                "local",
+            )
+        )
+    if found != selected:
+        raise ValidationError("所选曲线不存在或已改变，请重新选择。")
+    if not appends:
+        raise ValidationError("所选曲线均已有点身份。")
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            tuple(appends),
+            False,
+            target_archive_version=6 if loaded.document.archive_version < 6 else None,
+        ),
+        current_session_identity=session_identity,
+    )
+    preview = candidate.preview(current_session_identity=session_identity)
+    if preview.state != "succeeded":
+        raise ValidationError(preview.failure.reason if preview.failure else "曲线身份升级失败。")
+    return candidate.commit(
+        candidate.authorize_commit(current_session_identity=session_identity),
+        current_session_identity=session_identity,
+    )
+
+
+def repair_tolerance_annotation_identities(
+    services: AppServices, loaded: LoadedDocument, *, session_identity: int
+) -> object:
+    """Repair legacy cross-kind identity collisions as one history operation."""
+    from mycad.core.geometric_tolerance_identity import repair_annotation_identities
+
+    frames, references = repair_annotation_identities(
+        services.kernel.drawing_tolerance_frames,
+        services.kernel.drawing_datum_identifiers,
+        services.kernel.drawing_reference_dimensions,
+    )
+    appends: list[ReplayAppend] = []
+    if references["remove"]:
+        appends.append(
+            ReplayAppend(
+                "drawing.reference_dimensions.batch",
+                services.registry.get("drawing.reference_dimensions.batch").version,
+                references,
+                "local",
+            )
+        )
+    if frames["remove_frames"]:
+        appends.append(
+            ReplayAppend(
+                "drawing.tolerance.batch",
+                services.registry.get("drawing.tolerance.batch").version,
+                frames,
+                "local",
+            )
+        )
+    if not appends:
+        raise ValidationError("没有需要修复的标注身份。")
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet((), tuple(appends), False), current_session_identity=session_identity
+    )
+    preview = candidate.preview(current_session_identity=session_identity)
+    if preview.state != "succeeded":
+        raise ValidationError(
+            preview.failure.reason if preview.failure else "标注身份修复预览失败。"
+        )
+    return candidate.commit(
+        candidate.authorize_commit(current_session_identity=session_identity),
+        current_session_identity=session_identity,
+    )
+
+
+def delete_tolerance_selection(
+    services: AppServices,
+    loaded: LoadedDocument,
+    frame_ids: tuple[str, ...],
+    datum_ids: tuple[str, ...],
+    reference_ids: tuple[str, ...],
+    *,
+    session_identity: int,
+    text_ids: tuple[str, ...] = (),
+    raster_ids: tuple[str, ...] = (),
+) -> object:
+    """Remove selected drawing annotations and images in one history operation."""
+    appends: list[ReplayAppend] = []
+    if frame_ids or datum_ids:
+        appends.append(
+            ReplayAppend(
+                "drawing.tolerance.batch",
+                services.registry.get("drawing.tolerance.batch").version,
+                {"remove_frames": list(frame_ids), "remove_datums": list(datum_ids)},
+                "local",
+            )
+        )
+    if reference_ids:
+        appends.append(
+            ReplayAppend(
+                "drawing.reference_dimensions.batch",
+                services.registry.get("drawing.reference_dimensions.batch").version,
+                {"remove": list(reference_ids)},
+                "local",
+            )
+        )
+    if text_ids:
+        appends.append(
+            ReplayAppend(
+                "drawing.text.batch",
+                services.registry.get("drawing.text.batch").version,
+                {"add": [], "update": [], "remove": list(text_ids)},
+                "local",
+            )
+        )
+    if raster_ids:
+        appends.append(
+            ReplayAppend(
+                "drawing.raster.batch",
+                services.registry.get("drawing.raster.batch").version,
+                {"action": "remove", "image_ids": list(raster_ids)},
+                "local",
+            )
+        )
+    if not appends:
+        raise ValidationError("没有可删除的标注。")
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet((), tuple(appends), False), current_session_identity=session_identity
+    )
+    preview = candidate.preview(current_session_identity=session_identity)
+    if preview.state != "succeeded":
+        raise ValidationError(preview.failure.reason if preview.failure else "混合删除预览失败。")
+    return candidate.commit(
+        candidate.authorize_commit(current_session_identity=session_identity),
+        current_session_identity=session_identity,
+    )
+
+
+def move_tolerance_selection(
+    services: AppServices,
+    loaded: LoadedDocument,
+    entity_ids: tuple[str, ...],
+    frame_ids: tuple[str, ...],
+    datum_ids: tuple[str, ...],
+    reference_ids: tuple[str, ...],
+    delta: tuple[float, float],
+    *,
+    session_identity: int,
+    text_ids: tuple[str, ...] = (),
+    raster_ids: tuple[str, ...] = (),
+    _geometry_refs: tuple[DrawingObjectRef, ...] | None = None,
+    _prepare_only: bool = False,
+) -> object:
+    """Move a supported geometry/annotation selection as one replay operation."""
+    from mycad.core.cross_sketch_tangency import project_coplanar_vector
+    from mycad.core.drawing_text import move_text
+    from mycad.core.sketch_edit import move_entities
+
+    dx, dy = delta
+    if not math.isfinite(dx) or not math.isfinite(dy):
+        raise ValidationError("移动位移必须是有限数值。")
+    if _geometry_refs is None:
+        selected = set(entity_ids)
+        if len(selected) != len(entity_ids):
+            raise ValidationError("图元身份重复。")
+        matches = [
+            (sketch.sketch_id, item.entity_id)
+            for sketch in services.kernel.sketches
+            for item in sketch.entities
+            if item.entity_id in selected
+        ]
+        if len(matches) != len(selected) or {identity for _, identity in matches} != selected:
+            raise ValidationError("所选图元不存在或身份不唯一。")
+        selected_sources = set(matches)
+    else:
+        if (
+            any(item.kind != "geometry" or item.sketch_id is None for item in _geometry_refs)
+            or len(_geometry_refs) != len(set(_geometry_refs))
+            or sorted(item.object_id for item in _geometry_refs) != sorted(entity_ids)
+        ):
+            raise ValidationError("图元身份或所属草图不一致。")
+        selected_sources = {
+            (cast("str", item.sketch_id), item.object_id) for item in _geometry_refs
+        }
+
+    def selected_ref(sketch_id: str, entity_id: str) -> bool:
+        return (sketch_id, entity_id) in selected_sources
+
+    if any(
+        selected_ref(relation.first.sketch_id, relation.first.entity_id)
+        != selected_ref(relation.second.sketch_id, relation.second.entity_id)
+        for relation in services.kernel.cross_sketch_tangencies
+    ):
+        raise ValidationError("混合移动需要同时选择相切关联的全部图元。")
+    if any(
+        any(selected_ref(ref.sketch_id, ref.entity_id) for ref in array.sources)
+        or any(
+            selected_ref(member.target.sketch_id, member.target.entity_id)
+            for member in array.members
+        )
+        or any(
+            member.replacement is not None
+            and selected_ref(
+                member.replacement.source.sketch_id, member.replacement.source.entity_id
+            )
+            for member in array.members
+        )
+        or any(
+            selected_ref(output.target.sketch_id, output.target.entity_id)
+            or selected_ref(output.source.sketch_id, output.source.entity_id)
+            for output in array.extra_outputs
+        )
+        for array in services.kernel.associative_arrays
+    ):
+        raise ValidationError("混合移动暂不支持关联阵列。")
+    revisions: list[dict[str, object]] = []
+    found: set[tuple[str, str]] = set()
+    for sketch in services.kernel.sketches:
+        identities = tuple(
+            item.entity_id
+            for item in sketch.entities
+            if selected_ref(sketch.sketch_id, item.entity_id)
+        )
+        if not identities:
+            continue
+        try:
+            local_delta = project_coplanar_vector(delta, WorkPlaneFrame.xy(), sketch.frame)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        for constraint in sketch.constraints:
+            members = {ref.entity_id for ref in constraint.references}
+            if members.intersection(identities) and not members.issubset(identities):
+                raise ValidationError("混合移动需要同时选中关联尺寸或约束的全部图元。")
+        found.update((sketch.sketch_id, identity) for identity in identities)
+        moved_constraints = tuple(
+            replace(
+                constraint,
+                position_mm=None
+                if constraint.position_mm is None
+                else (
+                    constraint.position_mm[0] + local_delta[0],
+                    constraint.position_mm[1] + local_delta[1],
+                ),
+                text_position_mm=None
+                if constraint.text_position_mm is None
+                else (
+                    constraint.text_position_mm[0] + local_delta[0],
+                    constraint.text_position_mm[1] + local_delta[1],
+                ),
+            )
+            if any(ref.entity_id in identities for ref in constraint.references)
+            else constraint
+            for constraint in sketch.constraints
+        )
+        moved = replace(
+            sketch,
+            entities=move_entities(
+                sketch.entities, identities, local_delta, preserve_rectangle_order=True
+            ),
+            constraints=moved_constraints,
+        )
+        state = moved.to_state_mapping()
+        revisions.append(
+            {
+                "sketch_id": sketch.sketch_id,
+                "base_state_sha256": sketch.local_state_digest(),
+                "entities": state["entities"],
+                "constraints": state["constraints"],
+            }
+        )
+    if found != selected_sources:
+        raise ValidationError("所选图元不存在或身份不唯一。")
+    frames = tuple(
+        item for item in services.kernel.drawing_tolerance_frames if item.frame_id in frame_ids
+    )
+    datums = tuple(
+        item for item in services.kernel.drawing_datum_identifiers if item.datum_id in datum_ids
+    )
+    references = tuple(
+        item
+        for item in services.kernel.drawing_reference_dimensions
+        if item.dimension_id in reference_ids
+    )
+    texts = tuple(item for item in services.kernel.drawing_texts if item.text_id in text_ids)
+    rasters = tuple(item for item in services.kernel.drawing_rasters if item.image_id in raster_ids)
+    if (
+        len(frames) != len(frame_ids)
+        or len(datums) != len(datum_ids)
+        or len(references) != len(reference_ids)
+        or len(texts) != len(text_ids)
+        or len(rasters) != len(raster_ids)
+    ):
+        raise ValidationError("所选标注不存在或身份重复。")
+    for item in (*texts, *rasters):
+        layer = services.kernel.drawing_layers.get(item.layer_name)
+        if layer.locked or not layer.displayed:
+            raise ValidationError("锁定或隐藏图层上的文字和图片不能移动。")
+
+    def translated(point: tuple[float, float]) -> tuple[float, float]:
+        return point[0] + dx, point[1] + dy
+
+    def fixed_target_offsets(
+        item: FeatureControlFrame | DatumIdentifier,
+    ) -> tuple[tuple[float, float], ...]:
+        from mycad.core.geometric_tolerance_geometry import (
+            relocate_automatic_leader,
+            relocate_box_aware_leader,
+        )
+
+        if item.leader_auto_route:
+            target = (
+                item.leader_target_mm if isinstance(item, FeatureControlFrame) else item.target_mm
+            )
+            if target is None:
+                raise ValidationError("自动引线缺少附着目标。")
+            try:
+                position = translated(item.position_mm)
+                if isinstance(item, DatumIdentifier) and item.route_algorithm_version >= 3:
+                    assert item.box_size_mm is not None
+                    return relocate_box_aware_leader(
+                        item.position_mm,
+                        item.leader_offsets,
+                        position,
+                        target,
+                        item.box_size_mm,
+                        orthogonal_box_side=item.route_algorithm_version >= 4,
+                    )
+                anchor = (
+                    (
+                        position[0] + item.leader_anchor_offset[0],
+                        position[1] + item.leader_anchor_offset[1],
+                    )
+                    if isinstance(item, FeatureControlFrame)
+                    and item.leader_anchor_offset is not None
+                    else None
+                )
+                return relocate_automatic_leader(
+                    item.position_mm, item.leader_offsets, position, target, anchor=anchor
+                )
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+        attachment = (
+            item.leader_attachment if isinstance(item, FeatureControlFrame) else item.attachment
+        )
+        if item.leader_auto_normal and attachment is not None:
+            return tuple((x - dx, y - dy) for x, y in item.leader_offsets)
+        return item.leader_offsets
+
+    def annotation_target_moves_before_batch(reference: AnnotationAttachment) -> bool:
+        if reference.kind == "frame":
+            return reference.object_id in frame_ids
+        if reference.kind == "sketch_dimension":
+            return any(
+                sketch.sketch_id == reference.sketch_id
+                and any(
+                    constraint.constraint_id == reference.object_id
+                    and any(
+                        (sketch.sketch_id, item.entity_id) in selected_sources
+                        for item in constraint.references
+                    )
+                    for constraint in sketch.constraints
+                )
+                for sketch in services.kernel.sketches
+            )
+        return False
+
+    moved_frames = tuple(
+        replace(
+            translate_frame(frame, (dx, dy)),
+            leader_target_mm=frame.leader_target_mm,
+            leader_offsets=fixed_target_offsets(frame),
+        )
+        if (
+            frame.leader_attachment is not None
+            and (frame.leader_attachment.sketch_id, frame.leader_attachment.reference.entity_id)
+            not in selected_sources
+        )
+        or (
+            frame.leader_annotation_attachment is not None
+            and not annotation_target_moves_before_batch(frame.leader_annotation_attachment)
+        )
+        else translate_frame(frame, (dx, dy))
+        for frame in frames
+    )
+    moved_datums: list[DatumIdentifier] = []
+    for datum in datums:
+        attachment = datum.attachment
+        geometry_moves = (
+            attachment is not None
+            and (attachment.sketch_id, attachment.reference.entity_id) in selected_sources
+        )
+        if datum.annotation_attachment is not None:
+            target = (
+                translated(datum.target_mm)
+                if annotation_target_moves_before_batch(datum.annotation_attachment)
+                else datum.target_mm
+            )
+        else:
+            target = (
+                translated(datum.target_mm)
+                if attachment is None or geometry_moves
+                else datum.target_mm
+            )
+        moved_datums.append(
+            replace(
+                datum,
+                position_mm=translated(datum.position_mm),
+                target_mm=target,
+                leader_offsets=(
+                    fixed_target_offsets(datum)
+                    if attachment is not None and not geometry_moves
+                    else datum.leader_offsets
+                ),
+            )
+        )
+    moved_references = tuple(
+        replace(
+            item,
+            first_mm=translated(item.first_mm),
+            second_mm=translated(item.second_mm),
+            location_mm=translated(item.location_mm),
+            vertex_mm=translated(item.vertex_mm) if item.vertex_mm is not None else None,
+        )
+        for item in references
+    )
+    # A selected target and its annotation move together.  Freeze automatic
+    # routing during the intermediate geometry command; the final annotation
+    # command restores the original constraints and translated path atomically.
+    suspended_frames = [
+        replace(
+            frame,
+            leader_auto_normal=False,
+            leader_auto_route=False,
+            route_avoid_crossing=False,
+            route_track_target=False,
+            route_algorithm_version=1,
+        )
+        for frame in frames
+        if frame.leader_auto_route
+        and frame.leader_attachment is not None
+        and (frame.leader_attachment.sketch_id, frame.leader_attachment.reference.entity_id)
+        in selected_sources
+    ]
+    suspended_datums = [
+        replace(
+            datum,
+            leader_auto_normal=False,
+            leader_auto_route=False,
+            route_avoid_crossing=False,
+            route_track_target=False,
+            route_algorithm_version=1,
+        )
+        for datum in datums
+        if datum.leader_auto_route
+        and datum.attachment is not None
+        and (datum.attachment.sketch_id, datum.attachment.reference.entity_id) in selected_sources
+    ]
+    appends: list[ReplayAppend] = []
+    if suspended_frames or suspended_datums:
+        appends.append(
+            ReplayAppend(
+                "drawing.tolerance.batch",
+                services.registry.get("drawing.tolerance.batch").version,
+                {
+                    "update_frames": [item.to_mapping() for item in suspended_frames],
+                    "update_datums": [item.to_mapping() for item in suspended_datums],
+                },
+                "local",
+            )
+        )
+    if revisions:
+        appends.append(
+            ReplayAppend(
+                "drawing.sketch.revise",
+                services.registry.get("drawing.sketch.revise").version,
+                {"revisions": revisions},
+                "local",
+            )
+        )
+    if moved_frames or moved_datums:
+        appends.append(
+            ReplayAppend(
+                "drawing.tolerance.batch",
+                services.registry.get("drawing.tolerance.batch").version,
+                {
+                    "update_frames": [item.to_mapping() for item in moved_frames],
+                    "update_datums": [item.to_mapping() for item in moved_datums],
+                },
+                "local",
+            )
+        )
+    if moved_references:
+        appends.append(
+            ReplayAppend(
+                "drawing.reference_dimensions.batch",
+                services.registry.get("drawing.reference_dimensions.batch").version,
+                {"update": [item.to_mapping() for item in moved_references]},
+                "local",
+            )
+        )
+    if texts:
+        appends.append(
+            ReplayAppend(
+                "drawing.text.batch",
+                services.registry.get("drawing.text.batch").version,
+                {
+                    "add": [],
+                    "update": [move_text(item, delta).to_mapping() for item in texts],
+                    "remove": [],
+                },
+                "local",
+            )
+        )
+    if rasters:
+        appends.append(
+            ReplayAppend(
+                "drawing.raster.batch",
+                services.registry.get("drawing.raster.batch").version,
+                {
+                    "action": "update",
+                    "images": [
+                        replace(item, origin_mm=translated(item.origin_mm)).to_mapping(version=2)
+                        for item in rasters
+                    ],
+                },
+                "local",
+            )
+        )
+    if not appends:
+        raise ValidationError("没有可移动的对象。")
+    if _prepare_only:
+        return tuple(appends)
+    candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
+    candidate.stage(
+        ReplayChangeSet((), tuple(appends), False), current_session_identity=session_identity
+    )
+    preview = candidate.preview(current_session_identity=session_identity)
+    if preview.state != "succeeded":
+        raise ValidationError(preview.failure.reason if preview.failure else "混合移动预览失败。")
+    return candidate.commit(
+        candidate.authorize_commit(current_session_identity=session_identity),
+        current_session_identity=session_identity,
+    )
+
+
 def prepare_cross_sketch_tangency(
     services: AppServices, relation: CrossSketchTangency
 ) -> tuple[tuple[Sketch, ...], tuple[Sketch, ...]]:
     """Produce an isolated tangent solution for a proposed relation."""
-    relations = (*services.kernel.cross_sketch_tangencies, relation)
+    return prepare_cross_sketch_tangency_from_state(
+        services.kernel.sketches, services.kernel.cross_sketch_tangencies, relation
+    )
+
+
+def prepare_cross_sketch_tangency_from_state(
+    sketches: tuple[Sketch, ...],
+    existing: tuple[CrossSketchTangency, ...],
+    relation: CrossSketchTangency,
+) -> tuple[tuple[Sketch, ...], tuple[Sketch, ...]]:
+    """Solve a proposed relation against an isolated drawing state."""
+    relations = (*existing, relation)
     try:
-        original, _ = resolve_tangency_component(
-            services.kernel.sketches, relations, relation.first.sketch_id
-        )
+        original, _ = resolve_tangency_component(sketches, relations, relation.first.sketch_id)
         solved = solve_tangency_component(original, relations, relation.first.sketch_id)
         build_tangency_revisions(original, solved)
         return original, solved
@@ -891,7 +2040,15 @@ def commit_cross_sketch_tangency(
             (
                 ReplayAppend(
                     "drawing.tangency.add",
-                    9
+                    13
+                    if revisions_include_curve_point_ids(revisions)
+                    else 12
+                    if revisions_require_attachment_protection(services, revisions)
+                    else 11
+                    if revisions_include_ellipses(revisions)
+                    else 10
+                    if revisions_include_dimension_tolerances(revisions)
+                    else 9
                     if revisions_include_dimension_styles(revisions)
                     else 8
                     if revisions_include_dimension_text(revisions)
@@ -914,7 +2071,14 @@ def commit_cross_sketch_tangency(
                 ),
             ),
             False,
-            target_archive_version=6 if loaded.document.archive_version < 6 else None,
+            target_archive_version=(
+                8
+                if revisions_include_curve_point_ids(revisions)
+                and loaded.document.archive_version < 8
+                else 6
+                if loaded.document.archive_version < 6
+                else None
+            ),
         ),
         current_session_identity=session_identity,
     )
@@ -1249,7 +2413,13 @@ def commit_cross_sketch_edit(
             (
                 ReplayAppend(
                     "drawing.sketch.revise",
-                    50
+                    56
+                    if revisions_require_normal_side_preservation(services, revisions)
+                    else 55
+                    if revisions_include_ellipses(revisions)
+                    else 53
+                    if revisions_include_dimension_tolerances(revisions)
+                    else 50
                     if revisions_include_dimension_styles(revisions)
                     else 48
                     if revisions_include_dimension_text(revisions)
@@ -1339,9 +2509,20 @@ def prepare_cross_sketch_dimension(
     constraint: SketchConstraint,
 ) -> tuple[dict[str, object], tuple[Sketch, ...], tuple[SketchBranchChange, ...]]:
     """Solve and freeze a dimension change without modifying the document."""
-    relations = services.kernel.cross_sketch_tangencies
+    return prepare_cross_sketch_dimension_from_state(
+        services.kernel.sketches, services.kernel.cross_sketch_tangencies, sketch_id, constraint
+    )
+
+
+def prepare_cross_sketch_dimension_from_state(
+    sketches: tuple[Sketch, ...],
+    relations: tuple[CrossSketchTangency, ...],
+    sketch_id: str,
+    constraint: SketchConstraint,
+) -> tuple[dict[str, object], tuple[Sketch, ...], tuple[SketchBranchChange, ...]]:
+    """Solve against a supplied isolated drawing view without mutating its source."""
     try:
-        original, _ = resolve_tangency_component(services.kernel.sketches, relations, sketch_id)
+        original, _ = resolve_tangency_component(sketches, relations, sketch_id)
         solved = solve_tangency_component_constraint(
             original, relations, sketch_id, constraint, allow_tangency=constraint.kind == "tangent"
         )
@@ -1400,11 +2581,27 @@ def prepare_cross_sketch_drag(
     target_mm: tuple[float, float],
 ) -> tuple[tuple[Sketch, ...], tuple[Sketch, ...], tuple[CrossSketchRef, ...]]:
     """Preview an owned handle and all tangent sketches without changing history."""
-    relations = services.kernel.cross_sketch_tangencies
+    return prepare_cross_sketch_drag_from_state(
+        services,
+        services.kernel.sketches,
+        services.kernel.cross_sketch_tangencies,
+        sketch_id,
+        reference,
+        target_mm,
+    )
+
+
+def prepare_cross_sketch_drag_from_state(
+    services: AppServices,
+    sketches: tuple[Sketch, ...],
+    relations: tuple[CrossSketchTangency, ...],
+    sketch_id: str,
+    reference: SketchGeometryReference,
+    target_mm: tuple[float, float],
+) -> tuple[tuple[Sketch, ...], tuple[Sketch, ...], tuple[CrossSketchRef, ...]]:
+    """Preview a handle using a supplied isolated drawing state."""
     try:
-        original, selected = resolve_tangency_component(
-            services.kernel.sketches, relations, sketch_id
-        )
+        original, selected = resolve_tangency_component(sketches, relations, sketch_id)
         source = next(sketch for sketch in original if sketch.sketch_id == sketch_id)
         result = services.kernel.preview_sketch_drag(source, reference, target_mm)
         if result.status != "success" or result.sketch is None:
@@ -1528,7 +2725,23 @@ def commit_cross_sketch_dimension(
             (
                 ReplayAppend(
                     "drawing.sketch.revise",
-                    50
+                    64
+                    if revisions_include_curve_point_ids(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 56
+                    if revisions_require_normal_side_preservation(
+                        services, cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 55
+                    if revisions_include_ellipses(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 53
+                    if revisions_include_dimension_tolerances(
+                        cast("Sequence[Mapping[str, object]]", params["revisions"])
+                    )
+                    else 50
                     if revisions_include_dimension_styles(
                         cast("Sequence[Mapping[str, object]]", params["revisions"])
                     )
@@ -1552,7 +2765,16 @@ def commit_cross_sketch_dimension(
                 ),
             ),
             False,
-            target_archive_version=6 if loaded.document.archive_version < 6 else None,
+            target_archive_version=(
+                8
+                if loaded.document.archive_version < 8
+                and revisions_include_curve_point_ids(
+                    cast("Sequence[Mapping[str, object]]", params["revisions"])
+                )
+                else 6
+                if loaded.document.archive_version < 6
+                else None
+            ),
         ),
         current_session_identity=session_identity,
     )
@@ -1960,6 +3182,12 @@ def stage_mixed_drawing_move(
     candidate = create_replay_candidate(services, loaded, session_identity=session_identity)
 
     def revision_version(step: Sequence[Mapping[str, object]], rebind: bool, user: bool) -> int:
+        if revisions_require_normal_side_preservation(services, step):
+            return 56
+        if revisions_include_ellipses(step):
+            return 55
+        if revisions_include_dimension_tolerances(step):
+            return 53
         if revisions_include_dimension_styles(step):
             return 50
         if revisions_include_dimension_text(step):
@@ -1993,7 +3221,11 @@ def stage_mixed_drawing_move(
             (
                 ReplayAppend(
                     "sketch.create",
-                    32
+                    53
+                    if any(isinstance(entity, EllipseEntity) for entity in original_draft.entities)
+                    else 46
+                    if any(c.tolerance is not None for c in original_draft.constraints)
+                    else 32
                     if any(c.style_name is not None for c in original_draft.constraints)
                     else 30
                     if any(c.text_override is not None for c in original_draft.constraints)
@@ -2062,6 +3294,385 @@ def stage_mixed_drawing_move(
     return candidate
 
 
+def _affected_revision_sketches(
+    services: AppServices, revisions: Sequence[Mapping[str, object]]
+) -> set[str]:
+    """Include sketches reached through associative-array propagation."""
+    affected = {
+        identity
+        for revision in revisions
+        if isinstance((identity := revision.get("sketch_id")), str)
+    }
+    while True:
+        before = len(affected)
+        for array in services.kernel.associative_arrays:
+            if any(source.sketch_id in affected for source in array.sources):
+                affected.update(member.target.sketch_id for member in array.members)
+                affected.update(output.target.sketch_id for output in array.extra_outputs)
+            for member in array.members:
+                replacement = member.replacement
+                if replacement is not None and (
+                    replacement.source.sketch_id in affected
+                    or (
+                        replacement.anchor_source is not None
+                        and replacement.anchor_source.sketch_id in affected
+                    )
+                ):
+                    affected.add(member.target.sketch_id)
+            for output in array.extra_outputs:
+                if (
+                    output.source.sketch_id in affected
+                    or output.anchor_source.sketch_id in affected
+                ):
+                    affected.add(output.target.sketch_id)
+        if len(affected) == before:
+            return affected
+
+
+def revisions_require_attachment_protection(
+    services: AppServices, revisions: Sequence[Mapping[str, object]]
+) -> bool:
+    """Whether a changed sketch has attached datum or frame geometry."""
+    sketch_ids = _affected_revision_sketches(services, revisions)
+    return any(
+        attachment is not None and attachment.sketch_id in sketch_ids
+        for item in (
+            *services.kernel.drawing_datum_identifiers,
+            *services.kernel.drawing_tolerance_frames,
+        )
+        for attachment in (
+            item.attachment if isinstance(item, DatumIdentifier) else item.leader_attachment,
+        )
+    )
+
+
+def exact_attached_polyline_reorder_maps(
+    services: AppServices, before: Sequence[Sketch], after: Sequence[Sketch]
+) -> tuple[tuple[dict[str, object], ...], bool, int]:
+    """Derive maps only for uniquely identifiable, unchanged polyline paths."""
+    from mycad.core.geometric_tolerance_topology import (
+        PolylineTopologyMap,
+        associative_topology_entities,
+        has_internal_reorder_dependents,
+        rebind_array_base,
+        simple_array_reorder_chain,
+        simple_array_reorder_members,
+        stable_array_base_ids,
+        validate_topology_constraint_rebinding,
+    )
+
+    associated = associative_topology_entities(services.kernel.associative_arrays, ())
+    attachments = {
+        (attachment.sketch_id, attachment.reference.entity_id)
+        for item in (
+            *services.kernel.drawing_datum_identifiers,
+            *services.kernel.drawing_tolerance_frames,
+        )
+        for attachment in (
+            item.attachment if isinstance(item, DatumIdentifier) else item.leader_attachment,
+        )
+        if attachment is not None
+    }
+    tangent_entities = {
+        (reference.sketch_id, reference.entity_id)
+        for relation in services.kernel.cross_sketch_tangencies
+        for reference in (relation.first, relation.second)
+    }
+    after_by_id = {sketch.sketch_id: sketch for sketch in after}
+    records: list[dict[str, object]] = []
+    requires_base_rebind = False
+    array_proof_version = 0
+    for original in before:
+        revised = after_by_id.get(original.sketch_id)
+        if revised is None:
+            continue
+        revised_entities = {entity.entity_id: entity for entity in revised.entities}
+        constrained = {
+            reference.entity_id
+            for constraint in (*original.constraints, *revised.constraints)
+            for reference in constraint.references
+        }
+        for source in original.entities:
+            if not isinstance(source, PolylineEntity):
+                continue
+            key = (original.sketch_id, source.entity_id)
+            target = revised_entities.get(source.entity_id)
+            if (
+                not isinstance(target, PolylineEntity)
+                or source.points_mm == target.points_mm
+                or len(source.points_mm) != len(target.points_mm)
+                or len(set(target.points_mm)) != len(target.points_mm)
+            ):
+                continue
+            positions = {point: index for index, point in enumerate(target.points_mm)}
+            try:
+                if source.entity_id in constrained:
+                    validate_topology_constraint_rebinding(
+                        original, revised, frozenset((source.entity_id,))
+                    )
+                mapping = PolylineTopologyMap(
+                    source.entity_id,
+                    tuple(positions[point] for point in source.points_mm),
+                    len(target.points_mm),
+                    source.closed,
+                )
+                mapping.validate_exact_reorder(source, target)
+                members: tuple[tuple[ArrayEntityRef, ArrayEntityRef], ...] = ()
+                changed_bases: set[str] = set()
+                chain_proof_version = 0
+                if key in associated:
+                    stable_bases = set(
+                        stable_array_base_ids(
+                            services.kernel.associative_arrays,
+                            before,
+                            after,
+                            {key: mapping},
+                        )
+                    )
+                    for array in services.kernel.associative_arrays:
+                        base = array.base_point
+                        if base is None or base.source is None:
+                            continue
+                        if (base.source.sketch_id, base.source.entity_id) != key:
+                            continue
+                        updated_array = rebind_array_base(array, original, revised, mapping)
+                        if updated_array != array:
+                            stable_bases.add(array.array_id)
+                            changed_bases.add(array.array_id)
+                    try:
+                        members = simple_array_reorder_members(
+                            services.kernel.associative_arrays,
+                            frozenset((key,)),
+                            stable_anchor_sources=(
+                                frozenset((key,))
+                                if source.points_mm[0] == target.points_mm[0]
+                                else frozenset()
+                            ),
+                            stable_base_arrays=frozenset(stable_bases),
+                            allow_stable_replacements=True,
+                            allow_stable_extra_outputs=True,
+                            allow_reordered_extra_outputs=True,
+                            allow_independent_extra_sources=True,
+                            allow_replacement_source=True,
+                        )
+                        if has_internal_reorder_dependents(
+                            services.kernel.associative_arrays, members
+                        ):
+                            raise ValueError("阵列内部来源需要逐层证明。")
+                    except ValueError:
+                        stable_anchors: frozenset[tuple[str, str]] = (
+                            frozenset((key,))
+                            if source.points_mm[0] == target.points_mm[0]
+                            else frozenset()
+                        )
+                        stable_vertices = {
+                            key: frozenset(
+                                index
+                                for index, new_index in enumerate(mapping.old_to_new)
+                                if index == new_index
+                            )
+                        }
+                        for proof_version in range(66, 77):
+                            try:
+                                members = simple_array_reorder_chain(
+                                    services.kernel.associative_arrays,
+                                    frozenset((key,)),
+                                    stable_anchor_sources=(
+                                        stable_anchors if proof_version >= 67 else frozenset()
+                                    ),
+                                    allow_stable_bases=proof_version >= 68,
+                                    stable_base_vertices=(
+                                        stable_vertices if proof_version >= 69 else None
+                                    ),
+                                    allow_base_rebinding=proof_version >= 70,
+                                    allow_unchanged_replacements=proof_version >= 71,
+                                    allow_reordered_replacements=proof_version >= 72,
+                                    allow_extra_outputs=proof_version >= 73,
+                                    allow_simultaneous_replacements=proof_version >= 74,
+                                    defer_affected_dependencies=proof_version >= 75,
+                                    allow_mixed_replacement_extras=proof_version >= 76,
+                                    known_stable_base_arrays=(
+                                        frozenset(stable_bases)
+                                        if proof_version >= 75
+                                        else frozenset()
+                                    ),
+                                )
+                            except ValueError:
+                                continue
+                            chain_proof_version = proof_version
+                            break
+                        else:
+                            raise ValueError("阵列拓扑无法安全证明。")
+
+                member_keys = {(member.sketch_id, member.entity_id) for _source, member in members}
+                if key not in attachments and not member_keys & (attachments | tangent_entities):
+                    continue
+                if key in associated and chain_proof_version:
+                    array_proof_version = max(array_proof_version, chain_proof_version)
+                if member_keys & tangent_entities:
+                    first, second = mapping.old_to_new[:2]
+                    segment_count = mapping.new_count if mapping.closed else mapping.new_count - 1
+                    forward = (
+                        first is not None
+                        and second is not None
+                        and first < segment_count
+                        and (first + 1) % mapping.new_count == second
+                    )
+                    array_proof_version = max(array_proof_version, 77 if forward else 78)
+                    if any(
+                        key
+                        in {
+                            (relation.first.sketch_id, relation.first.entity_id),
+                            (relation.second.sketch_id, relation.second.entity_id),
+                        }
+                        and any(
+                            (ref.sketch_id, ref.entity_id) in member_keys
+                            for ref in (relation.first, relation.second)
+                        )
+                        for relation in services.kernel.cross_sketch_tangencies
+                    ):
+                        array_proof_version = max(array_proof_version, 79)
+                if key in associated and changed_bases:
+                    requires_base_rebind = True
+                if key in associated and any(
+                    member.replacement is not None
+                    and (
+                        member.replacement.source.sketch_id,
+                        member.replacement.source.entity_id,
+                    )
+                    == key
+                    for array in services.kernel.associative_arrays
+                    for member in array.members
+                ):
+                    array_proof_version = max(array_proof_version, 65)
+                if key in associated and any(
+                    any((ref.sketch_id, ref.entity_id) == key for ref in array.sources)
+                    and any(member.replacement is not None for member in array.members)
+                    for array in services.kernel.associative_arrays
+                ):
+                    array_proof_version = max(array_proof_version, 59)
+                if key in associated and any(
+                    any((ref.sketch_id, ref.entity_id) == key for ref in array.sources)
+                    and array.extra_outputs
+                    for array in services.kernel.associative_arrays
+                ):
+                    array_proof_version = max(array_proof_version, 60)
+                if key in associated and any(
+                    any(
+                        (output.source.sketch_id, output.source.entity_id) == key
+                        for output in array.extra_outputs
+                    )
+                    for array in services.kernel.associative_arrays
+                ):
+                    array_proof_version = max(array_proof_version, 61)
+                if key in associated and any(
+                    any(
+                        (output.source.sketch_id, output.source.entity_id) == key
+                        for output in array.extra_outputs
+                    )
+                    and all((ref.sketch_id, ref.entity_id) != key for ref in array.sources)
+                    for array in services.kernel.associative_arrays
+                ):
+                    array_proof_version = max(array_proof_version, 62)
+            except (KeyError, ValueError):
+                continue
+            records.append({"sketch_id": original.sketch_id, "mapping": mapping.to_mapping()})
+    if len(records) > 1 and services.kernel.associative_arrays:
+        combined_maps = {
+            (cast("str", record["sketch_id"]), mapping.entity_id): mapping
+            for record in records
+            for mapping in (PolylineTopologyMap.from_mapping(record["mapping"]),)
+        }
+        original_by_id = {sketch.sketch_id: sketch for sketch in before}
+        combined_stable: set[tuple[str, str]] = set()
+        for sketch_id, entity_id in combined_maps:
+            old_sketch = original_by_id[sketch_id]
+            new_sketch = after_by_id[sketch_id]
+            old = next(item for item in old_sketch.entities if item.entity_id == entity_id)
+            new = next(item for item in new_sketch.entities if item.entity_id == entity_id)
+            if (
+                isinstance(old, PolylineEntity)
+                and isinstance(new, PolylineEntity)
+                and old.points_mm[0] == new.points_mm[0]
+            ):
+                combined_stable.add((sketch_id, entity_id))
+        vertices = {
+            key: frozenset(
+                index for index, new_index in enumerate(mapping.old_to_new) if index == new_index
+            )
+            for key, mapping in combined_maps.items()
+        }
+
+        def prove_combined(*, simultaneous: bool, defer: bool = False, mixed: bool = False) -> None:
+            edges = simple_array_reorder_chain(
+                services.kernel.associative_arrays,
+                frozenset(combined_maps),
+                stable_anchor_sources=frozenset(combined_stable),
+                allow_stable_bases=True,
+                stable_base_vertices=vertices,
+                allow_base_rebinding=True,
+                allow_unchanged_replacements=True,
+                allow_reordered_replacements=True,
+                allow_extra_outputs=True,
+                allow_simultaneous_replacements=simultaneous,
+                defer_affected_dependencies=defer,
+                allow_mixed_replacement_extras=mixed,
+                known_stable_base_arrays=(
+                    stable_array_base_ids(
+                        services.kernel.associative_arrays, before, after, combined_maps
+                    )
+                    if defer
+                    else frozenset()
+                ),
+            )
+            targets = [target for _source, target in edges]
+            if len(targets) != len(set(targets)):
+                raise ValueError("链式阵列依赖顺序不明确。")
+
+        try:
+            prove_combined(simultaneous=False)
+        except ValueError:
+            try:
+                prove_combined(simultaneous=True)
+            except ValueError:
+                try:
+                    prove_combined(simultaneous=True, defer=True)
+                except ValueError:
+                    try:
+                        prove_combined(simultaneous=True, defer=True, mixed=True)
+                    except ValueError:
+                        pass
+                    else:
+                        array_proof_version = max(array_proof_version, 76)
+                else:
+                    array_proof_version = max(array_proof_version, 75)
+            else:
+                array_proof_version = max(array_proof_version, 74)
+    return tuple(records), requires_base_rebind, array_proof_version
+
+
+def revisions_require_normal_side_preservation(
+    services: AppServices, revisions: Sequence[Mapping[str, object]]
+) -> bool:
+    """Whether a changed sketch owns geometry with a constrained annotation leader."""
+    sketch_ids = _affected_revision_sketches(services, revisions)
+    for item in (
+        *services.kernel.drawing_datum_identifiers,
+        *services.kernel.drawing_tolerance_frames,
+    ):
+        attachment = (
+            item.attachment if isinstance(item, DatumIdentifier) else item.leader_attachment
+        )
+        surface = item.surface_indication
+        if (
+            attachment is not None
+            and attachment.sketch_id in sketch_ids
+            and (item.leader_auto_normal or (surface is not None and surface.auto_normal))
+        ):
+            return True
+    return False
+
+
 def revisions_include_curved_polylines(revisions: Sequence[Mapping[str, object]]) -> bool:
     """Determine whether frozen revisions require the curved-polyline schema."""
     for revision in revisions:
@@ -2071,6 +3682,39 @@ def revisions_include_curved_polylines(revisions: Sequence[Mapping[str, object]]
         for value in cast("Sequence[object]", raw):
             if isinstance(value, Mapping) and cast("Mapping[str, object]", value).get("bulges"):
                 return True
+    return False
+
+
+def sketch_has_curve_point_ids(sketch: Sketch) -> bool:
+    """Whether a frozen sketch requires identity-aware command versions."""
+    return any(
+        isinstance(entity, PolylineEntity | SplineEntity) and bool(entity.point_ids)
+        for entity in sketch.entities
+    )
+
+
+def revisions_include_curve_point_ids(revisions: Sequence[Mapping[str, object]]) -> bool:
+    """Detect identity-bearing curve data in a frozen multi-sketch solution."""
+    for revision in revisions:
+        raw = revision.get("entities")
+        if not isinstance(raw, list | tuple):
+            continue
+        for value in cast("Sequence[object]", raw):
+            if isinstance(value, Mapping) and cast("Mapping[str, object]", value).get("point_ids"):
+                return True
+    return False
+
+
+def revisions_include_ellipses(revisions: Sequence[Mapping[str, object]]) -> bool:
+    """Identify revisions that require the ellipse-capable entity schema."""
+    for revision in revisions:
+        raw = revision.get("entities")
+        if isinstance(raw, list | tuple) and any(
+            isinstance(value, Mapping)
+            and cast("Mapping[str, object]", value).get("kind") == "ellipse"
+            for value in cast("Sequence[object]", raw)
+        ):
+            return True
     return False
 
 
@@ -2094,6 +3738,18 @@ def revisions_include_dimension_styles(revisions: Sequence[Mapping[str, object]]
         raw = revision.get("constraints")
         if isinstance(raw, list | tuple) and any(
             isinstance(value, Mapping) and "style_name" in value
+            for value in cast("Sequence[object]", raw)
+        ):
+            return True
+    return False
+
+
+def revisions_include_dimension_tolerances(revisions: Sequence[Mapping[str, object]]) -> bool:
+    """Identify revisions requiring structured dimension-tolerance fields."""
+    for revision in revisions:
+        raw = revision.get("constraints")
+        if isinstance(raw, list | tuple) and any(
+            isinstance(value, Mapping) and "tolerance" in value
             for value in cast("Sequence[object]", raw)
         ):
             return True
@@ -2569,7 +4225,9 @@ def stage_mixed_drawing_timeline(
         appends: list[ReplayAppend] = [
             ReplayAppend(
                 "sketch.create",
-                32
+                53
+                if any(isinstance(entity, EllipseEntity) for entity in original_draft.entities)
+                else 32
                 if any(item.style_name is not None for item in original_draft.constraints)
                 else 30
                 if any(item.text_override is not None for item in original_draft.constraints)
@@ -2745,7 +4403,13 @@ def stage_mixed_drawing_timeline(
             appends.append(
                 ReplayAppend(
                     "drawing.sketch.revise",
-                    50
+                    56
+                    if revisions_require_normal_side_preservation(services, revisions)
+                    else 55
+                    if revisions_include_ellipses(revisions)
+                    else 53
+                    if revisions_include_dimension_tolerances(revisions)
+                    else 50
                     if revisions_include_dimension_styles(revisions)
                     else 48
                     if revisions_include_dimension_text(revisions)

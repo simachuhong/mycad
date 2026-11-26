@@ -15,6 +15,7 @@ from mycad.core.polyline_curves import polyline_arc_segment
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -393,6 +394,21 @@ def project_coplanar_entity(
         return replace(entity, position_mm=project(entity.position_mm))
     if isinstance(entity, SplineEntity):
         return replace(entity, control_points_mm=tuple(map(project, entity.control_points_mm)))
+    if isinstance(entity, EllipseEntity):
+        center = project(entity.center_mm)
+        angle = math.radians(entity.rotation_deg)
+        endpoint = project(
+            (entity.center_mm[0] + math.cos(angle), entity.center_mm[1] + math.sin(angle))
+        )
+        rotation = math.degrees(math.atan2(endpoint[1] - center[1], endpoint[0] - center[0]))
+        normal_dot = _plane_normal_dot(source, target)
+        return replace(
+            entity,
+            center_mm=center,
+            rotation_deg=rotation,
+            start_angle_deg=entity.start_angle_deg if normal_dot > 0 else -entity.start_angle_deg,
+            sweep_angle_deg=entity.sweep_angle_deg if normal_dot > 0 else -entity.sweep_angle_deg,
+        )
     first, opposite = entity.first_corner_mm, entity.opposite_corner_mm
     corners = (first, (opposite[0], first[1]), opposite, (first[0], opposite[1]))
     return PolylineEntity(
@@ -1167,6 +1183,8 @@ def map_transformed_rectangle_segments(
     previous: RectangleEntity,
     updated: SketchEntity,
     transform: Callable[[Point2D], Point2D],
+    *,
+    adaptive_tolerance: bool = False,
 ) -> tuple[tuple[int, bool], ...]:
     """Prove each transformed rectangle edge's unique index and direction.
 
@@ -1192,6 +1210,9 @@ def map_transformed_rectangle_segments(
     new_lines = cast("tuple[LineEntity, ...]", new_edges)
     scale = max(math.dist(edge.start_mm, edge.end_mm) for edge in new_lines)
     tolerance = max(1e-7, scale * 1e-10)
+    if adaptive_tolerance:
+        shortest = min(math.dist(edge.start_mm, edge.end_mm) for edge in new_lines)
+        tolerance = min(tolerance, shortest * 0.25)
     mappings: list[tuple[int, bool]] = []
     for edge in old_lines:
         start, end = transform(edge.start_mm), transform(edge.end_mm)
@@ -1339,6 +1360,7 @@ def rebind_committed_tangencies(
     allow_retained_tangent_fragments: bool = False,
     allow_split_line_fragments: bool = False,
     allow_split_arc_fragments: bool = False,
+    adaptive_rectangle_tolerance: bool = False,
 ) -> tuple[CrossSketchTangency, ...]:
     """Rebind proven segments, optionally allowing uniquely containing line extensions."""
     before = {
@@ -1359,7 +1381,12 @@ def rebind_committed_tangencies(
         old, new = before.get(key), after.get(key)
         if key in transforms or not isinstance(old, RectangleEntity) or new is None:
             raise ValueError("矩形变换依据重复或引用无效。")
-        transforms[key] = (evidence, map_transformed_rectangle_segments(old, new, evidence.apply))
+        transforms[key] = (
+            evidence,
+            map_transformed_rectangle_segments(
+                old, new, evidence.apply, adaptive_tolerance=adaptive_rectangle_tolerance
+            ),
+        )
     curve_proofs: dict[tuple[str, str], RectangleTransformEvidence] = {}
     for evidence in polyline_transforms:
         key = (evidence.reference.sketch_id, evidence.reference.entity_id)
@@ -1538,6 +1565,8 @@ def rebind_committed_tangencies_for_edit(
     rectangle_transforms: tuple[RectangleTransformEvidence, ...] = (),
     polyline_transforms: tuple[RectangleTransformEvidence, ...] = (),
     line_transforms: tuple[RectangleTransformEvidence, ...] = (),
+    *,
+    adaptive_rectangle_tolerance: bool = False,
 ) -> tuple[tuple[CrossSketchTangency, ...], int]:
     """Use the oldest applicable rebind rule and return its minimum command version."""
     before_ids = {
@@ -1600,6 +1629,7 @@ def rebind_committed_tangencies_for_edit(
                 allow_retained_tangent_fragments=fragments,
                 allow_split_line_fragments=split_lines,
                 allow_split_arc_fragments=split_arcs,
+                adaptive_rectangle_tolerance=adaptive_rectangle_tolerance,
             )
             return result, version
         except ValueError:
@@ -2056,6 +2086,8 @@ def rebind_rectangle_local_constraints(
     sketch: Sketch,
     updated: SketchEntity,
     evidence: RectangleTransformEvidence,
+    *,
+    adaptive_tolerance: bool = False,
 ) -> tuple[SketchConstraint, ...]:
     """Map local rectangle references to the corresponding transformed edges and vertices."""
     previous = next(
@@ -2065,7 +2097,9 @@ def rebind_rectangle_local_constraints(
         previous, RectangleEntity
     ):
         raise ValueError("矩形变换依据引用无效。")
-    mapping = map_transformed_rectangle_segments(previous, updated, evidence.apply)
+    mapping = map_transformed_rectangle_segments(
+        previous, updated, evidence.apply, adaptive_tolerance=adaptive_tolerance
+    )
     result: list[SketchConstraint] = []
     for constraint in sketch.constraints:
         references: list[SketchGeometryReference] = []
@@ -2126,6 +2160,8 @@ def rebind_rectangle_constraints_for_sketch(
     previous: Sketch,
     updated: Sketch,
     transforms: tuple[RectangleTransformEvidence, ...],
+    *,
+    adaptive_tolerance: bool = False,
 ) -> tuple[SketchConstraint, ...]:
     """Compute the only permitted local-constraint changes for rectangle transforms."""
     constraints = previous.constraints
@@ -2137,7 +2173,10 @@ def rebind_rectangle_constraints_for_sketch(
         if entity is None:
             raise ValueError("矩形变换目标不存在。")
         constraints = rebind_rectangle_local_constraints(
-            replace(previous, constraints=constraints), entity, evidence
+            replace(previous, constraints=constraints),
+            entity,
+            evidence,
+            adaptive_tolerance=adaptive_tolerance,
         )
     return constraints
 

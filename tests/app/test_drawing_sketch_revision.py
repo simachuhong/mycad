@@ -15,6 +15,48 @@ from mycad.core.replay_proposal import ReplayAppend, ReplayChangeSet
 from mycad.core.sketch import LineEntity, PointEntity, Sketch, WorkPlaneFrame
 
 
+@pytest.mark.parametrize("operation", ["create", "revise"])
+def test_existing_sketch_command_versions_reject_curve_point_ids(operation: str) -> None:
+    from mycad.core.geometric_tolerance_topology import legacy_curve_point_identities
+    from mycad.core.sketch import PolylineEntity
+
+    services = app.build_app(discoverers=())
+    loaded = app.new_document(services, document_type="drawing2d")
+    entity = PolylineEntity(uuid4().hex, ((0, 0), (10, 0), (10, 10)))
+    sketch = Sketch(uuid4().hex, WorkPlaneFrame.xy(), (entity,))
+    updated = replace(
+        sketch,
+        entities=(
+            replace(
+                entity,
+                point_ids=legacy_curve_point_identities(entity.entity_id, "polyline", 3),
+            ),
+        ),
+    )
+    if operation == "revise":
+        app.commit_new_sketch(services, loaded, sketch, session_identity=0)
+        state = updated.to_state_mapping()
+        command = "drawing.sketch.revise"
+        params = {
+            "revisions": [
+                {
+                    "sketch_id": sketch.sketch_id,
+                    "base_state_sha256": sketch.local_state_digest(),
+                    "entities": state["entities"],
+                    "constraints": state["constraints"],
+                }
+            ]
+        }
+        version = 63
+    else:
+        command, params, version = "sketch.create", updated.to_state_mapping(), 56
+    count = loaded.document.command_count
+    with pytest.raises(ValidationError):
+        loaded.bus.execute(command, params, "local", version=version)
+    assert loaded.document.command_count == count
+    assert services.kernel.sketches == ((sketch,) if operation == "revise" else ())
+
+
 @pytest.mark.parametrize("invalid", ("center", "radius", "lost_contact", "old_version"))
 def test_tangent_circle_trim_revision_rejects_invalid_conversion(invalid: str) -> None:
     from mycad.core.sketch import ArcEntity, CircleEntity

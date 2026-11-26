@@ -19,6 +19,7 @@ from mycad.core.sketch import (
     Sketch,
     SketchEntity,
     SketchSupportFace,
+    SplineEntity,
     WorkPlaneFrame,
 )
 from mycad.core.sketch_constraints import SketchConstraint, SketchGeometryReference
@@ -32,6 +33,52 @@ ENTITY_IDS = (
     "4e4e4e4e4e4e4e4e8e4e4e4e4e4e4e4e",
     "5f5f5f5f5f5f4f5f8f5f5f5f5f5f5f5f",
 )
+
+
+@pytest.mark.parametrize("kind", ["polyline", "spline"])
+def test_curve_point_ids_round_trip_and_require_new_mapping_version(kind: str) -> None:
+    from mycad.core.geometric_tolerance_topology import legacy_curve_point_identities
+
+    points = ((0, 0), (1, 0), (2, 1), (3, 1))
+    ids = legacy_curve_point_identities(ENTITY_IDS[0], kind, len(points))
+    entity = (
+        PolylineEntity(ENTITY_IDS[0], points, point_ids=ids)
+        if kind == "polyline"
+        else SplineEntity(ENTITY_IDS[0], points, point_ids=ids)
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (entity,))
+    state = sketch.to_state_mapping()
+    assert Sketch.from_mapping(state) == sketch
+    with pytest.raises(ValueError, match="version 7"):
+        sketch.to_mapping(version=6)
+    assert Sketch.from_mapping(sketch.to_mapping(version=7)) == sketch
+
+
+def test_curve_point_ids_reject_duplicates_count_mismatch_and_cross_entity_reuse() -> None:
+    from mycad.core.geometric_tolerance_topology import legacy_curve_point_identities
+
+    points = ((0, 0), (1, 0), (2, 1), (3, 1))
+    ids = legacy_curve_point_identities(ENTITY_IDS[0], "polyline", 4)
+    with pytest.raises(ValueError):
+        PolylineEntity(ENTITY_IDS[0], points, point_ids=ids[:-1])
+    with pytest.raises(ValueError):
+        PolylineEntity(ENTITY_IDS[0], points, point_ids=(ids[0],) * 4)
+    first = PolylineEntity(ENTITY_IDS[0], points, point_ids=ids)
+    second = SplineEntity(ENTITY_IDS[1], points, point_ids=ids)
+    with pytest.raises(ValueError):
+        Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (first, second))
+
+
+def test_sketch_rejects_explicit_empty_curve_point_identity_array() -> None:
+    sketch = Sketch(
+        SKETCH_ID, WorkPlaneFrame.xy(), (PolylineEntity(ENTITY_IDS[0], ((0, 0), (1, 0))),)
+    )
+    payload = sketch.to_state_mapping()
+    entities = payload["entities"]
+    assert isinstance(entities, list)
+    entities[0]["point_ids"] = []
+    with pytest.raises(ValueError):
+        Sketch.from_mapping(payload)
 
 
 def test_oblique_workplane_maps_local_coordinates_to_world_without_qt_or_occt() -> None:
@@ -228,3 +275,51 @@ def test_dimension_revision_preserves_identity_order_and_other_constraints() -> 
         sketch.with_updated_constraint(replace(revised, kind="diameter"), sketch.entities)
     with pytest.raises(ValueError, match="dimension"):
         sketch.with_updated_constraint(fixed, sketch.entities)
+
+
+def test_far_from_origin_closed_polyline_validates_area_and_intersections() -> None:
+    origin = 1e9
+    polygon = PolylineEntity(
+        ENTITY_IDS[0],
+        (
+            (origin, origin),
+            (origin + 1, origin),
+            (origin + 1, origin + 2),
+            (origin, origin + 2),
+        ),
+        closed=True,
+    )
+    assert polygon.closed
+    with pytest.raises(ValueError, match="nonzero area"):
+        PolylineEntity(
+            ENTITY_IDS[0],
+            ((origin, origin), (origin + 1, origin), (origin + 2, origin)),
+            closed=True,
+        )
+    with pytest.raises(ValueError, match="self-intersect"):
+        PolylineEntity(
+            ENTITY_IDS[0],
+            (
+                (origin, origin),
+                (origin + 10, origin + 10),
+                (origin, origin + 8),
+                (origin + 9, origin),
+            ),
+            closed=True,
+        )
+
+
+def test_existing_far_coordinate_polygon_remains_readable() -> None:
+    # Earlier releases accepted this nearly degenerate outline due to floating-point
+    # cancellation; changing validation must not make such saved sketches unreadable.
+    polygon = PolylineEntity(
+        ENTITY_IDS[0],
+        (
+            (100000331, 100000970),
+            (100000336, 100000983),
+            (100000341, 100000996),
+        ),
+        closed=True,
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (polygon,))
+    assert Sketch.from_mapping(sketch.to_state_mapping()) == sketch

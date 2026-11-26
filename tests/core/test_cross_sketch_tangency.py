@@ -1220,6 +1220,25 @@ def test_rectangle_transformed_segment_mapping_rejects_inconsistent_outline() ->
         )
 
 
+def test_thin_rectangle_mapping_is_unique_without_weakening_proof() -> None:
+    from mycad.core.cross_sketch_tangency import map_transformed_rectangle_segments
+    from mycad.core.sketch import RectangleEntity
+
+    rectangle = RectangleEntity(uuid4().hex, (0, 0), (1e-8, 1e-3))
+    with pytest.raises(ValueError, match="唯一"):
+        map_transformed_rectangle_segments(rectangle, rectangle, lambda point: point)
+    assert map_transformed_rectangle_segments(
+        rectangle, rectangle, lambda point: point, adaptive_tolerance=True
+    ) == tuple((index, False) for index in range(4))
+    with pytest.raises(ValueError, match="唯一"):
+        map_transformed_rectangle_segments(
+            rectangle,
+            rectangle,
+            lambda point: (point[0] + 3e-9, point[1]),
+            adaptive_tolerance=True,
+        )
+
+
 @pytest.mark.parametrize("rectangle_first", [False, True])
 @pytest.mark.parametrize("edge_reversed", [False, True])
 @pytest.mark.parametrize("reflected", [False, True])

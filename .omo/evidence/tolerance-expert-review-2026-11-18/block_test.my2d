@@ -1,0 +1,898 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "238f69725c7043d285a594fe704b7648",
+            "label": "A",
+            "position_mm": [
+              24.42109375,
+              41.5078125
+            ],
+            "target_mm": [
+              27.1671875,
+              23.14921875
+            ],
+            "layer_name": "0",
+            "symbol_style": "circle",
+            "bar_direction": [
+              -1.0,
+              0.0
+            ],
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-26T02:52:21.986390+00:00",
+      "confirmed_by": "local",
+      "instance_id": "216b7a424faf4ccfbf5f72c3ef295df1"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "update_datums": [
+          {
+            "datum_id": "238f69725c7043d285a594fe704b7648",
+            "label": "A",
+            "position_mm": [
+              46.36875443052928,
+              44.203346526465026
+            ],
+            "target_mm": [
+              49.11484818052928,
+              25.844752776465025
+            ],
+            "layer_name": "0",
+            "symbol_style": "circle",
+            "bar_direction": [
+              -1.0,
+              0.0
+            ],
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-26T02:52:53.885908+00:00",
+      "confirmed_by": "local",
+      "instance_id": "99e9e84268d645d290cf7cc1fdffb1ce"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "update_datums": [
+          {
+            "datum_id": "238f69725c7043d285a594fe704b7648",
+            "label": "A",
+            "position_mm": [
+              25.275299799149344,
+              41.8687529536862
+            ],
+            "target_mm": [
+              28.021393549149344,
+              23.510159203686197
+            ],
+            "layer_name": "0",
+            "symbol_style": "circle",
+            "bar_direction": [
+              -1.0,
+              0.0
+            ],
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-26T02:52:57.285749+00:00",
+      "confirmed_by": "local",
+      "instance_id": "2d1a2448576d44ff921efcefeb85c107"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "5fba0adc639f47dfb062f0847e8ea3d8",
+            "label": "B",
+            "position_mm": [
+              -19.417453978553855,
+              14.29260502057873
+            ],
+            "target_mm": [
+              0.0,
+              11.574609375
+            ],
+            "layer_name": "0",
+            "symbol_style": "circle",
+            "bar_direction": [
+              0.0,
+              -1.0
+            ],
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-26T02:53:18.224397+00:00",
+      "confirmed_by": "local",
+      "instance_id": "2b58cf164bc04916b2358aee0bfa40b3"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "update_datums": [
+          {
+            "datum_id": "5fba0adc639f47dfb062f0847e8ea3d8",
+            "label": "B",
+            "position_mm": [
+              -20.50854566097351,
+              14.551347931731849
+            ],
+            "target_mm": [
+              -1.0910916824196555,
+              11.833352286153119
+            ],
+            "layer_name": "0",
+            "symbol_style": "circle",
+            "bar_direction": [
+              0.0,
+              -1.0
+            ],
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-26T02:53:24.997871+00:00",
+      "confirmed_by": "local",
+      "instance_id": "3ac655ad005d496997b3b028e202e849"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "remove_datums": [
+          "238f69725c7043d285a594fe704b7648"
+        ]
+      },
+      "ordinal": 5,
+      "timestamp_utc": "2026-11-26T02:54:41.279637+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6e3a60cd20ae41bd8ffe29fef08ae38f"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 31,
+      "params": {
+        "remove_datums": [
+          "5fba0adc639f47dfb062f0847e8ea3d8"
+        ]
+      },
+      "ordinal": 6,
+      "timestamp_utc": "2026-11-26T02:54:42.965174+00:00",
+      "confirmed_by": "local",
+      "instance_id": "de1e62c982b34223ac10b5f87e08eb51"
+    },
+    {
+      "id": "sketch.create",
+      "version": 58,
+      "params": {
+        "constraints": [],
+        "entities": [
+          {
+            "construction": false,
+            "entity_id": "b76eee1ec00049b7868650ed02f134c9",
+            "first_corner_mm": [
+              0.0,
+              0.0
+            ],
+            "kind": "rectangle",
+            "layer_name": "0",
+            "opposite_corner_mm": [
+              54.334375,
+              23.14921875
+            ]
+          }
+        ],
+        "frame": {
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "layers": [
+          {
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "locked": false,
+            "name": "0",
+            "visible": true
+          },
+          {
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "locked": false,
+            "name": "DIM",
+            "visible": true
+          }
+        ],
+        "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+      },
+      "ordinal": 7,
+      "timestamp_utc": "2026-11-26T05:58:28.207967+00:00",
+      "confirmed_by": "local",
+      "instance_id": "69b2a82c01964838879e43800cd99756"
+    },
+    {
+      "id": "drawing.sketch.revise",
+      "version": 79,
+      "params": {
+        "revisions": [
+          {
+            "base_state_sha256": "a26b58be5aa2c9b11c94ff097c157562d63666358cb6efdee80e4ceeff0e32ce",
+            "constraints": [],
+            "entities": [
+              {
+                "construction": false,
+                "entity_id": "b76eee1ec00049b7868650ed02f134c9",
+                "first_corner_mm": [
+                  0.0,
+                  0.0
+                ],
+                "kind": "rectangle",
+                "layer_name": "0",
+                "opposite_corner_mm": [
+                  54.334375,
+                  23.14921875
+                ]
+              },
+              {
+                "center_mm": [
+                  54.334375,
+                  11.574609375
+                ],
+                "construction": false,
+                "entity_id": "1b317be8a0b144808591e1089396bfbd",
+                "kind": "circle",
+                "layer_name": "0",
+                "radius_mm": 11.574609375
+              }
+            ],
+            "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+          }
+        ]
+      },
+      "ordinal": 8,
+      "timestamp_utc": "2026-11-26T05:58:28.208183+00:00",
+      "confirmed_by": "local",
+      "instance_id": "def40f5206b9429ba75da7a0bb28e43a"
+    },
+    {
+      "id": "drawing.sketch.revise",
+      "version": 79,
+      "params": {
+        "revisions": [
+          {
+            "base_state_sha256": "49164e956bd9b4c7ff63d6c2a9cde1a98e1c38eeaeb2d10494b92692bb48cbb9",
+            "constraints": [],
+            "entities": [
+              {
+                "construction": false,
+                "entity_id": "b76eee1ec00049b7868650ed02f134c9",
+                "first_corner_mm": [
+                  0.0,
+                  0.0
+                ],
+                "kind": "rectangle",
+                "layer_name": "0",
+                "opposite_corner_mm": [
+                  54.334375,
+                  23.14921875
+                ]
+              },
+              {
+                "center_mm": [
+                  54.334375,
+                  11.574609375
+                ],
+                "construction": false,
+                "entity_id": "1b317be8a0b144808591e1089396bfbd",
+                "kind": "arc",
+                "layer_name": "0",
+                "radius_mm": 11.574609375,
+                "start_angle_deg": 270.0,
+                "sweep_angle_deg": 180.0
+              }
+            ],
+            "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+          }
+        ]
+      },
+      "ordinal": 9,
+      "timestamp_utc": "2026-11-26T05:58:28.208404+00:00",
+      "confirmed_by": "local",
+      "instance_id": "cf24d6aca6ac412ab4a19fad61aed2db"
+    },
+    {
+      "id": "drawing.sketch.revise",
+      "version": 79,
+      "params": {
+        "revisions": [
+          {
+            "base_state_sha256": "1d467e474e86be6ba24092254a72c98e2ad0a5039f70a2fbb866a25c24990f34",
+            "constraints": [],
+            "entities": [
+              {
+                "closed": false,
+                "construction": false,
+                "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+                "kind": "polyline",
+                "layer_name": "0",
+                "points_mm": [
+                  [
+                    54.334375,
+                    23.149218749999996
+                  ],
+                  [
+                    0.0,
+                    23.14921875
+                  ],
+                  [
+                    0.0,
+                    0.0
+                  ],
+                  [
+                    54.334374999999994,
+                    0.0
+                  ]
+                ]
+              },
+              {
+                "center_mm": [
+                  54.334375,
+                  11.574609375
+                ],
+                "construction": false,
+                "entity_id": "1b317be8a0b144808591e1089396bfbd",
+                "kind": "arc",
+                "layer_name": "0",
+                "radius_mm": 11.574609375,
+                "start_angle_deg": 270.0,
+                "sweep_angle_deg": 180.0
+              }
+            ],
+            "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+          }
+        ]
+      },
+      "ordinal": 10,
+      "timestamp_utc": "2026-11-26T05:58:28.208653+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6714e5b810eb4452b3c612045a45f94c"
+    },
+    {
+      "id": "sketch.constraint.add",
+      "version": 11,
+      "params": {
+        "base_state_sha256": "b66922ca730d06e2d6f24e5e2674bc8dda7b5d32335350e0b4f58c5012ae65ce",
+        "constraint": {
+          "axis": "vertical",
+          "constraint_id": "5fbb368d79834d69a78e74236be9ddeb",
+          "driving": true,
+          "kind": "distance",
+          "layer_name": "DIM",
+          "position_mm": [
+            -18.804106074191434,
+            14.959165411347508
+          ],
+          "references": [
+            {
+              "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+              "index": 1,
+              "kind": "vertex"
+            },
+            {
+              "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+              "index": 2,
+              "kind": "vertex"
+            }
+          ],
+          "scale": 0.8,
+          "source": "user",
+          "unit": "mm",
+          "value": 23.1492
+        },
+        "degrees_of_freedom": 11,
+        "sketch_id": "12432ff30e5d471fa66bbb4799823345",
+        "solution_entities": [
+          {
+            "closed": false,
+            "construction": false,
+            "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+            "kind": "polyline",
+            "layer_name": "0",
+            "points_mm": [
+              [
+                54.334375,
+                23.149218749999996
+              ],
+              [
+                0.0,
+                23.14921875
+              ],
+              [
+                0.0,
+                1.874999999884608e-05
+              ],
+              [
+                54.334374999999994,
+                0.0
+              ]
+            ]
+          },
+          {
+            "center_mm": [
+              54.334375,
+              11.574609375
+            ],
+            "construction": false,
+            "entity_id": "1b317be8a0b144808591e1089396bfbd",
+            "kind": "arc",
+            "layer_name": "0",
+            "radius_mm": 11.574609375,
+            "start_angle_deg": 270.0,
+            "sweep_angle_deg": 180.0
+          }
+        ],
+        "solver_id": "planegcs",
+        "solver_version": "0.9.6",
+        "rebuild_consumers": true
+      },
+      "ordinal": 11,
+      "timestamp_utc": "2026-11-26T05:58:28.208830+00:00",
+      "confirmed_by": "local",
+      "instance_id": "3fd22de6ed9e41a09d6011af9ec12cfe"
+    },
+    {
+      "id": "sketch.constraint.add",
+      "version": 11,
+      "params": {
+        "base_state_sha256": "4e33d89d5d25df801157f7a0b83332b3591d60511dc54740c92848e7d57ac74e",
+        "constraint": {
+          "axis": "horizontal",
+          "constraint_id": "bf7aeb68d091419f880d88f23821baf4",
+          "driving": true,
+          "kind": "distance",
+          "layer_name": "DIM",
+          "position_mm": [
+            26.605485491955754,
+            36.08795446406474
+          ],
+          "references": [
+            {
+              "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+              "index": 0,
+              "kind": "vertex"
+            },
+            {
+              "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+              "index": 1,
+              "kind": "vertex"
+            }
+          ],
+          "scale": 0.8,
+          "source": "user",
+          "unit": "mm",
+          "value": 54.3344
+        },
+        "degrees_of_freedom": 10,
+        "sketch_id": "12432ff30e5d471fa66bbb4799823345",
+        "solution_entities": [
+          {
+            "closed": false,
+            "construction": false,
+            "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+            "kind": "polyline",
+            "layer_name": "0",
+            "points_mm": [
+              [
+                54.334375,
+                23.149218749999996
+              ],
+              [
+                -2.5000000000829914e-05,
+                23.14921875
+              ],
+              [
+                0.0,
+                1.874999999884608e-05
+              ],
+              [
+                54.334374999999994,
+                0.0
+              ]
+            ]
+          },
+          {
+            "center_mm": [
+              54.334375,
+              11.574609375
+            ],
+            "construction": false,
+            "entity_id": "1b317be8a0b144808591e1089396bfbd",
+            "kind": "arc",
+            "layer_name": "0",
+            "radius_mm": 11.574609375,
+            "start_angle_deg": 270.0,
+            "sweep_angle_deg": 180.0
+          }
+        ],
+        "solver_id": "planegcs",
+        "solver_version": "0.9.6",
+        "rebuild_consumers": true
+      },
+      "ordinal": 12,
+      "timestamp_utc": "2026-11-26T05:58:28.209001+00:00",
+      "confirmed_by": "local",
+      "instance_id": "2dea6fac49d940dcb96322197b1ec1da"
+    },
+    {
+      "id": "sketch.constraint.add",
+      "version": 11,
+      "params": {
+        "base_state_sha256": "4798eda178c5ce7a1a263cf879df83a3b7a409421c294dd0ec358ca299b71ae9",
+        "constraint": {
+          "constraint_id": "5e2252942dbf4e14bb60da48da96f194",
+          "driving": true,
+          "kind": "radius",
+          "layer_name": "DIM",
+          "position_mm": [
+            86.33260252667941,
+            34.24116462578094
+          ],
+          "references": [
+            {
+              "entity_id": "1b317be8a0b144808591e1089396bfbd",
+              "kind": "geometry"
+            }
+          ],
+          "scale": 0.8,
+          "source": "user",
+          "unit": "mm",
+          "value": 11.5746
+        },
+        "degrees_of_freedom": 9,
+        "sketch_id": "12432ff30e5d471fa66bbb4799823345",
+        "solution_entities": [
+          {
+            "closed": false,
+            "construction": false,
+            "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+            "kind": "polyline",
+            "layer_name": "0",
+            "points_mm": [
+              [
+                54.334375,
+                23.149218749999996
+              ],
+              [
+                -2.5000000000829914e-05,
+                23.14921875
+              ],
+              [
+                0.0,
+                1.874999999884608e-05
+              ],
+              [
+                54.334374999999994,
+                0.0
+              ]
+            ]
+          },
+          {
+            "center_mm": [
+              54.334375,
+              11.574609375
+            ],
+            "construction": false,
+            "entity_id": "1b317be8a0b144808591e1089396bfbd",
+            "kind": "arc",
+            "layer_name": "0",
+            "radius_mm": 11.5746,
+            "start_angle_deg": 270.0,
+            "sweep_angle_deg": 180.0
+          }
+        ],
+        "solver_id": "planegcs",
+        "solver_version": "0.9.6",
+        "rebuild_consumers": true
+      },
+      "ordinal": 13,
+      "timestamp_utc": "2026-11-26T05:58:28.209151+00:00",
+      "confirmed_by": "local",
+      "instance_id": "9003d0a9e13644e7bbe29ee35b2510a6"
+    },
+    {
+      "id": "drawing.sketch.revise",
+      "version": 79,
+      "params": {
+        "revisions": [
+          {
+            "base_state_sha256": "8bad0e43263c5ee9354103b74f8ad4b34e2b2a55bc9da8032c848819e9d7162d",
+            "constraints": [
+              {
+                "axis": "vertical",
+                "constraint_id": "5fbb368d79834d69a78e74236be9ddeb",
+                "driving": true,
+                "kind": "distance",
+                "layer_name": "DIM",
+                "position_mm": [
+                  -18.804106074191434,
+                  14.959165411347508
+                ],
+                "references": [
+                  {
+                    "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+                    "index": 1,
+                    "kind": "vertex"
+                  },
+                  {
+                    "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+                    "index": 2,
+                    "kind": "vertex"
+                  }
+                ],
+                "scale": 0.8,
+                "source": "user",
+                "unit": "mm",
+                "value": 23.1492
+              }
+            ],
+            "entities": [
+              {
+                "closed": false,
+                "construction": false,
+                "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+                "kind": "polyline",
+                "layer_name": "0",
+                "points_mm": [
+                  [
+                    54.334375,
+                    23.149218749999996
+                  ],
+                  [
+                    -2.5000000000829914e-05,
+                    23.14921875
+                  ],
+                  [
+                    0.0,
+                    1.874999999884608e-05
+                  ],
+                  [
+                    54.334374999999994,
+                    0.0
+                  ]
+                ]
+              },
+              {
+                "center_mm": [
+                  54.334375,
+                  11.574609375
+                ],
+                "construction": false,
+                "entity_id": "1b317be8a0b144808591e1089396bfbd",
+                "kind": "arc",
+                "layer_name": "0",
+                "radius_mm": 11.5746,
+                "start_angle_deg": 270.0,
+                "sweep_angle_deg": 180.0
+              }
+            ],
+            "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+          }
+        ]
+      },
+      "ordinal": 14,
+      "timestamp_utc": "2026-11-26T05:58:28.209480+00:00",
+      "confirmed_by": "local",
+      "instance_id": "fdee977782d9473b9f710b4c208e4ed5"
+    },
+    {
+      "id": "drawing.sketch.revise",
+      "version": 79,
+      "params": {
+        "revisions": [
+          {
+            "base_state_sha256": "3b8c4bf2406feedaf85f5aa4c05bb4c13cd9b712f85cbfb65413ab022d87ed30",
+            "constraints": [],
+            "entities": [
+              {
+                "closed": false,
+                "construction": false,
+                "entity_id": "7bce7d10977b42c1afcea7d0be61520a",
+                "kind": "polyline",
+                "layer_name": "0",
+                "points_mm": [
+                  [
+                    54.334375,
+                    23.149218749999996
+                  ],
+                  [
+                    -2.5000000000829914e-05,
+                    23.14921875
+                  ],
+                  [
+                    0.0,
+                    1.874999999884608e-05
+                  ],
+                  [
+                    54.334374999999994,
+                    0.0
+                  ]
+                ]
+              },
+              {
+                "center_mm": [
+                  54.334375,
+                  11.574609375
+                ],
+                "construction": false,
+                "entity_id": "1b317be8a0b144808591e1089396bfbd",
+                "kind": "arc",
+                "layer_name": "0",
+                "radius_mm": 11.5746,
+                "start_angle_deg": 270.0,
+                "sweep_angle_deg": 180.0
+              }
+            ],
+            "sketch_id": "12432ff30e5d471fa66bbb4799823345"
+          }
+        ]
+      },
+      "ordinal": 15,
+      "timestamp_utc": "2026-11-26T05:58:28.209728+00:00",
+      "confirmed_by": "local",
+      "instance_id": "51f47dd4b1b94192abdf87055172df8f"
+    },
+    {
+      "id": "drawing.objects.batch",
+      "version": 1,
+      "params": {
+        "operations": [
+          {
+            "id": "drawing.block.create",
+            "version": 1,
+            "params": {
+              "definition_id": "eaba80329f9447ce814640002bb7c625",
+              "name": "B1",
+              "entities": [
+                {
+                  "entity_id": "ead8adbe9e764b6187208034f1a32f76",
+                  "construction": false,
+                  "layer_name": "0",
+                  "kind": "polyline",
+                  "points_mm": [
+                    [
+                      0.0,
+                      11.574609379999997
+                    ],
+                    [
+                      -54.3344,
+                      11.57460938
+                    ],
+                    [
+                      -54.334375,
+                      -11.57459062
+                    ],
+                    [
+                      -7.105427357601002e-15,
+                      -11.57460937
+                    ]
+                  ],
+                  "closed": false,
+                  "point_ids": [
+                    "9af5a23a3a555b498024458593728042",
+                    "88f383f179dc5383b490187b7b34e992",
+                    "7f1b84f8719d52b4a19644f59a25f5cd",
+                    "84a34924c4c25160b01765002f166252"
+                  ]
+                },
+                {
+                  "entity_id": "6a6fd49cf7be4a2bba4331e98c69c89d",
+                  "construction": false,
+                  "layer_name": "0",
+                  "kind": "arc",
+                  "center_mm": [
+                    0.0,
+                    5.000000413701855e-09
+                  ],
+                  "radius_mm": 11.5746,
+                  "start_angle_deg": 270.0,
+                  "sweep_angle_deg": 180.0
+                }
+              ],
+              "texts": []
+            }
+          }
+        ]
+      },
+      "ordinal": 16,
+      "timestamp_utc": "2026-11-26T05:58:28.209833+00:00",
+      "confirmed_by": "local",
+      "instance_id": "0a2ffff447144740b19f070108a45792"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "9b400b22a6a24523ae9d68e2c8108d12",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

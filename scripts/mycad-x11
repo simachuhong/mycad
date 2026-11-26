@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# SPDX-FileCopyrightText: 2026 MyCAD contributors
+# SPDX-License-Identifier: Apache-2.0
+# Launch this checkout's GUI through X11/XWayland without changing other launches.
+set -eu
+
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd -- "$project_dir"
+exec env QT_QPA_PLATFORM=xcb "$project_dir/.venv/bin/mycad" gui "$@"

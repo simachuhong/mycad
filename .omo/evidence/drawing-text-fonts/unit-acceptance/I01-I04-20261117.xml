@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="17" time="10.967" timestamp="2026-11-17T12:58:57.062967+08:00" hostname="MyLaptop"><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.add-part]" time="0.008" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.add-drawing]" time="0.003" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.update-part]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.update-drawing]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.remove-part]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.remove-drawing]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.batch-part]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text.batch-drawing]" time="0.002" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text_styles.set-part]" time="0.003" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_all_text_commands_reject_non_sketch_documents[drawing.text_styles.set-drawing]" time="0.003" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_five_commands_audit_fields_survive_save_and_replay" time="0.015"><failure message="assert [0, 1, 2, 3, 4] == [1, 2, 3, 4, 5]&#10;  &#10;  At index 0 diff: 0 != 1&#10;  Use -v to get more diff">tmp_path = PosixPath('/tmp/pytest-of-sima/pytest-754/test_five_commands_audit_field0')
+
+    def test_five_commands_audit_fields_survive_save_and_replay(tmp_path: Path) -&gt; None:
+        services = app.build_app(discoverers=[])
+        loaded = app.new_workspace_document(services, kind="sketch")
+        style = TextStyle("cn", "中文", "Missing font", height_mm=4, width_factor=0.8)
+        styles = TextStyleTable((TextStyle(), style), "cn")
+        first = DrawingText(uuid4().hex, "中文 ABC", (10, 20), style_id="cn", rotation_deg=30)
+        second = DrawingText(
+            uuid4().hex,
+            "第一行\n\n第三行",
+            (3, 4),
+            kind="mtext",
+            style_id="cn",
+            align="middle_right",
+            box_width_mm=40,
+            line_spacing=1.5,
+        )
+        sequence = (
+            ("drawing.text_styles.set", styles.to_mapping()),
+            ("drawing.text.add", first.to_mapping()),
+            ("drawing.text.update", replace(first, text="新内容").to_mapping()),
+            ("drawing.text.batch", {"add": [second.to_mapping()]}),
+            ("drawing.text.remove", {"text_id": first.text_id}),
+        )
+        for command, params in sequence:
+            loaded.bus.execute(command, params, "qa-local")
+        records = loaded.document.commands
+        assert [record.id for record in records] == [command for command, _params in sequence]
+        assert [record.version for record in records] == [1] * 5
+        assert [record.params for record in records] == [params for _command, params in sequence]
+&gt;       assert [record.ordinal for record in records] == list(range(1, 6))
+E       assert [0, 1, 2, 3, 4] == [1, 2, 3, 4, 5]
+E         
+E         At index 0 diff: 0 != 1
+E         Use -v to get more diff
+
+tests/app/test_drawing_text_acceptance.py:77: AssertionError</failure></testcase><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[add-locked]" time="0.007" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[add-frozen]" time="0.013" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[update-locked]" time="0.016" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[update-frozen]" time="0.012" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[remove-locked]" time="0.014" /><testcase classname="tests.app.test_drawing_text_acceptance" name="test_locked_and_frozen_layer_reject_all_text_edits[remove-frozen]" time="0.014" /></testsuite></testsuites>

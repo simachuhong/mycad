@@ -1,0 +1,604 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 4,
+      "params": {
+        "add_frames": [
+          {
+            "frame_id": "4ef4b7958bee57c08457b653ab4d9503",
+            "rows": [
+              {
+                "characteristic": "straightness",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              100.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "45f13de328ca56e7aad65da6604e06d2",
+            "rows": [
+              {
+                "characteristic": "flatness",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              55.0,
+              100.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "00bf39aa93a9585ab6e9442b83a88b3d",
+            "rows": [
+              {
+                "characteristic": "circularity",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              110.0,
+              100.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "ff78d52a78f95fb78e6e63e256f717b9",
+            "rows": [
+              {
+                "characteristic": "cylindricity",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              85.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "c5bb7180754052e9ac9d8cac3f6f86db",
+            "rows": [
+              {
+                "characteristic": "line_profile",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              55.0,
+              85.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "6b6f56f55ca6555cb9ce98f25193c088",
+            "rows": [
+              {
+                "characteristic": "surface_profile",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              110.0,
+              85.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "3e248bc19c59555c862f901367257c45",
+            "rows": [
+              {
+                "characteristic": "parallelism",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              70.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "712dd5a38d35529eaf1eecadb112f560",
+            "rows": [
+              {
+                "characteristic": "perpendicularity",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              55.0,
+              70.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "9ca0d5e1139158489e7a8af209327c38",
+            "rows": [
+              {
+                "characteristic": "angularity",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              110.0,
+              70.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "956ff4942f2252c1a1e096843c161d27",
+            "rows": [
+              {
+                "characteristic": "position",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              55.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "2298b60323855dd29eb2b3dba70cf8c1",
+            "rows": [
+              {
+                "characteristic": "concentricity",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              55.0,
+              55.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "b804bc4c6eca5f2e90ce613b6fac1a07",
+            "rows": [
+              {
+                "characteristic": "symmetry",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              110.0,
+              55.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "510a587e77955f9a9300514a80f2aa98",
+            "rows": [
+              {
+                "characteristic": "circular_runout",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              40.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "1fd391a9ca60590497984a5e04c92fed",
+            "rows": [
+              {
+                "characteristic": "total_runout",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              55.0,
+              40.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          },
+          {
+            "frame_id": "27e430b4e89e55cbbc18761e0df57135",
+            "rows": [
+              {
+                "characteristic": "position",
+                "value": 0.12,
+                "precision": 2,
+                "diameter": true,
+                "modifier": "M",
+                "datums": [
+                  {
+                    "label": "A",
+                    "datum_id": "8d9beb669bc35cc3a7242aa650fb1c4b",
+                    "modifier": ""
+                  },
+                  {
+                    "label": "B",
+                    "datum_id": "23f63cf508bf58e2b16dda9c2d10a688",
+                    "modifier": "L"
+                  },
+                  {
+                    "label": "C",
+                    "datum_id": "e183826c631a5e0ab5fde0138ae96c4a",
+                    "modifier": ""
+                  }
+                ]
+              },
+              {
+                "characteristic": "parallelism",
+                "value": 0.08,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "L",
+                "datums": [
+                  {
+                    "label": "A",
+                    "datum_id": "8d9beb669bc35cc3a7242aa650fb1c4b",
+                    "modifier": ""
+                  }
+                ]
+              }
+            ],
+            "position_mm": [
+              0.0,
+              20.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0"
+          }
+        ],
+        "add_datums": [
+          {
+            "datum_id": "8d9beb669bc35cc3a7242aa650fb1c4b",
+            "label": "A",
+            "position_mm": [
+              0.0,
+              5.0
+            ],
+            "target_mm": [
+              0.0,
+              0.0
+            ],
+            "layer_name": "0"
+          },
+          {
+            "datum_id": "23f63cf508bf58e2b16dda9c2d10a688",
+            "label": "B",
+            "position_mm": [
+              30.0,
+              5.0
+            ],
+            "target_mm": [
+              30.0,
+              0.0
+            ],
+            "layer_name": "0"
+          },
+          {
+            "datum_id": "e183826c631a5e0ab5fde0138ae96c4a",
+            "label": "C",
+            "position_mm": [
+              60.0,
+              5.0
+            ],
+            "target_mm": [
+              60.0,
+              0.0
+            ],
+            "layer_name": "0"
+          }
+        ]
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-18T05:58:39.305807+00:00",
+      "confirmed_by": "local",
+      "instance_id": "6e545841e4184ebd9f4faccff5ccfd4a"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "d792ef3c2d5f4046b43f5eca7cf8b8a7",
+            "label": "D",
+            "position_mm": [
+              -32.532490548204144,
+              89.24326559546309
+            ],
+            "target_mm": [
+              -36.84605387523628,
+              77.40725425330808
+            ],
+            "layer_name": "0",
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-20T12:59:59.687335+00:00",
+      "confirmed_by": "local",
+      "instance_id": "502983faa8674ba384bd0f82f47b4bd6"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "bccf0794b5bb4ed18fae908f6c14a71a",
+            "label": "E",
+            "position_mm": [
+              -53.66788752362946,
+              44.69458884688088
+            ],
+            "target_mm": [
+              -51.49338374291113,
+              64.8682655954631
+            ],
+            "layer_name": "0",
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-20T14:10:45.094181+00:00",
+      "confirmed_by": "local",
+      "instance_id": "402376ade3a54739a9ff5cb5882e7a28"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "aa93cb4c6d1f4a8daaa1006434211e8c",
+            "label": "F",
+            "position_mm": [
+              -21.819293478260853,
+              29.57269021739128
+            ],
+            "target_mm": [
+              -39.246603260869534,
+              38.52853260869562
+            ],
+            "layer_name": "0",
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 3,
+      "timestamp_utc": "2026-11-20T14:39:02.050209+00:00",
+      "confirmed_by": "local",
+      "instance_id": "b2750cc5fd8046649c0af0722b358db9"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "update_datums": [
+          {
+            "datum_id": "aa93cb4c6d1f4a8daaa1006434211e8c",
+            "label": "F-E",
+            "position_mm": [
+              -21.819293478260853,
+              29.57269021739128
+            ],
+            "target_mm": [
+              -39.246603260869534,
+              38.52853260869562
+            ],
+            "layer_name": "0",
+            "layout_mode": "shared"
+          }
+        ]
+      },
+      "ordinal": 4,
+      "timestamp_utc": "2026-11-20T14:39:10.718590+00:00",
+      "confirmed_by": "local",
+      "instance_id": "4e9dc4b1399e48a88ca6e9f65d197426"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "remove_datums": [
+          "aa93cb4c6d1f4a8daaa1006434211e8c"
+        ]
+      },
+      "ordinal": 5,
+      "timestamp_utc": "2026-11-20T14:39:14.310341+00:00",
+      "confirmed_by": "local",
+      "instance_id": "b6bb1146a563428a88bb532963621c6f"
+    },
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "9bef646423f44b6bb1495cab2e555736",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "d5b9b3d7d9014e72ad95257c85389011",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "rectangle",
+            "first_corner_mm": [
+              -57.494092627599215,
+              77.43383742911149
+            ],
+            "opposite_corner_mm": [
+              -26.578449905482028,
+              65.2900519848771
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 6,
+      "timestamp_utc": "2026-11-20T14:41:17.260372+00:00",
+      "confirmed_by": "local",
+      "instance_id": "eb2c640dfd294c8a86668123b9ddca2a"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "769e7247606049cebcab00e87b5caf58",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

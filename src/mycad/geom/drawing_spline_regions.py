@@ -21,6 +21,7 @@ from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -57,7 +58,11 @@ class PlanarMeasurementRegion:
         return state == cast("object", import_module("OCP.TopAbs").TopAbs_IN)
 
 
-def _edge(entity: LineEntity | ArcEntity | CircleEntity | SplineEntity) -> Edge:
+def _edge(entity: LineEntity | ArcEntity | CircleEntity | SplineEntity | EllipseEntity) -> Edge:
+    if isinstance(entity, EllipseEntity):
+        from mycad.geom.offset_ellipse import ellipse_edge
+
+        return ellipse_edge(entity)
     if isinstance(entity, LineEntity):
         return Edge.make_line((*entity.start_mm, 0), (*entity.end_mm, 0))
     if isinstance(entity, CircleEntity):

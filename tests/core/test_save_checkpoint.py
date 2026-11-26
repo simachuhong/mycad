@@ -132,3 +132,116 @@ def test_unchanged_preparation_keeps_revision_and_redo() -> None:
     assert document.revision == revision
     bus.redo_operation()
     assert len(document.commands) == 1
+
+
+def test_checkpoint_recovery_requires_matching_drawing_guard() -> None:
+    bus, document, _kernel = make_bus()
+    checkpoint = bus.create_save_checkpoint()
+    bus.execute("demo.a", {}, "local")
+    guard = bus.acquire_drawing_write_guard()
+    revision = document.revision
+    with pytest.raises(ValidationError, match="暂存"):
+        bus.restore_save_checkpoint(checkpoint, expected_revision=revision)
+    with pytest.raises(ValidationError, match="暂存"):
+        bus.restore_save_checkpoint(
+            checkpoint, expected_revision=revision, drawing_write_guard="invalid"
+        )
+    assert len(document.commands) == 1
+    bus.restore_save_checkpoint(checkpoint, expected_revision=revision, drawing_write_guard=guard)
+    assert not document.commands
+    with pytest.raises(ValidationError, match="暂存"):
+        bus.execute("demo.a", {}, "local")
+    bus.release_drawing_write_guard(guard)
+    bus.execute("demo.a", {}, "local")
+
+
+def test_late_execute_failure_restores_operation_undo_and_redo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Callable
+    from typing import cast
+
+    bus, document, _kernel = make_bus()
+    bus.execute("demo.a", {}, "local")
+    bus.execute("demo.b", {}, "local")
+    second = document.commands[-1]
+    bus.undo_operation()
+    before = document.commands
+    revision = document.revision
+    record = cast("Callable[[object, object], None]", vars(type(bus))["_record_operation"])
+
+    def fail_after_record(state: object) -> None:
+        record(bus, state)
+        raise RuntimeError("simulated late failure")
+
+    monkeypatch.setattr(bus, "_record_operation", fail_after_record)
+    with pytest.raises(RuntimeError, match="simulated late failure"):
+        bus.execute("demo.a", {}, "local")
+    assert document.commands == before and document.revision > revision
+    assert bus.execute_rolled_back_from(revision)
+    bus.redo_operation()
+    assert document.commands[-1] == second
+    assert not bus.execute_rolled_back_from(revision)
+    bus.undo_operation()
+    bus.undo_operation()
+    assert document.commands == ()
+
+
+def test_late_redo_failure_preserves_original_undo_and_redo_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Callable
+    from typing import cast
+
+    bus, document, _kernel = make_bus()
+    bus.execute("demo.a", {}, "local")
+    bus.execute("demo.b", {}, "local")
+    original = document.commands
+    bus.undo()
+    before = document.commands
+    revision = document.revision
+    record = cast("Callable[[object, object], None]", vars(type(bus))["_record_operation"])
+
+    def fail_after_record(state: object) -> None:
+        record(bus, state)
+        raise RuntimeError("simulated late redo failure")
+
+    monkeypatch.setattr(bus, "_record_operation", fail_after_record)
+    with pytest.raises(RuntimeError, match="simulated late redo failure"):
+        bus.redo_operation()
+    assert document.commands == before and document.revision > revision
+    monkeypatch.undo()
+    bus.redo_operation()
+    assert document.commands == original
+    bus.undo_operation()
+    assert document.commands == before
+    bus.undo_operation()
+    assert document.commands == ()
+
+
+def test_late_undo_failure_keeps_original_operation_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Callable
+    from typing import cast
+
+    bus, document, _kernel = make_bus()
+    bus.execute("demo.a", {}, "local")
+    bus.execute("demo.b", {}, "local")
+    original = document.commands
+    revision = document.revision
+    advance = cast("Callable[[], None]", vars(bus)["_advance_document_revision"])
+
+    def fail_after_advance() -> None:
+        advance()
+        raise RuntimeError("simulated late undo failure")
+
+    monkeypatch.setattr(bus, "_advance_document_revision", fail_after_advance)
+    with pytest.raises(RuntimeError, match="simulated late undo failure"):
+        bus.undo_operation()
+    assert document.commands == original and document.revision > revision
+    monkeypatch.setattr(bus, "_advance_document_revision", advance)
+    bus.undo_operation()
+    assert len(document.commands) == 1
+    bus.redo_operation()
+    assert document.commands == original

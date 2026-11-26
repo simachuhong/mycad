@@ -1,0 +1,206 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "sketch.create",
+      "version": 3,
+      "params": {
+        "sketch_id": "e0313fb8b64250be981f5b2bda7cfaa3",
+        "frame": {
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u_axis": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v_axis": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "entities": [
+          {
+            "entity_id": "4f30f822db5b53229b3e69eb8457fd12",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "polyline",
+            "points_mm": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                30.0,
+                0.0
+              ],
+              [
+                30.0,
+                15.0
+              ]
+            ],
+            "closed": false
+          },
+          {
+            "entity_id": "b8db0a49fcff5d39ac367cd5a55a3674",
+            "construction": false,
+            "layer_name": "0",
+            "kind": "spline",
+            "control_points_mm": [
+              [
+                0.0,
+                -20.0
+              ],
+              [
+                10.0,
+                -12.0
+              ],
+              [
+                20.0,
+                -28.0
+              ],
+              [
+                30.0,
+                -20.0
+              ]
+            ]
+          }
+        ],
+        "constraints": []
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-19T18:29:32.171190+00:00",
+      "confirmed_by": "local",
+      "instance_id": "5aa4fe79f5674848bb4fb67a8015b746"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 28,
+      "params": {
+        "add_datums": [
+          {
+            "datum_id": "afcd15da6db05c57a24b03944bc19bf7",
+            "label": "A",
+            "position_mm": [
+              38.0,
+              10.0
+            ],
+            "target_mm": [
+              30.0,
+              0.0
+            ],
+            "layer_name": "0",
+            "attachment": {
+              "sketch_id": "e0313fb8b64250be981f5b2bda7cfaa3",
+              "reference": {
+                "entity_id": "4f30f822db5b53229b3e69eb8457fd12",
+                "kind": "vertex",
+                "index": 1
+              }
+            }
+          }
+        ],
+        "add_frames": [
+          {
+            "frame_id": "ce351c5e34c15992bbc916ca4fb6a170",
+            "rows": [
+              {
+                "characteristic": "flatness",
+                "value": 0.1,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": []
+              }
+            ],
+            "position_mm": [
+              0.0,
+              20.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "0",
+            "leader_target_mm": [
+              15.0,
+              0.0
+            ],
+            "leader_attachment": {
+              "sketch_id": "e0313fb8b64250be981f5b2bda7cfaa3",
+              "reference": {
+                "entity_id": "4f30f822db5b53229b3e69eb8457fd12",
+                "kind": "segment",
+                "index": 0
+              },
+              "parameter": 0.5,
+              "segment_count": 2
+            }
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-19T18:29:32.172473+00:00",
+      "confirmed_by": "local",
+      "instance_id": "68436eb0799241999bfd4af4e04dae2e"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "0be068d99d2f436aa27948895306f79d",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

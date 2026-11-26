@@ -37,8 +37,22 @@ from mycad.core.exceptions import (
     UnknownCommandError,
     ValidationError,
 )
-from mycad.core.handlers import CommandHandler, HandlerContext, resolve_handler
-from mycad.core.kernel_protocol import ChamferBaselineKernel, DrawingBaselineKernel, Kernel
+from mycad.core.handlers import (
+    BuiltinModelingHandler,
+    CommandHandler,
+    HandlerContext,
+    resolve_handler,
+)
+from mycad.core.kernel_protocol import (
+    ChamferBaselineKernel,
+    DatumRevisionGuard,
+    DrawingBaselineKernel,
+    DrawingBlockExplosionKernel,
+    DrawingGroupArrayConflictKernel,
+    DrawingGroupMappingKernel,
+    Kernel,
+    VersionedDatumRevisionGuard,
+)
 from mycad.core.plan import ConfirmationScope, Plan, PlanConfirmation
 from mycad.core.replay_proposal import (
     ReplayCandidateProposal,
@@ -50,6 +64,21 @@ from mycad.core.replay_proposal import (
 
 if TYPE_CHECKING:
     from mycad.commands.registry import CommandRegistry
+    from mycad.core.drawing_groups import DrawingObjectRef
+
+
+def _unmapped_membership_payload(
+    memberships: tuple[tuple[str, DrawingObjectRef], ...],
+) -> dict[str, object]:
+    return {
+        "unmapped_group_members": [
+            member.to_mapping()
+            for member in dict.fromkeys(member for _group, member in memberships)
+        ],
+        "unmapped_group_memberships": [
+            {"group_id": group, "member": member.to_mapping()} for group, member in memberships
+        ],
+    }
 
 
 @dataclass(frozen=True)
@@ -94,6 +123,8 @@ class CommandBus:
         self._operation_undo: list[_Operation] = []
         self._operation_redo: list[_Operation] = []
         self._operation_revision = document.revision
+        self._last_execute_rollback: tuple[int, int] | None = None
+        self._last_candidate_rollback: tuple[int, int] | None = None
         self._save_checkpoints: dict[str, _SaveState] = {}
         self._recovery_failure: ReplayDuringRollbackError | None = None
         self._confirmation_secret = secrets.token_bytes(32)
@@ -101,6 +132,7 @@ class CommandBus:
         self._identity_upgrade_proposal: IdentityUpgrade | None = None
         self._prepared_replay_proposals: dict[str, tuple[ReplayCandidateProposal, bool]] = {}
         self._consumed_replay_grant_nonces: set[str] = set()
+        self._drawing_write_guard: str | None = None
         # T6b's Bus-facing internals, bound once (documented "Bus-side"
         # single write paths); constant getattr bridges the conflict between
         # ruff B009 and pyright's reportPrivateUsage (direct access errors).
@@ -129,6 +161,27 @@ class CommandBus:
             getattr(document, "_replace_command_params"),  # noqa: B009
         )
 
+    def acquire_drawing_write_guard(self) -> str:
+        """Reserve source writes for an active isolated drawing session."""
+        self._ensure_healthy()
+        if self._drawing_write_guard is not None:
+            raise ValidationError("文档已有二维暂存会话。")
+        token = secrets.token_hex(32)
+        self._drawing_write_guard = token
+        return token
+
+    def release_drawing_write_guard(self, token: str) -> None:
+        if self._drawing_write_guard is None or not hmac.compare_digest(
+            self._drawing_write_guard, token
+        ):
+            raise ValidationError("二维暂存写入凭据无效。")
+        self._drawing_write_guard = None
+
+    def _ensure_drawing_write_allowed(self, token: str | None = None) -> None:
+        guard = self._drawing_write_guard
+        if guard is not None and (token is None or not hmac.compare_digest(guard, token)):
+            raise ValidationError("请先完成或取消当前二维暂存，再修改文档。")
+
     def create_save_checkpoint(self) -> str:
         """Retain document and runtime history behind a Bus-owned, one-use handle."""
         self._ensure_healthy()
@@ -148,7 +201,9 @@ class CommandBus:
         if self._save_checkpoints.pop(token, None) is None:
             raise ValidationError("save checkpoint is invalid or already consumed")
 
-    def restore_save_checkpoint(self, token: str, *, expected_revision: int) -> None:
+    def restore_save_checkpoint(
+        self, token: str, *, expected_revision: int, drawing_write_guard: str | None = None
+    ) -> None:
         """Recover a failed save without overwriting edits made after preparation.
 
         The caller serializes preparation and recovery and supplies the revision
@@ -162,7 +217,6 @@ class CommandBus:
             raise ValidationError("save checkpoint is invalid or already consumed")
         if self._document.revision != expected_revision:
             raise ValidationError("save recovery refused: document changed after preparation")
-        del self._save_checkpoints[token]
         if (
             self._snapshot_state() == state.document
             and self._redo_stack == state.redo
@@ -170,7 +224,10 @@ class CommandBus:
             and self._operation_redo == state.redo_operations
             and self._document.revision == state.revision
         ):
+            del self._save_checkpoints[token]
             return
+        self._ensure_drawing_write_allowed(drawing_write_guard)
+        del self._save_checkpoints[token]
         self._document.events.begin_transaction()
         try:
             self._restore_state(state.document)
@@ -227,6 +284,8 @@ class CommandBus:
     def _restore_operation(self, state: _OperationState, on_commit: Callable[[], None]) -> None:
         snapshot = self._snapshot_state()
         redo = copy.deepcopy(self._redo_stack)
+        operation_undo_snapshot = list(self._operation_undo)
+        operation_redo_snapshot = list(self._operation_redo)
         self._document.events.begin_transaction()
         try:
             restore_commands = cast(
@@ -244,6 +303,9 @@ class CommandBus:
             self._document.events.commit_transaction()
         except Exception as original:
             self._restore_and_rebuild(snapshot, redo, original, "operation history")
+            self._operation_undo = operation_undo_snapshot
+            self._operation_redo = operation_redo_snapshot
+            self._operation_revision = self._document.revision
             raise
 
     def _check_operation_revision(self) -> None:
@@ -254,6 +316,7 @@ class CommandBus:
     def undo_operation(self) -> None:
         """Undo one runtime operation, falling back to loaded command history."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._check_operation_revision()
         if len(self._operation_redo) >= 100:
             raise InvalidHistoryError("undo: operation redo history limit reached")
@@ -281,6 +344,7 @@ class CommandBus:
     def undo_operation_before_drawing_settings(self, identity: str, revision: int) -> None:
         """Undo a runtime operation while retaining later 2D scalar settings and their audit data."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._check_operation_revision()
         if self._document.document_type != "drawing2d" or self._document.revision != revision:
             raise InvalidHistoryError("document changed before drawing operation undo")
@@ -311,6 +375,7 @@ class CommandBus:
     def redo_operation(self) -> None:
         """Redo one runtime operation, preserving its original audit fields."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._check_operation_revision()
         if not self._operation_redo:
             before = self._operation_state()
@@ -332,6 +397,20 @@ class CommandBus:
     def is_healthy(self) -> bool:
         """Whether the geometry is known to match the committed document."""
         return self._recovery_failure is None
+
+    def execute_rolled_back_from(self, revision: int) -> bool:
+        """Confirm the latest failed execute restored this exact source revision."""
+        return self.is_healthy and self._last_execute_rollback == (
+            revision,
+            self._document.revision,
+        )
+
+    def candidate_rolled_back_from(self, revision: int) -> bool:
+        """Confirm the latest failed candidate restored this exact source revision."""
+        return self.is_healthy and self._last_candidate_rollback == (
+            revision,
+            self._document.revision,
+        )
 
     def _upgrade_signature(self, proposal: IdentityUpgrade) -> str:
         payload = json.dumps(
@@ -421,6 +500,23 @@ class CommandBus:
 
         for append in changes.appends:
             spec = self._registry.get(append.command_id, append.version)
+            if append.command_id.startswith(
+                (
+                    "drawing.text.",
+                    "drawing.group.",
+                    "drawing.objects.",
+                    "drawing.block_library.",
+                    "drawing.block.",
+                    "drawing.block_instance.",
+                    "drawing.text_styles.",
+                    "drawing.tolerance.",
+                    "drawing.reference_dimensions.",
+                )
+            ) and (
+                self._document.document_type != "drawing2d"
+                or self._document.document_kind != "sketch"
+            ):
+                raise ValidationError("文字只支持独立二维草图文档。")
             if (
                 append.command_id.startswith("drawing.raster.")
                 or "raster_batch" in append.params
@@ -714,9 +810,14 @@ class CommandBus:
         return replace(grant, signature=signature)
 
     def commit_replay_candidate(
-        self, proposal: ReplayCandidateProposal, grant: ReplayCommitGrant
+        self,
+        proposal: ReplayCandidateProposal,
+        grant: ReplayCommitGrant,
+        *,
+        drawing_write_guard: str | None = None,
     ) -> None:
         """Atomically apply a successful, source-bound candidate history."""
+        self._ensure_drawing_write_allowed(drawing_write_guard)
         identity_upgrade = self._validate_replay_candidate(proposal)
         expected_signature = hmac.new(
             self._confirmation_secret,
@@ -752,6 +853,10 @@ class CommandBus:
 
         self._consumed_replay_grant_nonces.add(grant.nonce)
         operation_before = self._prepare_operation()
+        source_revision = self._document.revision
+        self._last_candidate_rollback = None
+        operation_undo_snapshot = list(self._operation_undo)
+        operation_redo_snapshot = list(self._operation_redo)
         document_snapshot = self._snapshot_state()
         redo_snapshot = copy.deepcopy(self._redo_stack)
         self._document.events.begin_transaction()
@@ -806,16 +911,31 @@ class CommandBus:
                                 "command_version": candidate.version,
                             },
                         )
-                for command in proposal.commands[len(source_commands) :]:
-                    self._document.events.emit(
-                        "post_command",
-                        {
-                            "command_id": command.id,
-                            "command_version": command.version,
-                            "ordinal": command.ordinal,
-                        },
-                    )
-            self._rebuild()
+            unmapped_by_ordinal = self._rebuild(
+                report_unmapped_from=len(source_commands) if content_changed else None,
+                notify=False,
+            )
+            if content_changed:
+                appended = proposal.commands[len(source_commands) :]
+                transaction_memberships: list[object] = []
+                for report in unmapped_by_ordinal.values():
+                    entries = report.get("unmapped_group_memberships")
+                    if isinstance(entries, list):
+                        for entry in cast("list[object]", entries):
+                            if entry not in transaction_memberships:
+                                transaction_memberships.append(entry)
+                for command in appended:
+                    payload: dict[str, object] = {
+                        "command_id": command.id,
+                        "command_version": command.version,
+                        "ordinal": command.ordinal,
+                    }
+                    if command.ordinal in unmapped_by_ordinal:
+                        payload.update(unmapped_by_ordinal[command.ordinal])
+                    if transaction_memberships and command is appended[-1]:
+                        payload["transaction_unmapped_group_memberships"] = transaction_memberships
+                    self._document.events.emit("post_command", payload)
+            self._document.events.emit("geometry_rebuilt")
             if content_changed:
                 self._redo_stack.clear()
             from mycad.core.persistence import document_payload
@@ -840,11 +960,16 @@ class CommandBus:
                 original,
                 "replay candidate commit",
             )
+            self._operation_undo = operation_undo_snapshot
+            self._operation_redo = operation_redo_snapshot
+            self._operation_revision = self._document.revision
+            self._last_candidate_rollback = (source_revision, self._document.revision)
             raise
 
     def copy_for_document(self, document: Document) -> CommandBus:
         """Transfer redo to an identity-only session replacement with fresh grants."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         if (
             document.commands != self._document.commands
             or document.archive_version < self._document.archive_version
@@ -860,6 +985,7 @@ class CommandBus:
     def apply_identity_upgrade(self, proposal: IdentityUpgrade) -> None:
         """Adopt the signed IDs atomically; stale/cancelled proposals change nothing."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         if (
             proposal.document_id != self._document.document_id
             or proposal.revision != self._document.revision
@@ -1101,7 +1227,12 @@ class CommandBus:
     ) -> object | None:
         """Execute one command; any success clears the redo stack."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         operation_before = self._prepare_operation()
+        source_revision = self._document.revision
+        operation_undo_snapshot = list(self._operation_undo)
+        operation_redo_snapshot = list(self._operation_redo)
+        self._last_execute_rollback = None
         document_snapshot = self._snapshot_state()
         redo_snapshot = copy.deepcopy(self._redo_stack)
         handler_started = False
@@ -1172,7 +1303,30 @@ class CommandBus:
                 self._restore_without_rebuild(
                     document_snapshot, redo_snapshot, original, "execute document"
                 )
+            self._operation_undo = operation_undo_snapshot
+            self._operation_redo = operation_redo_snapshot
+            self._operation_revision = self._document.revision
+            self._last_execute_rollback = (source_revision, self._document.revision)
             raise
+
+    def _guard_datum_revision(
+        self, command_id: str, params: Mapping[str, object], version: int
+    ) -> None:
+        if isinstance(self._kernel, VersionedDatumRevisionGuard):
+            self._kernel.validate_datum_revision_versioned(command_id, params, version)
+        elif isinstance(self._kernel, DatumRevisionGuard):
+            self._kernel.validate_datum_revision(command_id, params)
+
+    def _group_array_conflicts(self) -> frozenset[tuple[str, str, str, str]]:
+        if isinstance(self._kernel, DrawingGroupArrayConflictKernel):
+            return self._kernel.drawing_group_array_conflicts
+        return frozenset()
+
+    def _guard_new_group_array_conflicts(
+        self, before: frozenset[tuple[str, str, str, str]]
+    ) -> None:
+        if self._group_array_conflicts() - before:
+            raise ValidationError("关联阵列替换来源或成员暂不支持编组。")
 
     def _execute_one(
         self,
@@ -1199,6 +1353,35 @@ class CommandBus:
         if command_id == "drawing.tangency.add" and version is None:
             version = 1
         spec = self._registry.get(command_id, version)
+        if record:
+            self._guard_datum_revision(command_id, params, spec.version)
+        if command_id.startswith(
+            (
+                "drawing.text.",
+                "drawing.group.",
+                "drawing.block_library.",
+                "drawing.block.",
+                "drawing.block_instance.",
+                "drawing.objects.",
+                "drawing.text_styles.",
+                "drawing.tolerance.",
+                "drawing.reference_dimensions.",
+            )
+        ) and (
+            self._document.document_type != "drawing2d" or self._document.document_kind != "sketch"
+        ):
+            category = (
+                "二维组"
+                if command_id.startswith("drawing.group.")
+                else "二维块"
+                if command_id.startswith(
+                    ("drawing.block_library.", "drawing.block.", "drawing.block_instance.")
+                )
+                else "二维对象组合操作"
+                if command_id.startswith("drawing.objects.")
+                else "文字"
+            )
+            raise ValidationError(f"{category}只支持独立二维草图文档。")
         if (
             record
             and command_id.startswith("drawing.raster.")
@@ -1282,8 +1465,44 @@ class CommandBus:
         )
         if on_handler_start is not None:
             on_handler_start()
+        group_array_before: frozenset[tuple[str, str, str, str]] = (
+            self._group_array_conflicts() if record else frozenset()
+        )
+        mapping_kernel = (
+            self._kernel
+            if record
+            and command_id in {"sketch.revise", "drawing.sketch.revise", "drawing.objects.batch"}
+            and isinstance(self._kernel, DrawingGroupMappingKernel)
+            else None
+        )
+        mapping_before = (
+            (mapping_kernel.sketches, mapping_kernel.drawing_groups)
+            if mapping_kernel is not None
+            else None
+        )
         try:
-            result = handler.handle(normalized, ctx)
+            if command_id == "drawing.objects.batch":
+                result = self._execute_drawing_object_batch(normalized, instance_id)
+            elif command_id == "drawing.block_instance.explode":
+                from mycad.core.drawing_block_transactions import build_block_explode_batch
+
+                kernel = self._kernel
+                if not isinstance(kernel, DrawingBlockExplosionKernel):
+                    raise ValidationError("当前内核不支持块分解。")
+                batch = build_block_explode_batch(
+                    kernel.drawing_block_definitions,
+                    kernel.drawing_block_instances,
+                    kernel.drawing_groups,
+                    kernel.drawing_layers,
+                    kernel.drawing_text_styles,
+                    normalized,
+                    reserved_ids=kernel.drawing_identity_reservations,
+                )
+                result = self._execute_drawing_object_batch(batch, instance_id)
+            else:
+                result = handler.handle(normalized, ctx)
+            if record:
+                self._guard_new_group_array_conflicts(group_array_before)
         except TopologyReferenceError as exc:
             if record and is_bound_hole(command_id, normalized) and exc.ordinal is None:
                 raise TopologyReferenceError(
@@ -1306,15 +1525,84 @@ class CommandBus:
                     instance_id=instance_id,
                 )
             )
-            self._document.events.emit(
-                "post_command",
-                {
-                    "command_id": command_id,
-                    "command_version": spec.version,
-                    "ordinal": self._document.command_count - 1,
-                },
-            )
+            payload: dict[str, object] = {
+                "command_id": command_id,
+                "command_version": spec.version,
+                "ordinal": self._document.command_count - 1,
+            }
+            if mapping_kernel is not None and mapping_before is not None:
+                from mycad.core.drawing_object_refs import unmapped_group_memberships
+
+                unmapped = unmapped_group_memberships(
+                    mapping_before[0],
+                    mapping_before[1],
+                    mapping_kernel.sketches,
+                    command_id,
+                    normalized,
+                )
+                if unmapped:
+                    payload.update(_unmapped_membership_payload(unmapped))
+            self._document.events.emit("post_command", payload)
         return result
+
+    def _execute_drawing_object_batch(
+        self, params: Mapping[str, object], instance_id: str | None
+    ) -> None:
+        """Apply whitelisted children using their registered version and validators."""
+        from mycad.core.exceptions import UnknownCommandError
+
+        allowed = {
+            "sketch.create",
+            "drawing.sketch.revise",
+            "drawing.text.add",
+            "drawing.text.update",
+            "drawing.text.remove",
+            "drawing.text.batch",
+            "drawing.text_styles.set",
+            "drawing.raster.batch",
+            "drawing.tolerance.batch",
+            "drawing.reference_dimensions.batch",
+            "drawing.group.create",
+            "drawing.group.update",
+            "drawing.group.remove",
+            "drawing.block_library.bind",
+            "drawing.block.create",
+            "drawing.block.update",
+            "drawing.block.remove",
+            "drawing.block_instance.insert",
+            "drawing.block_instance.update",
+            "drawing.block_instance.remove",
+            "drawing.layers.set",
+            "drawing.clipboard.prepare",
+        }
+        operations = cast("list[Mapping[str, object]]", params["operations"])
+        for operation in operations:
+            command_id = cast("str", operation["id"])
+            version = cast("int", operation["version"])
+            if command_id not in allowed:
+                raise ValidationError(f"复合操作不允许命令 {command_id!r}。")
+            try:
+                self._registry.get(command_id, version)
+            except UnknownCommandError as exc:
+                raise ValidationError("复合操作包含未知命令版本。") from exc
+            child_handler = resolve_handler(
+                self._handlers, command_id, version, self._registry.versions(command_id)
+            )
+            if type(child_handler) is not BuiltinModelingHandler:
+                raise ValidationError("复合操作只能使用内置处理器。")
+        for operation in operations:
+            command_id = cast("str", operation["id"])
+            version = cast("int", operation["version"])
+            child_params = cast("Mapping[str, object]", operation["params"])
+            self._guard_datum_revision(command_id, child_params, version)
+            self._execute_one(
+                command_id,
+                child_params,
+                None,
+                version=version,
+                record=False,
+                instance_id=instance_id,
+            )
 
     def _validate_n(self, action: str, n: int) -> None:
         """``n`` must be an integer >= 1 (CLI parsing is T10's concern)."""
@@ -1325,6 +1613,7 @@ class CommandBus:
     def undo(self, n: int = 1) -> None:
         """Pop the trailing ``n`` commands onto the redo stack; rebuild once."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._validate_n("undo", n)
         if n > len(self._document.commands):
             raise InvalidHistoryError(
@@ -1347,6 +1636,7 @@ class CommandBus:
     def redo(self, n: int = 1) -> None:
         """Pop ``n`` commands back from the redo stack; rebuild once."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._validate_n("redo", n)
         if n > len(self._redo_stack):
             raise InvalidHistoryError(
@@ -1381,11 +1671,38 @@ class CommandBus:
                 self._document.drawing_chamfer_angle_baseline
             )
 
-    def _rebuild(self) -> None:
+    def _rebuild(
+        self,
+        *,
+        guard_from_ordinal: int | None = None,
+        report_unmapped_from: int | None = None,
+        notify: bool = True,
+    ) -> dict[int, dict[str, object]]:
         """Reset the kernel, replay the history (record=False), notify once."""
         self._reset_kernel()
+        reports: dict[int, dict[str, object]] = {}
         for cmd in self._document.commands:
             try:
+                guarded = guard_from_ordinal is not None and cmd.ordinal >= guard_from_ordinal
+                group_array_before: frozenset[tuple[str, str, str, str]] = (
+                    self._group_array_conflicts() if guarded else frozenset()
+                )
+                if guarded:
+                    self._guard_datum_revision(cmd.id, cmd.params, cmd.version)
+                mapping_kernel = (
+                    self._kernel
+                    if report_unmapped_from is not None
+                    and cmd.ordinal >= report_unmapped_from
+                    and cmd.id
+                    in {"sketch.revise", "drawing.sketch.revise", "drawing.objects.batch"}
+                    and isinstance(self._kernel, DrawingGroupMappingKernel)
+                    else None
+                )
+                mapping_before = (
+                    (mapping_kernel.sketches, mapping_kernel.drawing_groups)
+                    if mapping_kernel is not None
+                    else None
+                )
                 self._execute_one(
                     cmd.id,
                     cmd.params,
@@ -1394,6 +1711,20 @@ class CommandBus:
                     record=False,
                     instance_id=cmd.instance_id,
                 )
+                if guarded:
+                    self._guard_new_group_array_conflicts(group_array_before)
+                if mapping_kernel is not None and mapping_before is not None:
+                    from mycad.core.drawing_object_refs import unmapped_group_memberships
+
+                    unmapped = unmapped_group_memberships(
+                        mapping_before[0],
+                        mapping_before[1],
+                        mapping_kernel.sketches,
+                        cmd.id,
+                        cmd.params,
+                    )
+                    if unmapped:
+                        reports[cmd.ordinal] = _unmapped_membership_payload(unmapped)
             except GeometryBuildError as exc:
                 if exc.ordinal is None:
                     raise GeometryBuildError(
@@ -1412,15 +1743,26 @@ class CommandBus:
                         parameter_path=exc.parameter_path,
                     ) from exc
                 raise
-        self._document.events.emit("geometry_rebuilt")
+        if notify:
+            self._document.events.emit("geometry_rebuilt")
+        return reports
 
-    def replay_for_candidate(self) -> ReplayFailure | None:
+    def replay_for_candidate(
+        self, *, guard_from_ordinal: int | None = None
+    ) -> ReplayFailure | None:
         """Replay a detached candidate and return its first structured failure."""
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         self._reset_kernel()
         last_successful_ordinal: int | None = None
         for command in self._document.commands:
             try:
+                guarded = guard_from_ordinal is not None and command.ordinal >= guard_from_ordinal
+                group_array_before: frozenset[tuple[str, str, str, str]] = (
+                    self._group_array_conflicts() if guarded else frozenset()
+                )
+                if guarded:
+                    self._guard_datum_revision(command.id, command.params, command.version)
                 self._execute_one(
                     command.id,
                     command.params,
@@ -1429,6 +1771,8 @@ class CommandBus:
                     record=False,
                     instance_id=command.instance_id,
                 )
+                if guarded:
+                    self._guard_new_group_array_conflicts(group_array_before)
             except Exception as exc:
                 parameter_path = (
                     exc.parameter_path if isinstance(exc, TopologyReferenceError) else None
@@ -1464,6 +1808,7 @@ class CommandBus:
         emitted by ``_rebuild`` itself, never re-emitted here.
         """
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         operation_before = self._prepare_operation()
         document_snapshot = self._snapshot_state()
         redo_snapshot = copy.deepcopy(self._redo_stack)
@@ -1487,7 +1832,7 @@ class CommandBus:
                 },
             )
             replay_started = True
-            self._rebuild()
+            self._rebuild(guard_from_ordinal=ordinal)
             self._advance_document_revision()
             self._redo_stack.clear()
             self._record_operation(operation_before)
@@ -1511,6 +1856,7 @@ class CommandBus:
         of already-executed steps.
         """
         self._ensure_healthy()
+        self._ensure_drawing_write_allowed()
         if scope not in ("gui", "cli"):
             raise InvalidPlanTransition(f"unsupported execution scope {scope!r}")
         if plan.status != "confirmed":

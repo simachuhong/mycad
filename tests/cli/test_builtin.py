@@ -34,6 +34,243 @@ def test_new_then_modeling_line_succeeds(
     assert "new document" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("failure", ["unavailable", "timeout", "encoding", "invalid_response"])
+def test_legacy_dxf_export_font_worker_failure_preserves_target(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import FeatureControlFrame, ToleranceRow
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    frame = FeatureControlFrame(
+        uuid4().hex, (ToleranceRow("flatness", 0.1, 2),), (20, 20), leader_target_mm=(0, 0)
+    )
+    loaded.bus.execute("drawing.tolerance.batch", {"add_frames": [frame.to_mapping()]}, "local")
+    revision = loaded.document.revision
+    target = tmp_path / "existing.dxf"
+    target.write_bytes(b"original")
+
+    def fail(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("worker", 30)
+        if failure == "encoding":
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+        if failure == "unavailable":
+            return subprocess.CompletedProcess("worker", 1, "", "missing Qt")
+        return subprocess.CompletedProcess("worker", 0, "{}", "")
+
+    monkeypatch.setattr(legacy_dxf.subprocess, "run", fail)
+    messages: list[str] = []
+    assert CliSession(services, doc=loaded, messages=messages).execute_line(f"export {target}") == 1
+    assert target.read_bytes() == b"original"
+    assert services.kernel.drawing_tolerance_frames == (frame,)
+    assert loaded.document.revision == revision
+
+
+def test_dxf_without_legacy_leaders_does_not_launch_font_worker(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import FeatureControlFrame, ToleranceRow
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    frame = FeatureControlFrame(uuid4().hex, (ToleranceRow("flatness", 0.1, 2),), (20, 20))
+    loaded.bus.execute("drawing.tolerance.batch", {"add_frames": [frame.to_mapping()]}, "local")
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("ordinary DXF export must not start the font worker")
+
+    monkeypatch.setattr(legacy_dxf.subprocess, "run", unexpected)
+    target = tmp_path / "ordinary.dxf"
+    assert CliSession(services, doc=loaded).execute_line(f"export {target}") == 0
+    assert target.exists()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "invalid_response"])
+def test_legacy_datum_font_worker_failure_preserves_target(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0))
+    loaded.bus.execute("drawing.tolerance.batch", {"add_datums": [datum.to_mapping()]}, "local")
+    revision = loaded.document.revision
+    target = tmp_path / "existing.dxf"
+    target.write_bytes(b"original")
+
+    def fail(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("worker", 30)
+        return subprocess.CompletedProcess("worker", 0, "{}", "")
+
+    monkeypatch.setattr(legacy_dxf.subprocess, "run", fail)
+    messages: list[str] = []
+    assert CliSession(services, doc=loaded, messages=messages).execute_line(f"export {target}") == 1
+    assert target.read_bytes() == b"original"
+    assert loaded.document.revision == revision
+    assert any("旧基准" in message for message in messages)
+
+
+def test_legacy_datum_without_qt_uses_warned_headless_fallback(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier
+    from mycad.formats.providers.dxf_provider import read_sketch_dxf
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0))
+    loaded.bus.execute("drawing.tolerance.batch", {"add_datums": [datum.to_mapping()]}, "local")
+    monkeypatch.setattr(
+        legacy_dxf.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            "worker", 1, "", "ModuleNotFoundError: No module named 'PySide6'"
+        ),
+    )
+    messages: list[str] = []
+    target = tmp_path / "fallback.dxf"
+    assert CliSession(services, doc=loaded, messages=messages).execute_line(f"export {target}") == 0
+    assert read_sketch_dxf(target).datum_identifiers[0].datum_id == datum.datum_id
+    assert any("桌面字体组件未安装" in message and "估算" in message for message in messages)
+
+
+@pytest.mark.parametrize("value", [[True, 5], [0, 5], [float("nan"), 5], [5], [5, 5, 5]])
+def test_legacy_datum_rejects_malformed_worker_dimensions_without_overwrite(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0))
+    loaded.bus.execute("drawing.tolerance.batch", {"add_datums": [datum.to_mapping()]}, "local")
+    response = json.dumps(
+        {
+            "anchors": {},
+            "skipped": {},
+            "bounds": {},
+            "notices": [],
+            "datum_boxes": {datum.datum_id: value},
+        }
+    )
+    monkeypatch.setattr(
+        legacy_dxf.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess("worker", 0, response, ""),
+    )
+    target = tmp_path / "existing.dxf"
+    target.write_bytes(b"original")
+    assert CliSession(services, doc=loaded).execute_line(f"export {target}") == 1
+    assert target.read_bytes() == b"original"
+
+
+def test_shared_datum_without_legacy_frames_does_not_launch_font_worker(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0), layout_mode="shared")
+    loaded.bus.execute("drawing.tolerance.batch", {"add_datums": [datum.to_mapping()]}, "local")
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("shared datum export must not start the font worker")
+
+    monkeypatch.setattr(legacy_dxf.subprocess, "run", unexpected)
+    target = tmp_path / "shared.dxf"
+    assert CliSession(services, doc=loaded).execute_line(f"export {target}") == 0
+    assert target.exists()
+
+
+def test_legacy_datum_does_not_intercept_third_party_dxf_provider(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier
+    from mycad.core.ports import ExportableKernel
+    from mycad.formats.base import FormatProvider
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0))
+    loaded.bus.execute("drawing.tolerance.batch", {"add_datums": [datum.to_mapping()]}, "local")
+
+    def write(_geometry: ExportableKernel, path: Path) -> None:
+        path.write_bytes(b"third-party")
+
+    provider = FormatProvider("custom", "test", 0, (".dxf",), False, True, "shape", write)
+    services.formats.register(provider)
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("custom DXF provider must not start the font worker")
+
+    monkeypatch.setattr(legacy_dxf.subprocess, "run", unexpected)
+    target = tmp_path / "third-party.dxf"
+    assert CliSession(services, doc=loaded).execute_line(f"export {target}") == 0
+    assert target.read_bytes() == b"third-party"
+
+
+def test_legacy_frame_and_datum_without_qt_do_not_overwrite_target(
+    services: AppServices, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    from mycad import app
+    from mycad.cli import legacy_dxf
+    from mycad.core.geometric_tolerance import DatumIdentifier, FeatureControlFrame, ToleranceRow
+
+    loaded = app.new_workspace_document(services, kind="sketch")
+    datum = DatumIdentifier(uuid4().hex, "A", (10, 10), (0, 0))
+    frame = FeatureControlFrame(
+        uuid4().hex, (ToleranceRow("flatness", 0.1, 2),), (20, 20), leader_target_mm=(0, 0)
+    )
+    loaded.bus.execute(
+        "drawing.tolerance.batch",
+        {"add_datums": [datum.to_mapping()], "add_frames": [frame.to_mapping()]},
+        "local",
+    )
+    monkeypatch.setattr(
+        legacy_dxf.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            "worker", 1, "", "ModuleNotFoundError: No module named 'PySide6'"
+        ),
+    )
+    target = tmp_path / "existing.dxf"
+    target.write_bytes(b"original")
+    assert CliSession(services, doc=loaded).execute_line(f"export {target}") == 1
+    assert target.read_bytes() == b"original"
+
+
 @pytest.mark.parametrize("suffix", [".my3d", ".my2d", ".MY3D"])
 def test_native_archive_suffix_roundtrip(session: CliSession, tmp_path: Path, suffix: str) -> None:
     archive = tmp_path / f"native{suffix}"

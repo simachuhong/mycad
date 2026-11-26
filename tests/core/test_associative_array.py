@@ -38,6 +38,66 @@ def _array(
     )
 
 
+@pytest.mark.parametrize("kind", ["polyline", "spline"])
+def test_array_spacing_preserves_independent_curve_point_identities(kind: str) -> None:
+    from mycad.core.associative_array import update_array_spacing
+    from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+    from mycad.core.sketch import PolylineEntity, SplineEntity
+
+    source_id, target_id, sketch_id = uuid4().hex, uuid4().hex, uuid4().hex
+    points = ((0, 0), (1, 0), (1, 1), (2, 1))
+    shifted = tuple((x + 5, y) for x, y in points)
+    source_ids = new_curve_point_identities(source_id, kind, 4)
+    target_ids = new_curve_point_identities(target_id, kind, 4)
+    source = (
+        PolylineEntity(source_id, points, point_ids=source_ids)
+        if kind == "polyline"
+        else SplineEntity(source_id, points, point_ids=source_ids)
+    )
+    target = (
+        PolylineEntity(target_id, shifted, point_ids=target_ids)
+        if kind == "polyline"
+        else SplineEntity(target_id, shifted, point_ids=target_ids)
+    )
+    sketch = Sketch(sketch_id, WorkPlaneFrame.xy(), (source, target))
+    origin, member = ArrayEntityRef(sketch_id, source_id), ArrayEntityRef(sketch_id, target_id)
+    array = _array(origin, member)
+    (updated,), _ = update_array_spacing((sketch,), (array,), array.array_id, 0, 8)
+    assert isinstance(updated.entities[1], PolylineEntity | SplineEntity)
+    assert updated.entities[1].point_ids == target_ids
+    assert updated.entities[0] == source
+
+
+def test_array_resize_assigns_new_curve_member_independent_identities() -> None:
+    from mycad.core.associative_array import resize_array
+    from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+    from mycad.core.sketch import PolylineEntity
+
+    source_id, target_id, sketch_id = uuid4().hex, uuid4().hex, uuid4().hex
+    points = ((0, 0), (1, 0), (1, 1))
+    source = PolylineEntity(
+        source_id, points, point_ids=new_curve_point_identities(source_id, "polyline", 3)
+    )
+    target = PolylineEntity(
+        target_id,
+        ((5, 0), (6, 0), (6, 1)),
+        point_ids=new_curve_point_identities(target_id, "polyline", 3),
+    )
+    sketch = Sketch(sketch_id, WorkPlaneFrame.xy(), (source, target))
+    origin, member = ArrayEntityRef(sketch_id, source_id), ArrayEntityRef(sketch_id, target_id)
+    array = _array(origin, member)
+    new_id = uuid4().hex
+    new_member = ArrayEntityRef(sketch_id, new_id)
+    expanded = replace(
+        array, columns=3, members=(*array.members, ArrayMember(origin, new_member, 0, 2))
+    )
+    (updated,) = resize_array((sketch,), (array,), expanded)
+    addition = updated.entities[-1]
+    assert isinstance(addition, PolylineEntity)
+    assert addition.point_ids == new_curve_point_identities(new_id, "polyline", 3)
+    assert set(addition.point_ids).isdisjoint(source.point_ids + target.point_ids)
+
+
 def test_array_extra_outputs_have_stable_identity_and_valid_dependencies() -> None:
     from mycad.core.associative_array import ArrayExtraOutput
 

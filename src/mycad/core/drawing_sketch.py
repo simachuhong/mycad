@@ -8,6 +8,7 @@ from mycad.core.drawing_projection import (
     ArcCurve,
     CurveGeometry,
     DrawingProjectionRequest,
+    EllipseCurve,
     LineCurve,
     ProjectedCurve,
     ProjectionResult,
@@ -18,6 +19,7 @@ from mycad.core.polyline_curves import polyline_curve_segments
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     PointEntity,
     PolylineEntity,
@@ -38,6 +40,17 @@ def _curves(entity: SketchEntity) -> tuple[CurveGeometry, ...]:
         return (
             ArcCurve(
                 entity.center_mm, entity.radius_mm, entity.start_angle_deg, entity.sweep_angle_deg
+            ),
+        )
+    if isinstance(entity, EllipseEntity):
+        return (
+            EllipseCurve(
+                entity.center_mm,
+                entity.major_radius_mm,
+                entity.minor_radius_mm,
+                entity.rotation_deg,
+                entity.start_angle_deg,
+                entity.sweep_angle_deg,
             ),
         )
     if isinstance(entity, PolylineEntity) and entity.bulges:

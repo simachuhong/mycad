@@ -3,10 +3,26 @@
 """Application preferences for the independent drawing workspace."""
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QPushButton,
+    QWidget,
+)
+
+from mycad.ui.font_resources import FontResourcesDialog
 
 CURSOR_STYLE_KEY = "drawing2d/cursorStyle"
 CONSTRAINT_MARKERS_KEY = "drawing2d/constraintMarkersVisible"
+DATUM_SYMBOL_STYLE_KEY = "drawing2d/defaultDatumSymbolStyle"
+
+
+def default_datum_symbol_style(settings: QSettings) -> str:
+    value = settings.value(DATUM_SYMBOL_STYLE_KEY, "rectangle")
+    return value if value in ("rectangle", "circle") else "rectangle"
 
 
 def drawing_cursor_style(settings: QSettings) -> str:
@@ -38,6 +54,10 @@ class CursorSettingsDialog(QDialog):
         self.constraint_markers.setChecked(markers_visible)
         self.constraint_markers.setToolTip("控制重合、水平、垂直等几何约束符号的显示。")
         layout.addRow("二维工作区", self.constraint_markers)
+        self.font_resources = QPushButton("字体管理…", self)
+        self.font_resources.setObjectName("fontResourcesButton")
+        self.font_resources.clicked.connect(self._open_font_resources)
+        layout.addRow("应用字体", self.font_resources)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
         )
@@ -47,3 +67,6 @@ class CursorSettingsDialog(QDialog):
 
     def selected_style(self) -> str:
         return "full" if self.cursor_style.currentData() == "full" else "short"
+
+    def _open_font_resources(self) -> None:
+        FontResourcesDialog(self).exec()

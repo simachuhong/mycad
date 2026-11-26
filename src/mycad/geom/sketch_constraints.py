@@ -15,6 +15,7 @@ from mycad.core.polyline_curves import bulge_arc, polyline_arc_segment
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     PointEntity,
     PolylineEntity,
@@ -1562,6 +1563,9 @@ def _sketch_linear_scale(sketch: Sketch) -> float:
             points.extend(entity.points_mm)
         elif isinstance(entity, RectangleEntity):
             points.extend((entity.first_corner_mm, entity.opposite_corner_mm))
+        elif isinstance(entity, EllipseEntity):
+            points.append(entity.center_mm)
+            radii.append(entity.major_radius_mm)
         else:
             points.append(entity.center_mm)
             radii.append(entity.radius_mm)
@@ -1596,6 +1600,11 @@ def _sketch_bindings(
 ) -> dict[str, _EntityBinding]:
     referenced = {ref.entity_id for ref in additional}
     referenced.update(ref.entity_id for c in sketch.constraints for ref in c.references)
+    if any(
+        isinstance(entity, EllipseEntity) and entity.entity_id in referenced
+        for entity in sketch.entities
+    ):
+        raise ValueError("椭圆暂不支持草图约束引用。")
     entities = {entity.entity_id: entity for entity in sketch.entities}
     arc_referenced = {
         ref.entity_id
@@ -1607,9 +1616,11 @@ def _sketch_bindings(
     return {
         entity.entity_id: (
             _EntityBinding(entity, (), fixed=True)
-            if isinstance(entity, PolylineEntity)
-            and entity.bulges
-            and entity.entity_id not in referenced
+            if entity.entity_id not in referenced
+            and (
+                isinstance(entity, EllipseEntity)
+                or (isinstance(entity, PolylineEntity) and entity.bulges)
+            )
             else _add_entity(
                 solver,
                 entity,
@@ -1644,6 +1655,8 @@ def _add_entity(
     polyline_arcs: bool = False,
     free_arc_angle: bool = False,
 ) -> _EntityBinding:
+    if isinstance(entity, EllipseEntity):
+        return _EntityBinding(entity, (), fixed=True)
     if isinstance(entity, PointEntity):
         return _EntityBinding(
             entity, (_add_point(solver, entity.position_mm, fixed=fixed),), fixed=fixed
@@ -1745,6 +1758,8 @@ def _add_entity(
         radius = solver.add_param(entity.radius_mm, fixed=fixed)
         circle = int(solver.add_circle(cast("PointId", center), radius))
         return _EntityBinding(entity, (center,), circle_id=circle, fixed=fixed)
+    if isinstance(entity, EllipseEntity):
+        raise ValueError("椭圆约束求解尚不支持。")
     start_radians = math.radians(entity.start_angle_deg)
     end_radians = math.radians(entity.start_angle_deg + entity.sweep_angle_deg)
     start = (
@@ -2204,6 +2219,7 @@ def _read_solved_entity(solver: PlaneGcsSketch, binding: _EntityBinding) -> Sket
             tuple(_point_value(solver, point) for point in binding.points),
             entity.construction,
             entity.layer_name,
+            entity.point_ids,
         )
     if isinstance(entity, LineEntity):
         return LineEntity(
@@ -2243,6 +2259,7 @@ def _read_solved_entity(solver: PlaneGcsSketch, binding: _EntityBinding) -> Sket
             entity.construction,
             entity.layer_name,
             bulges,
+            entity.point_ids,
         )
     if isinstance(entity, RectangleEntity):
         first = _point_value(solver, binding.points[0])

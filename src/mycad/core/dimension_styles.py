@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from mycad.core.dimension_tolerance import DimensionTolerance
 from mycad.core.sketch_layers import SKETCH_LINETYPES, STANDARD_LINEWEIGHTS_MM
 
 
@@ -40,8 +41,24 @@ class DimensionStyle:
     suppress_extension_second: bool = False
     suppress_dimension_first: bool = False
     suppress_dimension_second: bool = False
+    linear_tolerance: DimensionTolerance = DimensionTolerance()
+    angular_tolerance: DimensionTolerance = DimensionTolerance()
+    text_style_id: str | None = None
 
     def __post_init__(self) -> None:
+        text_style_id = cast("object", self.text_style_id)
+        if text_style_id is not None and (
+            not isinstance(text_style_id, str)
+            or not text_style_id
+            or text_style_id != text_style_id.strip()
+            or len(text_style_id) > 80
+            or not text_style_id.isprintable()
+        ):
+            raise ValueError("dimension text style ID must be 1–80 printable characters")
+        if not isinstance(
+            cast("object", self.linear_tolerance), DimensionTolerance
+        ) or not isinstance(cast("object", self.angular_tolerance), DimensionTolerance):
+            raise ValueError("dimension tolerances must be structured values")
         name = cast("object", self.name)
         if (
             not isinstance(name, str)
@@ -115,7 +132,7 @@ class DimensionStyle:
             object.__setattr__(self, field, float(value))
 
     def to_mapping(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "name": self.name,
             "precision": self.precision,
             "scale": self.scale,
@@ -141,6 +158,13 @@ class DimensionStyle:
             "suppress_dimension_first": self.suppress_dimension_first,
             "suppress_dimension_second": self.suppress_dimension_second,
         }
+        if self.linear_tolerance != DimensionTolerance():
+            result["linear_tolerance"] = self.linear_tolerance.to_mapping()
+        if self.angular_tolerance != DimensionTolerance():
+            result["angular_tolerance"] = self.angular_tolerance.to_mapping()
+        if self.text_style_id is not None:
+            result["text_style_id"] = self.text_style_id
+        return result
 
     @classmethod
     def from_mapping(cls, value: object) -> DimensionStyle:
@@ -170,6 +194,9 @@ class DimensionStyle:
             "suppress_extension_second",
             "suppress_dimension_first",
             "suppress_dimension_second",
+            "linear_tolerance",
+            "angular_tolerance",
+            "text_style_id",
         }
         if not base.issubset(mapping) or set(mapping) - base - extra:
             raise ValueError("dimension style must contain name, precision and scale")
@@ -198,6 +225,13 @@ class DimensionStyle:
             cast("bool", mapping.get("suppress_extension_second", False)),
             cast("bool", mapping.get("suppress_dimension_first", False)),
             cast("bool", mapping.get("suppress_dimension_second", False)),
+            DimensionTolerance.from_mapping(mapping["linear_tolerance"])
+            if "linear_tolerance" in mapping
+            else DimensionTolerance(),
+            DimensionTolerance.from_mapping(mapping["angular_tolerance"])
+            if "angular_tolerance" in mapping
+            else DimensionTolerance(),
+            cast("str | None", mapping.get("text_style_id")),
         )
 
 

@@ -124,6 +124,7 @@ class CliSession:
         doc: LoadedDocument | None = None,
         on_replace_doc: Callable[[LoadedDocument | None], None] | None = None,
         messages: list[str] | None = None,
+        font_resource_directory: Path | None = None,
     ) -> None:
         self._services = services
         self._doc: LoadedDocument | None = doc
@@ -133,6 +134,7 @@ class CliSession:
         # Message sink: None keeps the headless print behaviour; a list
         # collects the same strings for the GUI tab (pure ``execute_line``).
         self._sink: list[str] | None = messages
+        self._font_resource_directory = font_resource_directory
 
     def run_repl(self) -> int:
         """Read lines from stdin until quit/exit/EOF; errors never stop the loop.
@@ -427,11 +429,53 @@ class CliSession:
         path = Path(rest)
         try:
             provider = self._services.formats.resolve(path)
-            report = provider.write(self._services.kernel, path)
+            from mycad.formats.providers.dxf_provider import (
+                DXF_PROVIDER,
+                write_dxf_with_frame_anchors,
+            )
+
+            frames = tuple(
+                frame
+                for frame in self._services.kernel.drawing_tolerance_frames
+                if frame.leader_target_mm is not None and frame.leader_anchor_offset is None
+            )
+            datums = tuple(
+                datum
+                for datum in self._services.kernel.drawing_datum_identifiers
+                if datum.layout_mode == "legacy"
+            )
+            notices: tuple[str, ...] = ()
+            if cast("object", provider) is DXF_PROVIDER and (frames or datums):
+                from mycad.cli.legacy_dxf import LegacyQtUnavailable, legacy_layout_snapshot
+
+                try:
+                    anchors, skipped, bounds, notices, datum_snapshots = legacy_layout_snapshot(
+                        frames,
+                        self._services.kernel.drawing_text_styles,
+                        datums=datums,
+                        font_resource_directory=self._font_resource_directory,
+                    )
+                except LegacyQtUnavailable:
+                    if frames:
+                        raise
+                    report = provider.write(self._services.kernel, path)
+                    notices = ("桌面字体组件未安装；旧基准按导出字体估算，可能与画布不同。",)
+                else:
+                    report = write_dxf_with_frame_anchors(
+                        self._services.kernel,
+                        path,
+                        anchors,
+                        skipped,
+                        bounds,
+                        legacy_datum_snapshots=datum_snapshots if datums else None,
+                    )
+            else:
+                report = provider.write(self._services.kernel, path)
         except (MycadError, OSError) as exc:
             self._emit_error(exc)
             return 1
-        self._say(f"{path}\n{report}" if report is not None else str(path))
+        message = f"{path}\n{report}" if report is not None else str(path)
+        self._say("\n".join((message, *notices)))
         return 0
 
     def _cmd_meta(self, rest: str) -> int:
@@ -632,6 +676,7 @@ def execute_line(
     loaded: LoadedDocument | None,
     services: AppServices,
     on_replace_doc: Callable[[LoadedDocument | None], None],
+    font_resource_directory: Path | None = None,
 ) -> tuple[int, list[str]]:
     """Pure single-line dispatch (todo 11): parse/feedback from CliSession
     verbatim, messages returned instead of printed. Headless print behaviour
@@ -640,6 +685,12 @@ def execute_line(
     same dispatch surface, with document ownership left to the caller —
     ``new``/``open`` replacements route through ``on_replace_doc``."""
     collected: list[str] = []
-    session = CliSession(services, doc=loaded, on_replace_doc=on_replace_doc, messages=collected)
+    session = CliSession(
+        services,
+        doc=loaded,
+        on_replace_doc=on_replace_doc,
+        messages=collected,
+        font_resource_directory=font_resource_directory,
+    )
     rc = session.execute_line(line)
     return rc, collected

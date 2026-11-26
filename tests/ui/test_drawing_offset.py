@@ -137,3 +137,68 @@ def test_through_point_supports_unambiguous_polyline_and_rectangle() -> None:
     assert through_offset_distance(rectangle, (5, -2)) == pytest.approx(-2)
     with pytest.raises(ValueError):
         through_offset_distance(polyline, (11, -1))
+
+
+def test_backend_fallback_rejects_empty_selection_without_computing() -> None:
+    from mycad.core.sketch import PolylineEntity
+    from mycad.ui.drawing_offset import offset_with_backend
+
+    source = PolylineEntity(
+        "44444444444444448444444444444444", ((0, 0), (4, 0), (4, 4), (0, 4)), True
+    )
+
+    def unexpected_backend(
+        _source: PolylineEntity, _distance: float, _gap_type: int
+    ) -> tuple[PolylineEntity, ...]:
+        raise AssertionError("empty selection must not reach geometry backend")
+
+    with pytest.raises(ValueError):
+        offset_with_backend((source,), (), 1, closed_offset=unexpected_backend)
+
+
+def test_backend_fallback_rejects_duplicate_ids_and_missing_selection() -> None:
+    from mycad.core.sketch import PolylineEntity
+    from mycad.ui.drawing_offset import offset_with_backend
+
+    source = PolylineEntity(
+        "44444444444444448444444444444444", ((0, 0), (4, 0), (4, 4), (0, 4)), True
+    )
+
+    def unexpected_backend(
+        _source: PolylineEntity, _distance: float, _gap_type: int
+    ) -> tuple[PolylineEntity, ...]:
+        raise AssertionError("invalid identities must not reach geometry backend")
+
+    with pytest.raises(ValueError):
+        offset_with_backend(
+            (source, source), (source.entity_id, "missing"), 1, closed_offset=unexpected_backend
+        )
+
+
+@pytest.mark.parametrize(("gap_type", "expected"), [(1, -math.sqrt(5)), (2, -3 / math.sqrt(2))])
+def test_through_point_on_outer_corner_join(gap_type: int, expected: float) -> None:
+    from mycad.core.sketch import PolylineEntity
+    from mycad.geom.drawing_offset import offset_closed_path
+    from mycad.ui.drawing_offset import through_offset_distance
+
+    source = PolylineEntity(
+        "44444444444444448444444444444444", ((0, 0), (10, 0), (10, 10), (0, 10)), True
+    )
+    assert through_offset_distance(
+        source, (-1, -2), gap_type=gap_type, closed_offset=offset_closed_path
+    ) == pytest.approx(expected)
+
+
+def test_through_point_on_curved_path_corner_join() -> None:
+    from mycad.core.sketch import PolylineEntity
+    from mycad.geom.drawing_offset import offset_closed_path
+    from mycad.ui.drawing_offset import through_offset_distance
+
+    source = PolylineEntity(
+        "44444444444444448444444444444444",
+        ((0, 0), (10, 0), (10, 10)),
+        bulges=(math.tan(math.pi / 8), 0),
+    )
+    assert through_offset_distance(
+        source, (12, -1), gap_type=1, closed_offset=offset_closed_path
+    ) == pytest.approx(-math.sqrt(5))

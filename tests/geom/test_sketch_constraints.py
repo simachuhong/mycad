@@ -305,6 +305,42 @@ def test_unrelated_curved_polyline_survives_line_constraint_and_drag() -> None:
     assert moved_line.end_mm == pytest.approx((12, 16))
 
 
+@pytest.mark.parametrize("kind", ["polyline", "spline"])
+def test_solver_preserves_curve_point_ids(kind: str) -> None:
+    from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+    from mycad.core.sketch import SplineEntity
+
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    points = ((20, 0), (22, 0), (22, 2), (24, 2))
+    ids = new_curve_point_identities(OTHER_LINE_ID, kind, len(points))
+    curve = (
+        PolylineEntity(OTHER_LINE_ID, points, point_ids=ids)
+        if kind == "polyline"
+        else SplineEntity(OTHER_LINE_ID, points, point_ids=ids)
+    )
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, curve))
+    result = solve_sketch_constraint(sketch, _constraint(LENGTH_ID, "length", value=20, unit="mm"))
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None
+    solved = result.sketch.entities[1]
+    assert isinstance(solved, PolylineEntity | SplineEntity) and solved.point_ids == ids
+
+
+def test_unrelated_ellipse_survives_line_constraint() -> None:
+    from mycad.core.sketch import EllipseEntity
+
+    line = LineEntity(LINE_ID, (0, 0), (10, 0))
+    ellipse = EllipseEntity(OTHER_LINE_ID, (25, 0), 5, 3)
+    sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (line, ellipse))
+    result = solve_sketch_constraint(sketch, _constraint(LENGTH_ID, "length", value=20, unit="mm"))
+    if result.status == "unavailable":
+        pytest.skip(result.message or "PlaneGCS is unavailable")
+    assert result.status == "success", result.message
+    assert result.sketch is not None and result.sketch.entities[1] == ellipse
+
+
 def test_curved_polyline_constraints_and_invalid_drag_are_still_rejected() -> None:
     curved = PolylineEntity(OTHER_LINE_ID, ((20, 0), (22, 0), (22, 2)), bulges=(1, 0))
     sketch = Sketch(SKETCH_ID, WorkPlaneFrame.xy(), (curved,))

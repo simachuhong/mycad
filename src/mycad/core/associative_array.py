@@ -8,7 +8,7 @@ import math
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 from mycad.core.cross_sketch_tangency import (
@@ -18,6 +18,7 @@ from mycad.core.cross_sketch_tangency import (
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -31,6 +32,9 @@ from mycad.core.sketch import (
 from mycad.core.sketch_constraints import DIMENSION_KINDS, SketchConstraint, SketchGeometryReference
 from mycad.core.sketch_edit import move_entities, rectangular_array_displacement, rotate_entities
 from mycad.core.sketch_references import resolve_point_reference
+
+if TYPE_CHECKING:
+    from mycad.core.geometric_tolerance_topology import PolylineTopologyMap
 
 
 def _identity(value: object, field: str) -> str:
@@ -1011,6 +1015,29 @@ def _expected_array_member(
         )
         source = rotate_entities((source,), (source.entity_id,), center, member.rotation_deg)[0]
     transformed = move_entities((source,), (source.entity_id,), delta)[0]
+    if isinstance(transformed, PolylineEntity | SplineEntity):
+        existing = entities.get(member.target)
+        if isinstance(existing, type(transformed)):
+            return replace(
+                transformed, entity_id=member.target.entity_id, point_ids=existing.point_ids
+            )
+        if existing is not None and (
+            transformed.point_ids
+            or (isinstance(existing, PolylineEntity | SplineEntity) and existing.point_ids)
+        ):
+            raise ValueError("阵列成员曲线类型改变，点身份无法保留。")
+        from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+
+        kind = "polyline" if isinstance(transformed, PolylineEntity) else "spline"
+        point_ids = (
+            new_curve_point_identities(member.target.entity_id, kind, len(transformed.point_ids))
+            if transformed.point_ids
+            else ()
+        )
+        return replace(transformed, entity_id=member.target.entity_id, point_ids=point_ids)
+    existing = entities.get(member.target)
+    if isinstance(existing, PolylineEntity | SplineEntity) and existing.point_ids:
+        raise ValueError("阵列成员曲线类型改变，点身份无法保留。")
     return replace(transformed, entity_id=member.target.entity_id)
 
 
@@ -1042,7 +1069,7 @@ def _entity_anchor(entity: SketchEntity) -> Point2D:
         return entity.position_mm
     if isinstance(entity, LineEntity):
         return entity.start_mm
-    if isinstance(entity, ArcEntity | CircleEntity):
+    if isinstance(entity, ArcEntity | CircleEntity | EllipseEntity):
         return entity.center_mm
     if isinstance(entity, RectangleEntity):
         return entity.first_corner_mm
@@ -1148,6 +1175,103 @@ def _translate_offset_constraints(
     return tuple(revised)
 
 
+def predict_chain_reorder(
+    original: tuple[Sketch, ...],
+    proposed: tuple[Sketch, ...],
+    arrays: tuple[AssociativeRectArray, ...],
+    edges: tuple[tuple[ArrayEntityRef, ArrayEntityRef], ...],
+    input_maps: Mapping[tuple[str, str], PolylineTopologyMap],
+    *,
+    allow_unchanged_replacements: bool = False,
+    allow_reordered_replacements: bool = False,
+    allow_extra_outputs: bool = False,
+) -> tuple[tuple[Sketch, ...], dict[tuple[str, str], PolylineTopologyMap]]:
+    """Predict a simple chain on isolated snapshots, checking every topology edge."""
+    from mycad.core.geometric_tolerance_topology import PolylineTopologyMap
+
+    validate_array_network(arrays)
+    before = _entity_index(original)
+    sketches = _sketch_index(proposed)
+    current = _entity_index(proposed)
+    maps = dict(input_maps)
+    for key, mapping in maps.items():
+        ref = ArrayEntityRef(*key)
+        old, new = before.get(ref), current.get(ref)
+        if not isinstance(old, PolylineEntity) or not isinstance(new, PolylineEntity):
+            raise ValueError("链式拓扑映射来源不是同一多段线。")
+        mapping.validate_exact_reorder(old, new)
+    owners = {
+        member.target: (array, member)
+        for array in arrays
+        for member in (_generated_members(array) if allow_extra_outputs else array.members)
+        if member.erased_index is None
+    }
+    seen_targets: set[ArrayEntityRef] = set()
+    unchanged_sources: set[ArrayEntityRef] = set()
+    for source, target in edges:
+        if target in seen_targets:
+            raise ValueError("链式拓扑映射目标重复。")
+        seen_targets.add(target)
+        source_map = maps.get((source.sketch_id, source.entity_id))
+        owner = owners.get(target)
+        old = before.get(target)
+        replacement_source = (
+            allow_reordered_replacements
+            and owner is not None
+            and owner[1].replacement is not None
+            and owner[1].replacement.source == source
+        )
+        if (
+            (source_map is None and source not in unchanged_sources)
+            or owner is None
+            or (owner[1].source != source and not replacement_source)
+            or old is None
+        ):
+            raise ValueError("链式拓扑映射或传播顺序无效。")
+        array, member = owner
+        candidate = _expected_array_member(array, member, sketches, current)
+        if (
+            member.replacement is not None and not replacement_source
+        ) or source in unchanged_sources:
+            if not allow_unchanged_replacements or not _equivalent_entity(old, candidate):
+                raise ValueError("链式替换成员及其下游几何必须保持不变。")
+            current[target] = old
+            unchanged_sources.add(target)
+            continue
+        if not isinstance(old, PolylineEntity) or source_map is None:
+            raise ValueError("链式非多段线成员需要单独验证。")
+        if not isinstance(candidate, PolylineEntity):
+            raise ValueError("链式成员类型发生变化。")
+        target_map = PolylineTopologyMap(
+            target.entity_id, source_map.old_to_new, len(candidate.points_mm), candidate.closed
+        )
+        if old.point_ids:
+            if candidate.point_ids != old.point_ids:
+                raise ValueError("链式成员点身份在传播中意外改变。")
+            ordered: list[str | None] = [None] * len(old.point_ids)
+            for old_index, new_index in enumerate(target_map.old_to_new):
+                if new_index is None or new_index >= len(ordered):
+                    raise ValueError("链式拓扑映射缺少点身份。")
+                ordered[new_index] = old.point_ids[old_index]
+            if any(item is None for item in ordered):
+                raise ValueError("链式拓扑映射缺少点身份。")
+            candidate = replace(candidate, point_ids=tuple(cast("list[str]", ordered)))
+        target_map.validate_exact_reorder(old, candidate)
+        current[target] = candidate
+        maps[(target.sketch_id, target.entity_id)] = target_map
+    result = tuple(
+        replace(
+            sketch,
+            entities=tuple(
+                current[ArrayEntityRef(sketch.sketch_id, item.entity_id)]
+                for item in sketch.entities
+            ),
+        )
+        for sketch in proposed
+    )
+    return result, maps
+
+
 def propagate_array_changes(
     original: tuple[Sketch, ...],
     proposed: tuple[Sketch, ...],
@@ -1162,11 +1286,19 @@ def propagate_array_changes(
     allow_extra_position_overrides: bool = False,
     allow_extra_rotation_overrides: bool = False,
     resulting_arrays: tuple[AssociativeRectArray, ...] | None = None,
+    base_rebind_maps: Mapping[tuple[str, str], PolylineTopologyMap] | None = None,
+    base_rebind_proofs: tuple[Sketch, ...] | None = None,
 ) -> tuple[Sketch, ...]:
     """Regenerate linked members on isolated sketches, or reject the complete proposal."""
     validate_array_network(arrays)
     before, requested = _sketch_index(original), _sketch_index(proposed)
+    proof_sketches = (
+        _sketch_index(base_rebind_proofs) if base_rebind_proofs is not None else requested
+    )
     before_entities, requested_entities = _entity_index(original), _entity_index(proposed)
+    proof_entities = (
+        _entity_index(base_rebind_proofs) if base_rebind_proofs is not None else requested_entities
+    )
     current_entities = dict(requested_entities)
     occupied_ids = {ref.entity_id for ref in (*before_entities, *requested_entities)}
     constraint_refs = {
@@ -1175,11 +1307,43 @@ def propagate_array_changes(
         for constraint in sketch.constraints
         for ref in constraint.references
     }
+    rebound_bases: dict[str, AssociativeRectArray] = {}
+    if base_rebind_maps is not None:
+        from mycad.core.geometric_tolerance_topology import rebind_array_base
+
+        if resulting_arrays is None or len(resulting_arrays) != len(arrays):
+            raise ValueError("阵列基点重绑定缺少完整阵列状态。")
+        for old, new in zip(arrays, resulting_arrays, strict=True):
+            if old.base_point == new.base_point:
+                continue
+            base = old.base_point
+            if base is None or base.source is None:
+                raise ValueError("阵列基点重绑定缺少来源。")
+            key = (base.source.sketch_id, base.source.entity_id)
+            mapping = base_rebind_maps.get(key)
+            if (
+                mapping is None
+                or base.source.sketch_id not in before
+                or base.source.sketch_id not in proof_sketches
+            ):
+                raise ValueError("阵列基点重绑定缺少拓扑证明。")
+            expected = rebind_array_base(
+                old, before[base.source.sketch_id], proof_sketches[base.source.sketch_id], mapping
+            )
+            if expected != new:
+                raise ValueError("阵列基点重绑定包含其他修改。")
+            rebound_bases[old.array_id] = new
     for array in arrays:
         if array.base_point is not None:
             resolve_array_base_point(array, original)
-            resolve_array_base_point(array, proposed)
-            _validate_base_source_change(array, before_entities, requested_entities)
+            if array.array_id in rebound_bases:
+                resolve_array_base_point(
+                    rebound_bases[array.array_id],
+                    base_rebind_proofs if base_rebind_proofs is not None else proposed,
+                )
+            else:
+                resolve_array_base_point(array, proposed)
+                _validate_base_source_change(array, before_entities, requested_entities)
         for member in _generated_members(array):
             if member.erased_index is not None:
                 old_sketch = before.get(member.target.sketch_id)
@@ -1250,6 +1414,8 @@ def propagate_array_changes(
                 or allow_extra_rotation_overrides
                 else new
             )
+            if old.array_id in rebound_bases:
+                normalized = replace(normalized, base_point=old.base_point)
             if (
                 len(old.members) != len(new.members)
                 or (
@@ -1349,7 +1515,19 @@ def propagate_array_changes(
     for array in arrays:
         base = array.base_point
         if base is not None and base.source is not None and base.reference is not None:
-            _validate_base_source_change(array, before_entities, current_entities)
+            if array.array_id in rebound_bases:
+                proof = proof_entities.get(base.source)
+                actual = current_entities.get(base.source)
+                if (
+                    base_rebind_proofs is not None
+                    and isinstance(proof, PolylineEntity)
+                    and isinstance(actual, PolylineEntity)
+                ):
+                    proof = replace(proof, point_ids=actual.point_ids)
+                if proof != actual:
+                    raise ValueError("阵列基点来源在传播时发生额外变化。")
+            else:
+                _validate_base_source_change(array, before_entities, current_entities)
             source = current_entities.get(base.source)
             if (
                 source is None
@@ -1375,6 +1553,8 @@ def validate_array_cross_changes(
     updated: Mapping[str, Sketch],
     arrays: tuple[AssociativeRectArray, ...],
     relations: tuple[CrossSketchTangency, ...],
+    *,
+    proven_reorder_targets: frozenset[tuple[str, str]] = frozenset(),
 ) -> None:
     """Reject moving an array member referenced by a cross-sketch tangency."""
     targets = {
@@ -1394,7 +1574,7 @@ def validate_array_cross_changes(
                 (entity for entity in new_sketch.entities if entity.entity_id == ref.entity_id),
                 None,
             )
-            if old != new:
+            if old != new and (ref.sketch_id, ref.entity_id) not in proven_reorder_targets:
                 raise ValueError("关联阵列副本具有跨草图相切关系；请先移除该关系。")
 
 
@@ -2526,7 +2706,19 @@ def resize_array(
         ):
             if layer.locked or not layer.displayed:
                 raise ValueError("关联阵列源或目标图层已锁定或隐藏。")
-        entities[member.target] = replace(source, entity_id=member.target.entity_id)
+        if isinstance(source, PolylineEntity | SplineEntity) and source.point_ids:
+            from mycad.core.geometric_tolerance_topology import new_curve_point_identities
+
+            kind = "polyline" if isinstance(source, PolylineEntity) else "spline"
+            entities[member.target] = replace(
+                source,
+                entity_id=member.target.entity_id,
+                point_ids=new_curve_point_identities(
+                    member.target.entity_id, kind, len(source.point_ids)
+                ),
+            )
+        else:
+            entities[member.target] = replace(source, entity_id=member.target.entity_id)
         additions[member.target] = _expected_array_member(updated, member, indexed, entities)
         entities[member.target] = additions[member.target]
         if member.replacement is not None:

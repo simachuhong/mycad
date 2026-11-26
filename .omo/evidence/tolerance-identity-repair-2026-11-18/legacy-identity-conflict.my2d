@@ -1,0 +1,186 @@
+{
+  "format": "mycad.document",
+  "version": 8,
+  "metadata": {
+    "part_no": "",
+    "revision": "",
+    "material": "",
+    "source": "local"
+  },
+  "commands": [
+    {
+      "id": "drawing.layers.set",
+      "version": 1,
+      "params": {
+        "layers": [
+          {
+            "name": "0",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "DIM",
+            "color_rgb": [
+              21,
+              94,
+              117
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.18,
+            "visible": true,
+            "locked": false
+          },
+          {
+            "name": "GDT",
+            "color_rgb": [
+              40,
+              46,
+              52
+            ],
+            "linetype": "CONTINUOUS",
+            "lineweight_mm": 0.25,
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "dimension_layer": "DIM"
+      },
+      "ordinal": 0,
+      "timestamp_utc": "2026-11-18T12:39:38.545287+00:00",
+      "confirmed_by": "local",
+      "instance_id": "0e1e157c46a04ea5bf281b4143858c79"
+    },
+    {
+      "id": "drawing.tolerance.batch",
+      "version": 6,
+      "params": {
+        "add_frames": [
+          {
+            "frame_id": "abababababababababababababababab",
+            "rows": [
+              {
+                "characteristic": "position",
+                "value": 0.1,
+                "precision": 2,
+                "diameter": false,
+                "modifier": "",
+                "datums": [
+                  {
+                    "label": "A",
+                    "datum_id": "abababababababababababababababab",
+                    "modifier": ""
+                  }
+                ]
+              }
+            ],
+            "position_mm": [
+              10.0,
+              5.0
+            ],
+            "rotation_deg": 0.0,
+            "layer_name": "GDT"
+          }
+        ],
+        "add_datums": [
+          {
+            "datum_id": "abababababababababababababababab",
+            "label": "A",
+            "position_mm": [
+              0.0,
+              0.0
+            ],
+            "target_mm": [
+              0.0,
+              -5.0
+            ],
+            "layer_name": "0"
+          }
+        ]
+      },
+      "ordinal": 1,
+      "timestamp_utc": "2026-11-18T12:39:38.545990+00:00",
+      "confirmed_by": "local",
+      "instance_id": "eb3c0d3b3ae343f5bf410b721a4cf4cf"
+    },
+    {
+      "id": "drawing.reference_dimensions.batch",
+      "version": 5,
+      "params": {
+        "add": [
+          {
+            "dimension_id": "abababababababababababababababab",
+            "kind": "rotated",
+            "first_mm": [
+              0.0,
+              0.0
+            ],
+            "second_mm": [
+              10.0,
+              0.0
+            ],
+            "location_mm": [
+              0.0,
+              5.0
+            ],
+            "angle_deg": 0.0,
+            "nominal": 10.0,
+            "tolerance": {
+              "mode": "none",
+              "upper_deviation": 0.0,
+              "lower_deviation": 0.0,
+              "precision": 2,
+              "text_factor": 1.0,
+              "alignment": "middle"
+            },
+            "layer_name": "0",
+            "precision": 2,
+            "linear_factor": 1.0,
+            "text_override": ""
+          }
+        ]
+      },
+      "ordinal": 2,
+      "timestamp_utc": "2026-11-18T12:39:38.546530+00:00",
+      "confirmed_by": "local",
+      "instance_id": "fbf890af72fa43f7a4517b91343ea9f5"
+    }
+  ],
+  "named_groups": [],
+  "provenance": {
+    "mycad": {
+      "version": "0.1.0",
+      "source_revision": "unavailable"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3"
+    },
+    "dependencies": {
+      "build123d": "0.11.1",
+      "ocp": "7.9.3.1.1",
+      "occt": "unavailable",
+      "planegcs": "0.9.6"
+    },
+    "units": {
+      "length": "mm",
+      "angle": "deg"
+    },
+    "geometry_policy_version": "1",
+    "plugins": []
+  },
+  "file_id": "9e1d44a805b749f3ba0bd56241ca9e05",
+  "document_kind": "sketch",
+  "document_type": "drawing2d",
+  "drawing_defaults": {
+    "fillet_radius": 0.0,
+    "chamfer_angle": 0.0
+  },
+  "reference_locations": {}
+}

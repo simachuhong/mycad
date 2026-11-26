@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 from mycad.core.sketch import (
     ArcEntity,
     CircleEntity,
+    EllipseEntity,
     LineEntity,
     Point2D,
     PointEntity,
@@ -45,6 +46,11 @@ def _geometry(sketch: Sketch) -> tuple[dict[_PointKey, Point2D], list[_Segment]]
             )
         elif isinstance(entity, PointEntity):
             points[(identity, "vertex", 0)] = entity.position_mm
+        elif isinstance(entity, EllipseEntity):
+            points[(identity, "center", 0)] = entity.center_mm
+            if not entity.closed:
+                points[(identity, "start", 0)] = entity.point_at(0)
+                points[(identity, "end", 0)] = entity.point_at(1)
         elif isinstance(entity, CircleEntity | ArcEntity):
             points[(identity, "center", 0)] = entity.center_mm
             if isinstance(entity, ArcEntity):

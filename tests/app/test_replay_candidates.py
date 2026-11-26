@@ -88,6 +88,29 @@ def test_candidate_snap_anchors_are_isolated_and_expire_with_source() -> None:
     assert stale.scene is None
 
 
+def test_staged_changes_are_detached_from_candidate() -> None:
+    services, loaded = _loaded()
+    candidate = app.create_replay_candidate(services, loaded, session_identity=9)
+    candidate.stage(
+        ReplayChangeSet(
+            (),
+            (ReplayAppend("feature.box", 1, {"size_x": 10, "size_y": 10, "size_z": 4}, "local"),),
+            False,
+        ),
+        current_session_identity=9,
+    )
+    staged = candidate.staged_changes
+    assert staged is not None
+    cast("dict[str, object]", staged.appends[0].params)["size_x"] = 99
+    assert candidate.staged_changes is not None
+    assert candidate.staged_changes.appends[0].params["size_x"] == 10
+    preview = candidate.preview(current_session_identity=9)
+    assert preview.state == "succeeded"
+    assert preview.proposal.commands[-1].params["size_x"] == 10
+    candidate.cancel()
+    assert candidate.staged_changes is None
+
+
 def test_candidate_preview_reuses_staged_identity_and_cancel_preserves_v4_redo() -> None:
     services, loaded = _loaded()
     loaded.bus.execute("feature.box", {"size_x": 20, "size_y": 20, "size_z": 6})

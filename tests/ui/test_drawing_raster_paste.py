@@ -940,7 +940,7 @@ def test_mixed_picture_and_saved_line_delete_undo_reopen(qtbot: QtBot, tmp_path:
     qtbot.waitUntil(lambda: not unit.is_busy and not unit.is_delivering_result, timeout=10000)
     assert not services.kernel.drawing_rasters
     assert not services.kernel.sketches[0].entities
-    assert loaded.document.commands[-1].version == 47
+    assert loaded.document.commands[-1].version == 63
     window.request_undo()
     qtbot.waitUntil(lambda: bool(services.kernel.drawing_rasters), timeout=10000)
     qtbot.waitUntil(lambda: not unit.is_busy and not unit.is_delivering_result, timeout=10000)
@@ -1414,7 +1414,7 @@ def test_mixed_clipboard_cross_drawing_undo_reopen(qtbot: QtBot, tmp_path: Path)
     assert copied_image.origin_mm == (80, 50) and copied_image.image_id != original.image_id
     assert (
         loaded.document.commands[-1].id == "sketch.create"
-        and loaded.document.commands[-1].version == 29
+        and loaded.document.commands[-1].version == 56
     )
     window.request_undo()
     qtbot.waitUntil(lambda: not services.kernel.drawing_rasters, timeout=10000)
